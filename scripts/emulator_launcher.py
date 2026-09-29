@@ -17,6 +17,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from portable_launcher_model import Selection, check_runtime, launch_command
+from github_update import UpdateError, check_updates, install_updates
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -128,6 +129,8 @@ class Launcher(tk.Tk):
         self.start_button.pack(side="left", padx=8)
         self.install_button = ttk.Button(controls, text="QEMU installieren", command=self._install_qemu)
         self.install_button.pack(side="left")
+        self.update_button = ttk.Button(controls, text="Updates prüfen", command=self._check_updates)
+        self.update_button.pack(side="left", padx=8)
         ttk.Label(controls, textvariable=self.status).pack(side="left", padx=10)
 
         ttk.Label(outer, text="Startmeldungen", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(6, 2))
@@ -244,6 +247,22 @@ class Launcher(tk.Tk):
             result = -1
         self.events.put(("installed", result))
 
+    def _check_updates(self) -> None:
+        if self.checking or self.running and self.running.poll() is None:
+            messagebox.showinfo("Updates", "Den Emulator vor einem Quellcode-Update beenden.")
+            return
+        self.checking = True
+        self.update_button.configure(state="disabled")
+        self.status.set("GitHub-Updates werden geprüft…")
+        threading.Thread(target=self._update_worker, args=(False,), daemon=True).start()
+
+    def _update_worker(self, install: bool) -> None:
+        try:
+            result = install_updates(PROJECT) if install else check_updates(PROJECT)
+            self.events.put(("updated" if install else "update_check", result))
+        except UpdateError as exc:
+            self.events.put(("update_error", str(exc)))
+
     def _launch(self, selection: Selection) -> None:
         command = launch_command(selection, PROJECT)
         try:
@@ -304,6 +323,32 @@ class Launcher(tk.Tk):
                         refreshed = suggested_selection(self._selection())
                         for key in ("qemu_x86", "qemu_m68k"):
                             self.variables[key].set(getattr(refreshed, key))
+                elif kind == "update_check":
+                    self.checking = False
+                    self.update_button.configure(state="normal")
+                    count = int(payload)
+                    if count == 0:
+                        self.status.set("Quellcode ist aktuell.")
+                    elif messagebox.askyesno(
+                        "Update verfügbar",
+                        f"{count} neue(r) GitHub-Commit(s) verfügbar. Jetzt laden? "
+                        "Das Startfenster muss danach neu geöffnet werden.",
+                    ):
+                        self.checking = True
+                        self.update_button.configure(state="disabled")
+                        self.status.set("Update wird installiert…")
+                        threading.Thread(target=self._update_worker, args=(True,), daemon=True).start()
+                elif kind == "updated":
+                    self.checking = False
+                    self.update_button.configure(state="normal")
+                    self.status.set("Update installiert; bitte Startfenster neu öffnen.")
+                    self._write(str(payload) + "\n")
+                elif kind == "update_error":
+                    self.checking = False
+                    self.update_button.configure(state="normal")
+                    self.status.set("Update nicht möglich.")
+                    self._write(f"Update: {payload}\n")
+                    messagebox.showerror("GitHub-Update", str(payload))
         except queue.Empty:
             pass
         self.after(100, self._drain_events)

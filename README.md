@@ -41,9 +41,11 @@ beim Betrieb jedoch in das ausgewählte Image.
 
 CF-Images, Datenbank-Dumps, Zulassungskarten, Logs und fremde Grafik-DLLs
 gehören nicht in dieses Repository. Sie werden lokal ausgewählt und durch
-`.gitignore` ausgeschlossen. Der Quellcode kann über das private GitHub-Repository
-aktualisiert werden; eine automatische Aktualisierung der Anwendung ist noch
-nicht fertig. Auf einem zweiten PC ist dafür GitHub-Zugriff erforderlich.
+`.gitignore` ausgeschlossen. In einem Git-Checkout kann das Startfenster unter
+„Updates prüfen“ neue Commits aus dem privaten Repository laden, solange keine
+lokalen Quellcode-Änderungen vorliegen. Danach das Startfenster neu öffnen.
+Für einen zweiten PC ist GitHub-Anmeldung erforderlich. Ein Update-Verfahren
+für ein künftiges einzelnes EXE-Paket fehlt noch.
 
 ## Hintergründe
 

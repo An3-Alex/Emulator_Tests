@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
-from portable_launcher_model import Selection, launch_command, validate_selection
+from portable_launcher_model import Selection, check_runtime, launch_command, validate_selection
 import portable_launcher_model as model
 
 
@@ -74,6 +74,23 @@ class PortableLauncherTests(unittest.TestCase):
             source = Selection(image=r"D:\CF\M90.img", show_live_log=True)
             source.save(path)
             self.assertEqual(Selection.from_json(path), source)
+
+    def test_runtime_rejects_python_older_than_310(self) -> None:
+        selection = Selection(
+            qemu_x86=r"C:\qemu\qemu-system-x86_64.exe",
+            qemu_m68k=r"C:\qemu\qemu-system-m68k.exe",
+            python=r"C:\Python39\python.exe",
+        )
+        results = [
+            model.subprocess.CompletedProcess([], 0),
+            model.subprocess.CompletedProcess([], 0),
+            model.subprocess.CompletedProcess([], 1),
+        ]
+        with patch.object(model, "validate_selection", return_value=[]), \
+             patch.object(model.subprocess, "run", side_effect=results) as run:
+            issues = check_runtime(selection)
+        self.assertTrue(any("Python 3.10+" in issue for issue in issues))
+        self.assertEqual(run.call_args_list[-1].args[0][1], "-c")
 
 
 if __name__ == "__main__":

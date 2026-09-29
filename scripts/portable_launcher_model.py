@@ -107,21 +107,25 @@ def check_runtime(selection: Selection) -> list[str]:
     issues = validate_selection(selection)
     if issues:
         return issues
-    for path, label in (
-        (selection.qemu_x86, "QEMU Spiel-PC"),
-        (selection.qemu_m68k, "QEMU Datenbank"),
-        (selection.python, "Python"),
+    for path, label, arguments in (
+        (selection.qemu_x86, "QEMU Spiel-PC", ["--version"]),
+        (selection.qemu_m68k, "QEMU Datenbank", ["--version"]),
+        (selection.python, "Python 3.10+", [
+            "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+        ]),
     ):
         try:
             completed = subprocess.run(
-                [path, "--version"], capture_output=True, text=True,
+                [path, *arguments], capture_output=True, text=True,
                 timeout=10, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             issues.append(f"{label}: nicht ausführbar ({exc})")
         else:
             if completed.returncode != 0:
-                issues.append(f"{label}: Versionsprüfung fehlgeschlagen")
+                issues.append(f"{label}: Versions-/Startprüfung fehlgeschlagen")
+    if not Path(selection.python).with_name("pythonw.exe").is_file():
+        issues.append("Python: pythonw.exe fehlt; das Bedienfenster kann so nicht starten")
     return issues
 
 
