@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -51,6 +52,14 @@ FIELDS = (
     ("qemu_m68k", "QEMU Datenbank"),
     ("python", "Python"),
 )
+
+
+def format_elapsed(seconds: float) -> str:
+    """Display a monotonic elapsed duration without implying a finish ETA."""
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def suggested_selection(saved: Selection) -> Selection:
@@ -108,12 +117,14 @@ class Launcher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("M90 Emulator – Einrichtung und Start")
-        self.geometry("1000x820")
-        self.minsize(850, 720)
+        self.geometry("1000x800")
+        self.minsize(850, 680)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.running: subprocess.Popen[str] | None = None
         self.checking = False
         self.preparing = False
+        self.prepare_started_at: float | None = None
+        self.prepare_phase = ""
 
         try:
             saved = Selection.from_json(SETTINGS)
@@ -129,48 +140,60 @@ class Launcher(tk.Tk):
         self.show_log = tk.BooleanVar(value=selection.show_live_log)
         self.prepared_copy = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
+        self.prepare_timer = tk.StringVar(value="Image-Einrichtung: noch nicht gestartet")
         self._build()
         self.after(100, self._drain_events)
+        self.after(1000, self._tick_prepare_timer)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build(self) -> None:
         outer = ttk.Frame(self, padding=16)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="M90 Emulator", font=("Segoe UI", 19, "bold")).pack(anchor="w")
+        guide = ttk.LabelFrame(outer, text="Kurzanleitung", padding=(10, 6))
+        guide.pack(fill="x", pady=(4, 8))
         ttk.Label(
-            outer,
-            text="Eigene Dateien auswählen. Die Dateien bleiben an ihrem Speicherort; das Programm prüft sie vor dem Start.",
-            wraplength=870,
-        ).pack(anchor="w", pady=(2, 10))
-        notice = ttk.Label(
-            outer,
-            text="Ein frisches Image wird zuerst in eine neue Arbeitskopie übernommen, "
-                 "im Windows-Gast eingerichtet und erst danach zum Start freigegeben. "
-                 "Das Original bleibt unverändert.",
-            foreground="#9b3500", wraplength=870,
-        )
-        notice.pack(anchor="w", pady=(0, 8))
+            guide,
+            text="1. QEMU, Python und WSL/NTFS-Werkzeuge prüfen oder installieren.\n"
+                 "2. Original-CF-Image, neuen Dateinamen für die Arbeitskopie, M90-Dateien, "
+                 "Zulassungskarten-EEPROM, SwiftShader und QXL auswählen.\n"
+                 "3. „Frisches Image einrichten“ abwarten; das Original bleibt unverändert.\n"
+                 "4. „Dateien und Programme prüfen“, dann „Emulator starten“. "
+                 "Das Live-Protokoll ist optional.",
+            wraplength=870, justify="left",
+        ).pack(anchor="w")
         ttk.Checkbutton(
             outer,
             text="Ich habe eine bereits vorbereitete Arbeitskopie gewählt (nicht das Original).",
             variable=self.prepared_copy,
         ).pack(anchor="w", pady=(0, 8))
 
-        form = ttk.Frame(outer)
-        form.pack(fill="x")
+        picker = ttk.Frame(outer)
+        picker.pack(fill="both", expand=True, pady=(0, 5))
+        picker_canvas = tk.Canvas(picker, highlightthickness=0, borderwidth=0)
+        picker_scroll = ttk.Scrollbar(picker, orient="vertical", command=picker_canvas.yview)
+        picker_canvas.configure(yscrollcommand=picker_scroll.set)
+        picker_scroll.pack(side="right", fill="y")
+        picker_canvas.pack(side="left", fill="both", expand=True)
+        form = ttk.Frame(picker_canvas)
+        form_window = picker_canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind("<Configure>", lambda _event: picker_canvas.configure(
+            scrollregion=picker_canvas.bbox("all")))
+        picker_canvas.bind("<Configure>", lambda event: picker_canvas.itemconfigure(
+            form_window, width=event.width))
+        ttk.Button(
+            form, text="Datenbank-Dateien aus einem Ordner übernehmen…",
+            command=self._choose_database_directory,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 5))
         for row, (key, label) in enumerate(FIELDS):
-            ttk.Label(form, text=label, width=28).grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Label(form, text=label, width=28).grid(row=row + 1, column=0, sticky="w", pady=3)
             ttk.Entry(form, textvariable=self.variables[key]).grid(
-                row=row, column=1, sticky="ew", padx=(4, 6), pady=3
+                row=row + 1, column=1, sticky="ew", padx=(4, 6), pady=3
             )
             ttk.Button(form, text="Auswählen…", command=lambda selected=key: self._browse(selected)).grid(
-                row=row, column=2, pady=3
+                row=row + 1, column=2, pady=3
             )
         form.columnconfigure(1, weight=1)
-        ttk.Button(
-            outer, text="Datenbank-Dateien aus einem Ordner übernehmen…",
-            command=self._choose_database_directory,
-        ).pack(anchor="w", pady=(8, 8))
 
         ttk.Checkbutton(
             outer, text="Live-Protokoll in einem eigenen Fenster anzeigen",
@@ -190,7 +213,10 @@ class Launcher(tk.Tk):
         self.install_button.pack(side="left")
         self.python_button = ttk.Button(controls, text="Python installieren", command=self._install_python)
         self.python_button.pack(side="left", padx=(8, 0))
-        ttk.Label(controls, textvariable=self.status).pack(side="left", padx=10)
+        ttk.Label(outer, textvariable=self.status, wraplength=870).pack(anchor="w", pady=(2, 0))
+        ttk.Label(outer, textvariable=self.prepare_timer).pack(anchor="w", pady=(3, 0))
+        self.prepare_progress = ttk.Progressbar(outer, mode="indeterminate")
+        self.prepare_progress.pack(fill="x", pady=(3, 5))
         ttk.Button(
             outer, text="WSL/NTFS-Werkzeuge für frische Images einrichten",
             command=self._install_wsl,
@@ -198,8 +224,8 @@ class Launcher(tk.Tk):
 
         ttk.Label(outer, text="Startmeldungen", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(6, 2))
         output_frame = ttk.Frame(outer)
-        output_frame.pack(fill="both", expand=True)
-        self.output = tk.Text(output_frame, height=8, state="disabled", wrap="word")
+        output_frame.pack(fill="x")
+        self.output = tk.Text(output_frame, height=5, state="disabled", wrap="word")
         scroll = ttk.Scrollbar(output_frame, orient="vertical", command=self.output.yview)
         self.output.configure(yscrollcommand=scroll.set)
         self.output.pack(side="left", fill="both", expand=True)
@@ -293,6 +319,10 @@ class Launcher(tk.Tk):
             return
         self.checking = True
         self.preparing = True
+        self.prepare_started_at = time.monotonic()
+        self.prepare_phase = "Vorprüfung"
+        self.prepare_timer.set("Image-Einrichtung · Vorprüfung · 00:00:00 vergangen")
+        self.prepare_progress.start(100)
         self.prepare_button.configure(state="disabled")
         self.start_button.configure(state="disabled")
         self.check_button.configure(state="disabled")
@@ -315,6 +345,7 @@ class Launcher(tk.Tk):
 
     def _prepare_worker(self, selection: Selection) -> None:
         try:
+            self.events.put(("prepare_phase", "Bestehende Arbeitskopie prüfen"))
             image = Path(selection.image) if selection.image else None
             stage = "new"
             if image and image.is_file():
@@ -337,6 +368,7 @@ class Launcher(tk.Tk):
                 self._run_step(stage_command(selection, PROJECT), "Arbeitskopie wird eingerichtet")
             self._run_step(guest_setup_command(selection, PROJECT), "QXL-Gastinstallation läuft")
             self._run_step(finalize_command(Path(selection.image), PROJECT), "Image wird abgeschlossen")
+            self.events.put(("prepare_phase", "Abschluss wird geprüft"))
             result = subprocess.run(
                 stage_check_command(Path(selection.image), PROJECT),
                 capture_output=True, text=True, timeout=60,
@@ -505,7 +537,15 @@ class Launcher(tk.Tk):
                     self._write(str(payload))
                 elif kind == "status":
                     self.status.set(str(payload))
+                    if self.preparing:
+                        self.prepare_phase = str(payload)
+                        self._show_prepare_elapsed()
+                elif kind == "prepare_phase":
+                    if self.preparing:
+                        self.prepare_phase = str(payload)
+                        self._show_prepare_elapsed()
                 elif kind == "prepared":
+                    self._finish_prepare_timer("Fertig")
                     self.preparing = False
                     self.checking = False
                     self.prepared_copy.set(True)
@@ -515,6 +555,7 @@ class Launcher(tk.Tk):
                     self.status.set("Arbeitskopie vorbereitet; Emulator kann gestartet werden.")
                     self._write(f"Arbeitskopie fertig: {payload}\n")
                 elif kind == "prepare_failed":
+                    self._finish_prepare_timer("Nicht abgeschlossen")
                     self.preparing = False
                     self.checking = False
                     self.prepare_button.configure(state="normal")
@@ -570,6 +611,25 @@ class Launcher(tk.Tk):
         except queue.Empty:
             pass
         self.after(100, self._drain_events)
+
+    def _show_prepare_elapsed(self) -> None:
+        if self.prepare_started_at is not None:
+            elapsed = format_elapsed(time.monotonic() - self.prepare_started_at)
+            self.prepare_timer.set(
+                f"Image-Einrichtung · {self.prepare_phase} · {elapsed} vergangen"
+            )
+
+    def _finish_prepare_timer(self, result: str) -> None:
+        if self.prepare_started_at is not None:
+            elapsed = format_elapsed(time.monotonic() - self.prepare_started_at)
+            self.prepare_timer.set(f"Image-Einrichtung · {result} nach {elapsed}")
+            self.prepare_started_at = None
+        self.prepare_progress.stop()
+
+    def _tick_prepare_timer(self) -> None:
+        if self.preparing:
+            self._show_prepare_elapsed()
+        self.after(1000, self._tick_prepare_timer)
 
     def _write(self, text: str) -> None:
         self.output.configure(state="normal")

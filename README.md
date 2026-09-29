@@ -26,7 +26,9 @@ im laufenden Spiel ist noch nicht bestätigt.
 ## Lokal starten
 
 Unter Windows `Start-Emulator-UI.cmd` doppelklicken oder die `M90-Emulator.exe`
-aus dem privaten GitHub-Release starten. Das Startfenster fragt nach:
+aus dem privaten GitHub-Release starten. Die Kurzanleitung im Fenster zeigt
+die Reihenfolge: Abhängigkeiten prüfen, eigene Dateien auswählen, frisches
+Image einrichten, danach prüfen und starten. Das Startfenster fragt nach:
 
 - eigenem Original-CF-Image und einem **neuen Dateinamen für die Arbeitskopie**,
 - `Magie_90_CC4.bin`, `Loader_61640403_L5.0b_2MB.bin`,
@@ -34,7 +36,10 @@ aus dem privaten GitHub-Release starten. Das Startfenster fragt nach:
 - M90-Zulassungskarten-EEPROM (256 Byte),
 - eigenem SwiftShader-5003-DLL und QXL-Treiberordner.
 
-Auf „Frisches Image einrichten“ klicken und warten. Der Starter prüft die
+Auf „Frisches Image einrichten“ klicken und warten. Phase und verstrichene
+Zeit werden im Startfenster angezeigt; eine feste Restzeit lässt sich bei der
+großen Image-Kopie und Windows-Gastinstallation nicht verlässlich angeben.
+Der Starter prüft die
 Dateien, kopiert das Image, installiert QXL automatisch in einem temporären
 Windows-Gast und gibt die Kopie erst nach Log-/Registry-Prüfung frei. Das
 Original bleibt unverändert. Ein unterbrochener Treiberlauf kann mit derselben
