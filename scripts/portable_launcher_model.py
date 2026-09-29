@@ -19,6 +19,7 @@ KNOWN_SHA256 = {
     "factory": "4F088DB4AF5F4A5D112A003EF312EB19B4388C25902FFA03F75742379A0CD5C4",
     "config": "DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783",
 }
+KNOWN_CF_BYTES = 16_139_354_112
 
 
 @dataclass(frozen=True)
@@ -90,8 +91,11 @@ def validate_selection(selection: Selection) -> list[str]:
             )
     if Path(selection.admission_eeprom).stat().st_size != 256:
         issues.append("Zulassungskarte: EEPROM muss genau 256 Byte groß sein")
-    if Path(selection.image).stat().st_size < 64 * 1024 * 1024:
-        issues.append("CF-Image: Datei ist zu klein für ein vollständiges Image")
+    image_size = Path(selection.image).stat().st_size
+    if image_size != KNOWN_CF_BYTES:
+        issues.append(
+            f"CF-Image: erwartete Größe {KNOWN_CF_BYTES} Byte, gefunden {image_size} Byte"
+        )
     for key, expected in (
         ("qemu_x86", "qemu-system-x86_64.exe"),
         ("qemu_m68k", "qemu-system-m68k.exe"),

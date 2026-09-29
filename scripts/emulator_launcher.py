@@ -17,7 +17,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from portable_launcher_model import Selection, check_runtime, launch_command
-from github_update import UpdateError, check_updates, install_updates
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -79,6 +78,7 @@ class Launcher(tk.Tk):
             key: tk.StringVar(value=getattr(selection, key)) for key, _ in FIELDS
         }
         self.show_log = tk.BooleanVar(value=selection.show_live_log)
+        self.prepared_copy = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
         self._build()
         self.after(100, self._drain_events)
@@ -100,6 +100,11 @@ class Launcher(tk.Tk):
             foreground="#9b3500", wraplength=870,
         )
         notice.pack(anchor="w", pady=(0, 8))
+        ttk.Checkbutton(
+            outer,
+            text="Ich habe eine eigene, bereits vorbereitete Image-Kopie gewählt (nicht das Original).",
+            variable=self.prepared_copy,
+        ).pack(anchor="w", pady=(0, 8))
 
         form = ttk.Frame(outer)
         form.pack(fill="x")
@@ -129,8 +134,6 @@ class Launcher(tk.Tk):
         self.start_button.pack(side="left", padx=8)
         self.install_button = ttk.Button(controls, text="QEMU installieren", command=self._install_qemu)
         self.install_button.pack(side="left")
-        self.update_button = ttk.Button(controls, text="Updates prüfen", command=self._check_updates)
-        self.update_button.pack(side="left", padx=8)
         ttk.Label(controls, textvariable=self.status).pack(side="left", padx=10)
 
         ttk.Label(outer, text="Startmeldungen", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(6, 2))
@@ -189,6 +192,13 @@ class Launcher(tk.Tk):
     def _start(self) -> None:
         if self.checking or (self.running and self.running.poll() is None):
             return
+        if not self.prepared_copy.get():
+            messagebox.showerror(
+                "Image-Kopie erforderlich",
+                "Ein unverändertes oder einziges Original-Image darf hier noch nicht gestartet "
+                "werden. Bitte eine vorbereitete Kopie auswählen und den Hinweis bestätigen.",
+            )
+            return
         selection = self._selection()
         if not self._save(selection):
             return
@@ -246,22 +256,6 @@ class Launcher(tk.Tk):
             self.events.put(("line", f"QEMU-Installation konnte nicht gestartet werden: {exc}\n"))
             result = -1
         self.events.put(("installed", result))
-
-    def _check_updates(self) -> None:
-        if self.checking or self.running and self.running.poll() is None:
-            messagebox.showinfo("Updates", "Den Emulator vor einem Quellcode-Update beenden.")
-            return
-        self.checking = True
-        self.update_button.configure(state="disabled")
-        self.status.set("GitHub-Updates werden geprüft…")
-        threading.Thread(target=self._update_worker, args=(False,), daemon=True).start()
-
-    def _update_worker(self, install: bool) -> None:
-        try:
-            result = install_updates(PROJECT) if install else check_updates(PROJECT)
-            self.events.put(("updated" if install else "update_check", result))
-        except UpdateError as exc:
-            self.events.put(("update_error", str(exc)))
 
     def _launch(self, selection: Selection) -> None:
         command = launch_command(selection, PROJECT)
@@ -323,32 +317,6 @@ class Launcher(tk.Tk):
                         refreshed = suggested_selection(self._selection())
                         for key in ("qemu_x86", "qemu_m68k"):
                             self.variables[key].set(getattr(refreshed, key))
-                elif kind == "update_check":
-                    self.checking = False
-                    self.update_button.configure(state="normal")
-                    count = int(payload)
-                    if count == 0:
-                        self.status.set("Quellcode ist aktuell.")
-                    elif messagebox.askyesno(
-                        "Update verfügbar",
-                        f"{count} neue(r) GitHub-Commit(s) verfügbar. Jetzt laden? "
-                        "Das Startfenster muss danach neu geöffnet werden.",
-                    ):
-                        self.checking = True
-                        self.update_button.configure(state="disabled")
-                        self.status.set("Update wird installiert…")
-                        threading.Thread(target=self._update_worker, args=(True,), daemon=True).start()
-                elif kind == "updated":
-                    self.checking = False
-                    self.update_button.configure(state="normal")
-                    self.status.set("Update installiert; bitte Startfenster neu öffnen.")
-                    self._write(str(payload) + "\n")
-                elif kind == "update_error":
-                    self.checking = False
-                    self.update_button.configure(state="normal")
-                    self.status.set("Update nicht möglich.")
-                    self._write(f"Update: {payload}\n")
-                    messagebox.showerror("GitHub-Update", str(payload))
         except queue.Empty:
             pass
         self.after(100, self._drain_events)

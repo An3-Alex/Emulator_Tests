@@ -60,7 +60,8 @@ class PortableLauncherTests(unittest.TestCase):
                 qemu_m68k=str(root / "qemu-system-m68k.exe"),
                 python=str(root / "python.exe"), **paths,
             )
-            with patch.dict(model.KNOWN_SHA256, {
+            with patch.object(model, "KNOWN_CF_BYTES", 64 * 1024 * 1024), \
+                 patch.dict(model.KNOWN_SHA256, {
                 key: model.file_sha256(Path(value)) for key, value in paths.items()
             }):
                 self.assertEqual(validate_selection(selection), [])

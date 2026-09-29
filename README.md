@@ -41,11 +41,10 @@ beim Betrieb jedoch in das ausgewählte Image.
 
 CF-Images, Datenbank-Dumps, Zulassungskarten, Logs und fremde Grafik-DLLs
 gehören nicht in dieses Repository. Sie werden lokal ausgewählt und durch
-`.gitignore` ausgeschlossen. In einem Git-Checkout kann das Startfenster unter
-„Updates prüfen“ neue Commits aus dem privaten Repository laden, solange keine
-lokalen Quellcode-Änderungen vorliegen. Danach das Startfenster neu öffnen.
-Für einen zweiten PC ist GitHub-Anmeldung erforderlich. Ein Update-Verfahren
-für ein künftiges einzelnes EXE-Paket fehlt noch.
+`.gitignore` ausgeschlossen. Updates des Quellcodes gehen einfach per `git pull`
+im Projektordner. Auf einem zweiten PC ist dafür Zugriff auf das private
+GitHub-Repository nötig. Ein Update-Verfahren für ein künftiges einzelnes
+EXE-Paket fehlt noch.
 
 ## Hintergründe
 
@@ -53,7 +52,8 @@ Die Datenbank ist kein bloßer Antwort-Stub: der Motorola-68k-Code läuft in
 QEMU; die Host-Brücke bildet die serielle Verbindung und das Board-I/O nach.
 Die virtuelle Uhr wird für das M90-Setup auf 2012 gesetzt. Originaltreue
 bei Münzprüfer, Auszahlung, Ton und zweitem Monitor ist noch Gegenstand der
-Tests. Technische Untersuchungen stehen in [`docs/`](docs/); ältere,
+Tests. Der schreibgeschützte [Vergleich von Original und Arbeitskopie](docs/image-preparation.md)
+ist dokumentiert. Weitere technische Untersuchungen stehen in [`docs/`](docs/); ältere,
 teilweise überholte Notizen liegen in
 [`docs/project-background.md`](docs/project-background.md).
 
