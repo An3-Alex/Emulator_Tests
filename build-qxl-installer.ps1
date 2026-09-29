@@ -17,7 +17,7 @@ $compile = 'cl /nologo /c /TC /O1 /GS- /Zl /W4 /D_WIN32_WINNT=0x0501 ' +
            '/DWINVER=0x0501 /Fo"' + $obj + '" "' + $src + '"'
 $link = 'link /nologo /MACHINE:X86 /SUBSYSTEM:CONSOLE,5.01 /OSVERSION:5.1 ' +
         '/NODEFAULTLIB /ENTRY:mainCRTStartup /OUT:"' + $exe + '" ' +
-        '/MAP:"' + $map + '" "' + $obj + '" kernel32.lib'
+        '/MAP:"' + $map + '" "' + $obj + '" kernel32.lib user32.lib'
 $cmd = '"' + $devcmd + '" -no_logo -arch=x86 -host_arch=x64 && ' +
        $compile + ' && ' + $link
 & $env:ComSpec /d /s /c $cmd

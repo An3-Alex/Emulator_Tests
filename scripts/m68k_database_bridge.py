@@ -39,6 +39,10 @@ from rtc4543 import DATA as RTC_DATA, DEFAULT_TIME as RTC_DEFAULT_TIME, Rtc4543
 from admission_card import ERGO_M90_ID, inspect_eeprom
 
 
+class Com3Disconnected(ConnectionError):
+    """The x86 guest closed its serial peer; the bridge must stop cleanly."""
+
+
 REG_A0 = 8
 REG_A7 = 15
 REG_A3 = 11
@@ -372,6 +376,16 @@ class VirtualCoinValidator:
             ):
                 self.pairing_frame_gap = True
                 self.last_pairing_gap = (self._next_remaining, remaining)
+            elif (
+                self.pairing_frame_gap
+                and self.last_pairing_gap
+                == (self._next_remaining + 2, remaining)
+            ):
+                # The first of two consecutive writes reported the *next*
+                # SCC counter value. Both data writes were observed, so the
+                # apparent one-byte gap was only a stale/read-ahead counter.
+                self.pairing_frame_gap = False
+                self.last_pairing_gap = None
             else:
                 self._tx.clear()
                 self.last_tx_frame = None
@@ -795,12 +809,10 @@ def initial_frame_retry_due(
 def initvideo_retry_confirmed(
     stage: str, *, response_pending: bool, systeminfo_seen: bool
 ) -> bool:
-    """A later INITVIDEO needs the guest's version, not just its short ACK."""
-    if stage == "startup":
-        return response_pending
-    if stage == "later":
-        return systeminfo_seen
-    raise ValueError(f"unknown INITVIDEO stage: {stage}")
+    """A short guest ACK alone does not prove either INITVIDEO was consumed."""
+    if stage not in ("startup", "later"):
+        raise ValueError(f"unknown INITVIDEO stage: {stage}")
+    return systeminfo_seen
 
 
 def observe_guest_systeminfo(tail: bytearray, value: int) -> bool:
@@ -1288,7 +1300,7 @@ class TouchClickForwarder:
 
 
 class TouchPacketStream:
-    """Model the repeated contact reports of a streaming 3M controller."""
+    """Keep a detectable contact pulse without delaying its release."""
 
     def __init__(self) -> None:
         self.packets: deque[tuple[int, int, bool, bytes]] = deque()
@@ -1308,8 +1320,20 @@ class TouchPacketStream:
         while self.down_samples < 3 and self.active_point is not None:
             self._append(*self.active_point, True)
             self.down_samples += 1
-        if len(self.packets) >= MAX_PENDING_TOUCH_PACKETS and self.packets[-1][2]:
-            self.packets.pop()  # Discard only a redundant last down report.
+        # A slow firmware consumer must not work through a long queue of stale
+        # held/move reports before seeing the release. Keep the first contact
+        # sample and the two most recent positions of this contact only.
+        queued = list(self.packets)
+        start = len(queued)
+        for index in range(len(queued) - 1, -1, -1):
+            if not queued[index][2]:
+                start = index + 1
+                break
+        else:
+            start = 0
+        contact = queued[start:]
+        if len(contact) > 3:
+            self.packets = deque(queued[:start] + [contact[0], *contact[-2:]])
         self._append(*self.pending_release, False)
         self.pending_release = None
         self.active_point = None
@@ -1339,6 +1363,7 @@ class TouchPacketStream:
             return True
         if (
             self.active_point is None
+            or self.down_samples >= 3
             or now - self.last_report_at < TOUCH_STREAM_REPEAT_SECONDS
             or len(self.packets) >= MAX_PENDING_TOUCH_PACKETS
         ):
@@ -1476,9 +1501,12 @@ def receive_com3(
                 continue
             chunk = sock.recv(4096)
             if not chunk:
-                raise ConnectionError("XP QEMU closed the COM3 socket")
+                raise Com3Disconnected("XP QEMU closed the COM3 socket")
             pending.extend(chunk)
             print(f"COM3_TO_DB {chunk.hex(' ').upper()}", flush=True)
+    except (ConnectionResetError, ConnectionAbortedError) as exc:
+        if not stop.is_set():
+            errors.append(Com3Disconnected(f"XP QEMU reset COM3: {exc}"))
     except BaseException as exc:
         if not stop.is_set():
             errors.append(exc)
@@ -1840,7 +1868,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                     )
                     initial_retry_frame = None
                 elif initial_retry_frame is not None and initial_frame_retry_due(
-                    response_pending=retry_confirmed,
+                    response_pending=bool(pending),
                     attempts=initial_frame_attempts,
                     now=retry_now,
                     retry_at=initial_frame_retry_at,
@@ -3139,6 +3167,9 @@ def run_with_log_file(action: Callable[[], int], path: Path) -> int:
         sys.stdout = sys.stderr = log
         try:
             return action()
+        except Com3Disconnected as exc:
+            print(f"DB_COM3_DISCONNECTED {exc}", file=log, flush=True)
+            return 1
         except BaseException:
             traceback.print_exc(file=log)
             raise

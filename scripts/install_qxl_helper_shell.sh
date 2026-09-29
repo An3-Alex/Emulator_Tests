@@ -9,7 +9,7 @@ fi
 image=$1
 installer=$2
 expected_loader=d5dd84e59c59a24af4f1dfdd486882bfc6fa777e0dcc22fa3ae7314999ab3aeb
-expected_installer=934bad76f335230bd8f80e20355fb867db18758ec0cd183ce9e7080ac56d6756
+expected_installer=0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296
 mount_dir=$(mktemp -d /tmp/m90-qxl-shell.XXXXXX)
 loop_device=""
 

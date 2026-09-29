@@ -259,8 +259,12 @@ class BridgeLogParser:
         elif line.startswith("DB_VIRTUAL_MP_CHALLENGE_COMPARE"):
             if "register_override=False" in line and "wire_match=True" in line:
                 events.append(Event("Prüfer → DB", "Prüfer-Challenge auf der Leitung bestätigt", line))
-            else:
+            elif "register_override=True" in line:
                 events.append(Event("Diagnose", "Prüfer-Challenge per Registereingriff überbrückt", line, "warning"))
+            else:
+                events.append(Event("Warnung", "Prüfer-Challenge ohne gültige Antwort", line, "warning"))
+        elif line.startswith("DB_VIRTUAL_MP_CHALLENGE_FAILED"):
+            events.append(Event("Warnung", "Prüfer-Schlüsselaustausch fehlgeschlagen", line, "warning"))
         elif line.startswith("DB_NESTED_SCC_A_TX_SERVICE"):
             events.append(Event("Board", "Serieller Kanal A unterbricht wartenden Timer", line))
         elif line.startswith("DB_NESTED_UART_REPLY"):
@@ -294,6 +298,8 @@ class BridgeLogParser:
             events.append(Event("Eingabe", "Touchpaket an Datenbank geliefert", line))
         elif line.startswith("DB_INITVIDEO_RETRY_LIMIT_REACHED"):
             events.append(Event("Warnung", "INITVIDEO ohne PC-Antwort", line, "warning"))
+        elif line.startswith("DB_COM3_DISCONNECTED"):
+            events.append(Event("Status", "COM3-Verbindung zum Spiel-PC beendet", line))
         elif line.startswith(("Traceback", "RuntimeError:", "DB_ERROR")):
             events.append(Event("Fehler", line[:100], line, "warning"))
         return events

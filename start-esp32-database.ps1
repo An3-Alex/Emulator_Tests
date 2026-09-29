@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Port,
     [string]$Qemu = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
-    [string]$Image = 'C:\Users\User\Desktop\m90_work.img',
+    [string]$Image,
     [switch]$UsbTablet,
     [switch]$NoEventWindow,
     [switch]$DryRun
@@ -10,6 +10,9 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($Port -notmatch '^COM[1-9][0-9]*$') {
     throw 'Bitte den nativen USB-COM-Port des ESP32 angeben, zum Beispiel -Port COM7.'
+}
+if (-not $DryRun -and [string]::IsNullOrWhiteSpace($Image)) {
+    throw 'CF-Image: Datei auswählen'
 }
 
 $visibleLauncher = Join-Path $PSScriptRoot 'test-swiftshader.ps1'

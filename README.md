@@ -8,49 +8,61 @@ kann beim Start zugeschaltet werden.
 
 ## Aktueller Stand
 
-Das vorbereitete Test-Image erreicht die Spielauswahl. Touch, Haupttasten und
-Spielstart wurden im laufenden Test beobachtet. Die längere Stabilität und die
-Einrichtung eines *unveränderten* CF-Images sind noch nicht abschließend
-verifiziert. Derzeit ist dies eine Entwicklungsfassung, kein fertiges
-Ein-Klick-Installationspaket. Eine Spielgeld-Gutschrift ist noch nicht verfügbar.
+Das bisher vorbereitete Test-Image erreicht die Spielauswahl. Touch,
+Haupttasten und Spielstart wurden im laufenden Test beobachtet. Für ein frisches
+Image gibt es nun eine automatische Einrichtung mit eigener Arbeitskopie;
+Kopieren, QXL-Treiberinstallation und Abschluss wurden an einer frischen Kopie
+getestet. Diese Kopie hat nach beiden `INITVIDEO`-Phasen die Spielauswahl mit
+Spielkacheln angezeigt. Beim ersten Versuch blieb der Bildschirm nach einer
+Touch-Eingabe schwarz; ein weiterer Lauf deckte einen verlorenen
+Münzprüfer-Handshake auf. Nach Korrektur dieses Protokollfehlers erreichte
+dieselbe Kopie erneut die Spielauswahl und lud „African Cash“ per Touch.
+Das Laden dauerte allerdings mehrere Minuten, der zweite Bildschirm blieb
+schwarz, und Langzeitstabilität ist noch nicht bestätigt. Eine
+Spielgeld-Gutschrift ist noch nicht verfügbar. Gegen doppelte bzw. hängen
+bleibende Touch-Eingaben gibt es einen Offline-getesteten Fix; dessen Wirkung
+im laufenden Spiel ist noch nicht bestätigt.
 
 ## Lokal starten
 
-Unter Windows `Start-Emulator-UI.cmd` doppelklicken. Das Startfenster lässt
-folgende eigene Dateien auswählen:
+Unter Windows `Start-Emulator-UI.cmd` doppelklicken oder die `M90-Emulator.exe`
+aus dem privaten GitHub-Release starten. Das Startfenster fragt nach:
 
-- vorbereitetes CF-Image (eine **Kopie**, nie das einzige Original),
+- eigenem Original-CF-Image und einem **neuen Dateinamen für die Arbeitskopie**,
 - `Magie_90_CC4.bin`, `Loader_61640403_L5.0b_2MB.bin`,
   `FactoryReset_61640403.xc` und `M90_Las_Vegas.bin`,
-- 256-Byte-EEPROM-Abbild der Zulassungskarte.
+- M90-Zulassungskarten-EEPROM (256 Byte),
+- eigenem SwiftShader-5003-DLL und QXL-Treiberordner.
 
-Python 3.10+ und QEMU mit `qemu-system-x86_64.exe` und
-`qemu-system-m68k.exe` werden benötigt. Das Startfenster prüft die gewählten
-Dateien und Programme vor dem Start. Fehlendes Python bzw. QEMU kann nach
-Bestätigung über den Windows-Paketmanager installiert werden. Der Haken
-„Live-Protokoll“ öffnet das Ereignisfenster; ohne Haken bleibt das Protokoll
-weiterhin als lokale Logdatei erhalten. Zum Beenden das QEMU-Fenster schließen.
+Auf „Frisches Image einrichten“ klicken und warten. Der Starter prüft die
+Dateien, kopiert das Image, installiert QXL automatisch in einem temporären
+Windows-Gast und gibt die Kopie erst nach Log-/Registry-Prüfung frei. Das
+Original bleibt unverändert. Ein unterbrochener Treiberlauf kann mit derselben
+Arbeitskopie fortgesetzt werden. Erst danach „Emulator starten“ wählen. Der
+Haken „Live-Protokoll“ öffnet optional das Ereignisfenster; die Logdatei wird
+auch ohne Haken geschrieben.
 
-Wichtig: Die Oberfläche **bereitet ein frisches CF-Image noch nicht automatisch
-vor**. Ein unverändertes Image nicht direkt starten, sondern erst eine Kopie
-anlegen und die noch zu dokumentierende Vorbereitung durchführen. Das
-Startfenster verändert die gewählten Quelldateien nicht vorab; QEMU schreibt
-beim Betrieb jedoch in das ausgewählte Image.
+Benötigt werden Windows 10/11, Python 3.10+, QEMU (x86 und m68k), WSL/Ubuntu
+mit `ntfs-3g` und `python3-hivex` sowie genug Platz für die etwa 16-GB-Kopie.
+Die Oberfläche bietet Installationshilfen für QEMU, Python und WSL. Eine
+Ubuntu-Ersteinrichtung oder ein Windows-Neustart kann einmalig nötig sein.
+QEMU schreibt beim Spielen nur in die gewählte Arbeitskopie.
 
 ## Private Daten und Updates
 
 CF-Images, Datenbank-Dumps, Zulassungskarten, Logs und fremde Grafik-DLLs
 gehören nicht in dieses Repository. Sie werden lokal ausgewählt und durch
 `.gitignore` ausgeschlossen. Updates des Quellcodes gehen einfach per `git pull`
-im Projektordner. Auf einem zweiten PC ist dafür Zugriff auf das private
-GitHub-Repository nötig. Ein Update-Verfahren für ein künftiges einzelnes
-EXE-Paket fehlt noch.
+im Projektordner. Für die einzelne Start-EXE lädt man bei einer neuen Version
+die neue Datei aus den privaten GitHub-Releases herunter; automatische Updates
+gibt es derzeit nicht. Auf einem zweiten PC ist GitHub-Zugriff auf das private
+Repository nötig.
 
-Eine erste einzelne Start-EXE lässt sich lokal mit `build-launcher-exe.ps1`
-erzeugen (Build-Abhängigkeit: PyInstaller). Sie legt nur unsere Laufzeit-Skripte
-im lokalen App-Datenordner ab; Images und Dumps werden nicht eingebettet. Die
-EXE ist derzeit ein getesteter Startprogramm-Prototyp, **noch kein fertiger
-Installer für frische CF-Images**.
+Eine einzelne Start-EXE lässt sich lokal mit `build-launcher-exe.ps1` erzeugen
+(Build-Abhängigkeit: PyInstaller und zuvor gebaute Eigenkomponenten). Sie legt
+unsere Laufzeitdateien im lokalen App-Datenordner ab. Images, Dumps und fremde
+Grafik-/Treiberdateien werden nicht eingebettet. Die frische Image-Einrichtung
+ist neu und noch nicht als vollständig stabiler Endnutzer-Installer freigegeben.
 
 ## Hintergründe
 

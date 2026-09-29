@@ -2,10 +2,10 @@ param(
     [string]$Qemu = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
     [string]$QemuM68k = 'C:\Program Files\qemu\qemu-system-m68k.exe',
     [string]$Python = 'python',
-    [string]$Image = 'C:\Users\User\Desktop\m90_work.img',
-    [string]$Database = 'C:\Users\User\Desktop\Merkur DB\Magie_90_CC4.bin',
-    [string]$Loader = 'C:\Users\User\Desktop\Merkur DB\Loader_61640403_L5.0b_2MB.bin',
-    [string]$Config = 'C:\Users\User\Desktop\Merkur DB\M90_Las_Vegas.bin',
+    [string]$Image,
+    [string]$Database,
+    [string]$Loader,
+    [string]$Config,
     [Nullable[uint32]]$D3 = [uint32]::Parse('D27B7159', [Globalization.NumberStyles]::HexNumber),
     [string]$RuntimeDump,
     [string]$AdmissionEeprom,
@@ -80,6 +80,17 @@ if ($DryRun) {
         }
     } | ConvertTo-Json -Depth 6 -Compress
     return
+}
+
+foreach ($item in @(
+    @{ Name = 'Image'; Value = $Image },
+    @{ Name = 'Database'; Value = $Database },
+    @{ Name = 'Loader'; Value = $Loader },
+    @{ Name = 'Config'; Value = $Config }
+)) {
+    if ([string]::IsNullOrWhiteSpace($item.Value)) {
+        throw "Datei auswählen: $($item.Name)"
+    }
 }
 
 $qemuLaunchOutput = @(& $visibleLauncher -Qemu $Qemu -Image $Image -UsbTablet:$UsbTablet)

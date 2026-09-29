@@ -194,6 +194,8 @@ class ControlPanel:
                 max(0, min(TOUCH_HEIGHT - 1, int(event.y * TOUCH_HEIGHT / display_h))))
 
     def _touch_press(self, event: tk.Event) -> None:
+        if self.pad_touch is not None:
+            return
         self.pad_touch = self._pad_point(event)
         self._send({"type": "touch", "x": self.pad_touch[0],
                     "y": self.pad_touch[1], "down": True})
@@ -212,6 +214,13 @@ class ControlPanel:
         point = self._pad_point(event)
         self.pad_touch = None
         self._send({"type": "touch", "x": point[0], "y": point[1], "down": False})
+
+    def _release_pad_if_button_up(self, left_down: bool) -> None:
+        if left_down or self.pad_touch is None:
+            return
+        x, y = self.pad_touch
+        self.pad_touch = None
+        self._send({"type": "touch", "x": x, "y": y, "down": False})
 
     def _capture_loop(self) -> None:
         index = 0
@@ -251,9 +260,12 @@ class ControlPanel:
         except tk.TclError as exc:
             self.status.set(f"Bildschirm nicht lesbar: {exc}")
 
-        if os.name == "nt" and self.qemu_pid:
+        if os.name == "nt":
             left_down = bool(ctypes.windll.user32.GetAsyncKeyState(1) & 0x8000)
-            if self.native_mouse.get() and left_down:
+            # Tk can miss ButtonRelease when the cursor leaves the preview.
+            # The physical button state is an independent release fallback.
+            self._release_pad_if_button_up(left_down)
+            if self.qemu_pid and self.native_mouse.get() and left_down:
                 point = qemu_cursor_position(self.qemu_pid, self.image_size)
                 if point is not None and (not self.previous_left_down or
                                           self.qemu_touch is not None and point != self.qemu_touch):

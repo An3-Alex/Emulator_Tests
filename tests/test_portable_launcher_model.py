@@ -16,6 +16,7 @@ from unittest.mock import patch
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 from portable_launcher_model import Selection, check_runtime, launch_command, validate_selection
+from admission_card import build_m90_eeprom
 import portable_launcher_model as model
 
 
@@ -52,7 +53,7 @@ class PortableLauncherTests(unittest.TestCase):
             with image.open("wb") as output:
                 output.truncate(64 * 1024 * 1024)
             card = root / "card.bin"
-            card.write_bytes(bytes(256))
+            card.write_bytes(build_m90_eeprom(bytes(256), "123456789"))
             for name in (
                 "qemu-system-x86_64.exe", "qemu-system-m68k.exe", "python.exe"
             ):
@@ -71,6 +72,30 @@ class PortableLauncherTests(unittest.TestCase):
             self.assertEqual(len([issue for issue in validate_selection(selection)
                                   if "nicht als M90-kompatibel" in issue]), 4)
             self.assertEqual(Path(selection.database).read_bytes(), b"database")
+
+    def test_wrong_admission_card_is_rejected_before_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wrong = root / "wrong-card.bin"
+            image = bytearray(build_m90_eeprom(bytes(256), "123456789"))
+            image[69:73] = bytes.fromhex("06 32 02 87")
+            wrong.write_bytes(image)
+            for name in ("database.bin", "loader.bin", "factory.bin", "config.bin",
+                         "qemu-system-x86_64.exe", "qemu-system-m68k.exe", "python.exe"):
+                (root / name).write_bytes(b"test")
+            cf = root / "image.img"
+            cf.write_bytes(b"")
+            selection = Selection(
+                image=str(cf), admission_eeprom=str(wrong),
+                database=str(root / "database.bin"), loader=str(root / "loader.bin"),
+                factory=str(root / "factory.bin"), config=str(root / "config.bin"),
+                qemu_x86=str(root / "qemu-system-x86_64.exe"),
+                qemu_m68k=str(root / "qemu-system-m68k.exe"),
+                python=str(root / "python.exe"),
+            )
+            with patch.object(model, "KNOWN_CF_BYTES", 0):
+                issues = validate_selection(selection)
+            self.assertTrue(any("nicht M90" in issue for issue in issues))
 
     def test_settings_round_trip_ignores_unknown_future_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

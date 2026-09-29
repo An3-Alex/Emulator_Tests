@@ -1,4 +1,4 @@
-"""Materialize the source-only runtime carried by a frozen launcher.
+"""Materialize our scripts and binaries carried by a frozen launcher.
 
 Owner images, database dumps and third-party binaries are never part of this
 bundle. Logs and generated database state live beside, not inside, the EXE.
@@ -18,6 +18,39 @@ POWERSHELL_FILES = (
     "start-real-database.ps1",
     "test-swiftshader.ps1",
 )
+SHELL_FILES = (
+    "prepare_image_stage.sh",
+    "finalize_image_stage.sh",
+    "check_image_stage.sh",
+)
+REQUIRED_PYTHON_FILES = (
+    "admission_card.py",
+    "cabinet_control_panel.py",
+    "cabinet_controls.py",
+    "emulator_launcher.py",
+    "event_log_viewer.py",
+    "image_setup.py",
+    "inspect_owner_database.py",
+    "m68k_database_bridge.py",
+    "m68k_database_transform.py",
+    "m68k_qemu_harness.py",
+    "owner_config_runtime.py",
+    "owner_database_runtime.py",
+    "portable_launcher_model.py",
+    "qmp_capture.py",
+    "qxl_setup_runner.py",
+    "rtc4543.py",
+    "runtime_bundle.py",
+    "serialloader_chip_emulator.py",
+)
+OWN_BINARIES = (
+    Path("build/Cgos.dll"),
+    Path("build/display-bootstrap.exe"),
+    Path("build/qxl-installer.exe"),
+    Path("build/d3d9-proxy/d3d9.dll"),
+    Path("build/sram-compat/FBWFLIB.dll"),
+    Path("build/irrklang-proxy/irrKlang.dll"),
+)
 
 
 def bundled_root() -> Path:
@@ -35,12 +68,18 @@ def runtime_root() -> Path:
 
 
 def runtime_payload(source: Path) -> list[tuple[Path, Path]]:
-    """Return only source-owned files needed by the live launcher."""
+    """Return only project-owned files needed by the live launcher."""
+    for name in REQUIRED_PYTHON_FILES:
+        path = source / "scripts" / name
+        if not path.is_file():
+            raise FileNotFoundError(f"Laufzeit-Skript fehlt im Paket: {path}")
     files = [(source / name, Path(name)) for name in POWERSHELL_FILES]
     files.extend(
         (path, Path("scripts") / path.name)
         for path in sorted((source / "scripts").glob("*.py"))
     )
+    files.extend((source / "scripts" / name, Path("scripts") / name) for name in SHELL_FILES)
+    files.extend((source / relative, relative) for relative in OWN_BINARIES)
     for path, _ in files:
         if not path.is_file():
             raise FileNotFoundError(f"Laufzeitdatei fehlt im Paket: {path}")

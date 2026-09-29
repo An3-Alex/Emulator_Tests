@@ -26,15 +26,43 @@ Image. Die aktuellen Source-Builds von `FBWFLIB.dll` und `irrKlang.dll` sind
 **nicht** bytegleich mit den im bewährten Image installierten Versionen.
 Diese Abweichung muss vor einer Neuinstallation funktional geprüft werden.
 
-## Noch offen
+## Automatische Vorbereitung (neuer Teststand)
 
-Eine sichere Image-Vorbereitung muss eine vom Nutzer gewählte Originaldatei
-zuerst kopieren, den Ausgangszustand prüfen, die benötigten eigenen Komponenten
-bauen oder bereitstellen, die vom Nutzer separat bereitgestellten Grafik- und
-Treiberdateien prüfen und die Gast-Registry-/PnP-Schritte reproduzieren. Die
-vorhandenen experimentellen Installationsskripte binden sich an den bisherigen
-Arbeitsdateipfad und sind keine portable Ein-Klick-Rezeptur. Keine dieser
-Schreibschritte wurde am separaten Ausgangsimage ausgeführt.
+`scripts/prepare_image_stage.sh` hängt das Original ausschließlich lesend ein,
+prüft Größe und unveränderte Schlüsseldateien und erstellt eine neue Kopie.
+Nur in dieser Kopie werden eigene Shim-/Proxy-Dateien, der gepatchte Loader,
+die vom Nutzer bereitgestellten QXL-/SwiftShader-Dateien und der temporäre
+QXL-Installer eingesetzt. Der FBWF-Startwert wird nur in der Kopie vorläufig
+geändert. Ein unvollständiger Kopiervorgang bleibt als `.m90-partial` sichtbar
+und wird nie stillschweigend überschrieben.
+
+Der temporäre Windows-XP-Gast registriert die beiden QXL-Geräte per SetupAPI.
+Der verwendete Treiber ist nicht signiert; nach ausdrücklicher Bestätigung im
+Starter werden die dazugehörigen XP-Dialoge nur für diesen ausgewählten
+Treiber im Setup-Gast bestätigt. Der Installer sendet seinen Erfolg über COM1.
+Nach sauberem Gast-Shutdown prüft `scripts/finalize_image_stage.sh` das
+Treiberlog und den QXL-Registry-Dienst, stellt FBWF zurück und aktiviert den
+normalen Display-Bootstrap. `scripts/check_image_stage.sh` liest den Status
+schreibgeschützt aus.
+
+Der komplette Kopier-/QXL-/Abschlussweg wurde mit einer separaten Testkopie
+des Ausgangsimages erfolgreich ausgeführt; der Status war danach `ready`.
+Der anschließende Start aus dieser frischen Kopie erreichte nach zwei
+`INITVIDEO`-Phasen die Spielauswahl mit Spielkacheln. Nach der ersten
+Touch-Eingabe wurden beide Bildschirme schwarz, während die QEMU-Prozesse und
+das Datenbanklog weiterliefen. Ein zweiter Start derselben Kopie prüft, ob
+die erstmalige Einrichtung des zweiten QXL-Bildschirms beteiligt war.
+Dieser zweite Start blieb stattdessen bei `FOUL PR`: der SCC-B-Watchpoint las
+für zwei vollständige aufeinanderfolgende Prüferbytes denselben Restzähler
+und verwarf deshalb fälschlich die Challenge. Ein Regressionstest mit den
+konkreten neun Bytes und die korrigierte Zähler-Auswertung beseitigten diesen
+Fehler im dritten Start. Dort öffnete ein Touch auf „African Cash“ das Spiel,
+allerdings erst nach mehreren Minuten. Der untere Monitor blieb schwarz.
+Interaktive Bedienung über längere Zeit und dauerhafte Stabilität sind nicht
+bestätigt; die Ursache des ersten Schwarzbilds ist noch nicht bewiesen.
+Die aktuellen Source-Builds von `FBWFLIB.dll` und `irrKlang.dll` unterscheiden
+sich weiterhin von der zuvor funktionierenden Arbeitskopie und brauchen den
+vollen Laufzeittest.
 
 Zur erneuten reinen Bestandsaufnahme dient
 `scripts/compare_image_inventory_ro.sh`; es verwendet für beide Images

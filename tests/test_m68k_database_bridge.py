@@ -27,6 +27,18 @@ class DatabaseBridgeTests(unittest.TestCase):
             self.assertIs(sys.stdout, original_stdout)
             self.assertIs(sys.stderr, original_stderr)
 
+    def test_expected_guest_com3_close_is_logged_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "events.log"
+
+            def action() -> int:
+                raise bridge.Com3Disconnected("XP QEMU reset COM3")
+
+            self.assertEqual(bridge.run_with_log_file(action, path), 1)
+            recorded = path.read_text(encoding="utf-8")
+            self.assertIn("DB_COM3_DISCONNECTED XP QEMU reset COM3", recorded)
+            self.assertNotIn("Traceback", recorded)
+
     def test_aux_packet_codec_roundtrips_original_firmware_layout(self) -> None:
         for plain in (
             bytes.fromhex("00 00 00 00 00 00 01 19 00 12 02"),
@@ -322,6 +334,20 @@ class DatabaseBridgeTests(unittest.TestCase):
             other.observe_tx(value, remaining)
         self.assertFalse(other.challenge_pending)
 
+    def test_pairing_counter_read_ahead_keeps_complete_frame(self) -> None:
+        # Captured on the second fresh-image boot: the third write was
+        # reported with the fourth write's counter value, but no byte was lost.
+        frame = bytes.fromhex("7F 27 0A 4D FA CD EB 1E CD")
+        observed_remaining = (9, 8, 6, 6, 5, 4, 3, 2, 1)
+        device = bridge.VirtualCoinValidator()
+        for value, remaining in zip(frame[:-1], observed_remaining[:-1]):
+            self.assertIsNone(device.observe_tx(value, remaining))
+        self.assertEqual(device.observe_tx(frame[-1], 1), bytes(4))
+        self.assertEqual(device.last_tx_frame, frame)
+        self.assertTrue(device.challenge_pending)
+        self.assertFalse(device.pairing_frame_gap)
+        self.assertIsNone(device.last_pairing_gap)
+
     def test_pairing_gap_log_survives_gap_clearing_on_next_frame(self) -> None:
         device = bridge.VirtualCoinValidator()
         for value, remaining in ((0x7F, 9), (0x27, 8), (0x04, 6)):
@@ -411,8 +437,8 @@ class DatabaseBridgeTests(unittest.TestCase):
         device.challenge_pending = True
         self.assertIsNone(device.reconcile_pairing_receive_buffer(FakeRsp(b"", 0x1234)))
 
-    def test_later_initvideo_requires_systeminfo_not_short_ack(self) -> None:
-        self.assertTrue(bridge.initvideo_retry_confirmed(
+    def test_both_initvideo_stages_require_systeminfo_not_short_ack(self) -> None:
+        self.assertFalse(bridge.initvideo_retry_confirmed(
             "startup", response_pending=True, systeminfo_seen=False,
         ))
         self.assertFalse(bridge.initvideo_retry_confirmed(
@@ -424,6 +450,9 @@ class DatabaseBridgeTests(unittest.TestCase):
         self.assertTrue(bridge.observe_guest_systeminfo(tail, ord("-")))
         self.assertTrue(bridge.initvideo_retry_confirmed(
             "later", response_pending=False, systeminfo_seen=True,
+        ))
+        self.assertTrue(bridge.initvideo_retry_confirmed(
+            "startup", response_pending=False, systeminfo_seen=True,
         ))
 
     def test_virtual_coin_validator_type_probes_return_selected_type(self) -> None:
@@ -1235,7 +1264,20 @@ class DatabaseBridgeTests(unittest.TestCase):
         stream.request(400, 200, True, 1.0)
         for index in range(30):
             stream.repeat(1.1 + index * .06)
-        self.assertEqual(len(stream.packets), bridge.MAX_PENDING_TOUCH_PACKETS)
+        self.assertEqual(len(stream.packets), 3)
+        stream.request(400, 200, False, 3.0)
+        self.assertEqual([packet[2] for packet in stream.packets],
+                         [True, True, True, False])
+
+    def test_touch_release_drops_stale_drag_reports(self) -> None:
+        stream = bridge.TouchPacketStream()
+        for index in range(20):
+            stream.request(100 + index, 200, True, 1.0 + index * .01)
+        stream.request(119, 200, False, 1.3)
+        self.assertEqual(
+            [(x, down) for x, _, down, _ in stream.packets],
+            [(100, True), (118, True), (119, True), (119, False)],
+        )
 
     def test_rejects_changed_initvideo_identity_fields(self) -> None:
         frame = bytearray(

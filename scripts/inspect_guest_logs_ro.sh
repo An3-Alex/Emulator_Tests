@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Inspect diagnostics in a stopped working image. The image is never mounted RW.
+set -euo pipefail
+
+[[ $# -eq 1 && -f "$1" ]] || { echo 'usage: inspect_guest_logs_ro.sh IMAGE' >&2; exit 2; }
+image=$1
+mount_dir=$(mktemp -d /tmp/m90-crash-inspect.XXXXXX)
+loop_device=
+mounted=0
+cleanup() {
+  if (( mounted )); then umount "$mount_dir"; fi
+  if [[ -n "$loop_device" ]]; then losetup -d "$loop_device"; fi
+  rmdir "$mount_dir"
+}
+trap cleanup EXIT
+
+loop_device=$(losetup --find --show --read-only --offset 1048576 \
+  --sizelimit 16021151744 "$image")
+ntfs-3g -o ro "$loop_device" "$mount_dir"
+mounted=1
+
+printf 'Log directories:\n'
+find "$mount_dir" -maxdepth 4 -type d -iname '*log*' -print | sed -n '1,60p'
+printf '\nGuest crash dumps:\n'
+find "$mount_dir" -type f \
+  \( -iname '*.dmp' -o -iname 'drwtsn32.log' -o -iname '*.mdmp' \) \
+  -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' | sort -r | sed -n '1,30p'
+
+for name in WINDOWS/system32/config/AppEvent.Evt \
+            WINDOWS/system32/config/SysEvent.Evt \
+            WINDOWS/MEMORY.DMP \
+            WorkDir/sound/A/TurbobuchenDry.ogg; do
+  if [[ -f "$mount_dir/$name" ]]; then
+    stat -c '%y %s %n' "$mount_dir/$name"
+  fi
+done
+
+printf '\nRecent NVRAM files:\n'
+find "$mount_dir/NVRAM" -maxdepth 3 -type f \
+  -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' | sort -r | sed -n '1,60p'
+if [[ -d "$mount_dir/LogFiles" ]]; then
+  printf '\nRecent guest log files:\n'
+  find "$mount_dir/LogFiles" -maxdepth 2 -type f \
+    -printf '%TY-%Tm-%Td %TH:%TM:%TS %s %p\n' | sort -r | sed -n '1,60p'
+fi
+
+if [[ -f "$mount_dir/LogFiles/logDatei.txt" ]]; then
+  printf '\nLogFiles/logDatei.txt (first 100 lines, newest first):\n'
+  sed -n '1,100p' "$mount_dir/LogFiles/logDatei.txt"
+fi
+if [[ -f "$mount_dir/LogFiles/logDatei.txt13.txt" ]]; then
+  printf '\nLogFiles/logDatei.txt13.txt (first 60 lines, newest first):\n'
+  sed -n '1,60p' "$mount_dir/LogFiles/logDatei.txt13.txt"
+fi
+if [[ -d "$mount_dir/LogFiles" ]]; then
+  printf '\nSound-buffer errors in guest logs:\n'
+  grep -H -F 'SoundBuffer konnte nicht erstellt werden' \
+    "$mount_dir"/LogFiles/logDatei.txt* 2>/dev/null | sed -n '1,30p' || true
+fi
+for break_log in "$mount_dir"/LogFiles/logComAtBreak20120201_*.bin; do
+  if [[ -f "$break_log" ]]; then
+    printf '\n%s (first 96 bytes):\n' "${break_log#"$mount_dir"/}"
+    od -An -tx1 -N96 "$break_log"
+  fi
+done
+
+for name in NVRAM/display_bootstrap.log NVRAM/d3d9_proxy.log \
+            NVRAM/irrklang_proxy.log NVRAM/cgos_shim.log \
+            NVRAM/sram_compat.log NVRAM/CheckTemp.txt; do
+  if [[ -f "$mount_dir/$name" ]]; then
+    printf '\n%s (last 60 lines):\n' "$name"
+    tail -n 60 "$mount_dir/$name"
+  fi
+done

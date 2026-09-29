@@ -39,6 +39,14 @@ class QemuLaunchPlanTests(unittest.TestCase):
     def launch_plan(self) -> dict:
         return self.script_plan(LAUNCHER)
 
+    def test_launchers_do_not_embed_a_developer_profile(self) -> None:
+        for script in (
+            LAUNCHER, REAL_DATABASE_LAUNCHER, PROGRAM_AND_START_LAUNCHER,
+            ROOT / "start-emulator.ps1", ROOT / "start-esp32-database.ps1",
+        ):
+            with self.subTest(script=script.name):
+                self.assertNotIn("C:\\Users\\", script.read_text(encoding="utf-8"))
+
     def test_dry_run_keeps_qemu_visible_and_rebootable(self) -> None:
         plan = self.launch_plan()
         arguments = plan["arguments"]

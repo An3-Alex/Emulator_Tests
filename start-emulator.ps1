@@ -1,24 +1,26 @@
 param(
-    [string]$Database = 'C:\Users\User\Desktop\Merkur DB\Magie_90_CC4.bin',
-    [string]$Loader = 'C:\Users\User\Desktop\Merkur DB\Loader_61640403_L5.0b_2MB.bin',
+    [string]$Image,
+    [string]$Database,
+    [string]$Loader,
     [string]$DatabaseSha256 = '593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8',
     [string]$LoaderSha256 = 'B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109',
-    [string[]]$Modules = @(
-        'C:\Users\User\Desktop\Merkur DB\FactoryReset_61640403.xc',
-        'C:\Users\User\Desktop\Merkur DB\M90_Las_Vegas.bin',
-        'C:\Users\User\Desktop\Merkur DB\M90_Multi_Juwel.bin'
-    ),
-    [string[]]$ModuleSha256 = @(
-        '4F088DB4AF5F4A5D112A003EF312EB19B4388C25902FFA03F75742379A0CD5C4',
-        'DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783',
-        '445EF8CB754D5BCD8E8CE3901B90F0F32B53A9269F1CC2605F16119B3732A911'
-    ),
+    [string[]]$Modules = @(),
+    [string[]]$ModuleSha256 = @(),
     [switch]$PauseBeforeLargeCommand,
     [int]$StopAfterTick = 0,
     [int[]]$SkipTick = @()
 )
 
 $ErrorActionPreference = 'Stop'
+foreach ($item in @(
+    @{ Name = 'Image'; Value = $Image },
+    @{ Name = 'Database'; Value = $Database },
+    @{ Name = 'Loader'; Value = $Loader }
+)) {
+    if ([string]::IsNullOrWhiteSpace($item.Value)) {
+        throw "Datei auswählen: $($item.Name)"
+    }
+}
 $bridge = Join-Path $PSScriptRoot 'scripts\vidcom_init_bridge.py'
 $pairValidator = Join-Path $PSScriptRoot 'scripts\validate_owner_database_set.py'
 $prefixLog = Join-Path $PSScriptRoot 'logs\sram-compat-diagnostics-run2\LogFiles\VidComLog.5.part_01.txt'
@@ -42,7 +44,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Owner database/loader validation failed with exit code $LASTEXITCODE"
 }
 
-& (Join-Path $PSScriptRoot 'test-swiftshader.ps1')
+& (Join-Path $PSScriptRoot 'test-swiftshader.ps1') -Image $Image
 
 $bridgeArgs = @(
     $bridge,

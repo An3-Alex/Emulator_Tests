@@ -1,6 +1,7 @@
-"""Small Windows front end for the owner-supplied M90 emulator inputs.
+"""Windows front end for owner-supplied M90 emulator inputs.
 
-The UI does not modify CF images or download any protected game/database files.
+Fresh CF images are prepared in a separate working copy. Protected game and
+database files remain outside the bundled application.
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import os
 import json
+import ctypes
 from pathlib import Path
 import queue
 import shutil
@@ -17,8 +19,14 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from image_setup import (
+    COMPONENTS, check_file, check_preparation, finalize_command, guest_setup_command,
+    stage_check_command, stage_command,
+)
 from portable_launcher_model import Selection, check_runtime, launch_command
-from runtime_bundle import project_for_launcher
+from runtime_bundle import (
+    OWN_BINARIES, REQUIRED_PYTHON_FILES, SHELL_FILES, project_for_launcher,
+)
 
 
 PROJECT = project_for_launcher()
@@ -30,7 +38,10 @@ DATABASE_FILES = {
     "config": "M90_Las_Vegas.bin",
 }
 FIELDS = (
-    ("image", "Vorbereitetes CF-Image"),
+    ("original_image", "Frisches Original-CF-Image"),
+    ("image", "Neue Arbeitskopie / Start-Image"),
+    ("swiftshader", "SwiftShader-DLL (eigene Datei)"),
+    ("qxl_driver_dir", "QXL-Treiberordner"),
     ("database", "Datenbank (M90)"),
     ("loader", "Loader"),
     ("factory", "Factory"),
@@ -63,7 +74,6 @@ def find_python_executable() -> str:
     if Path(sys.executable).name.lower() == "python.exe":
         candidates.append(sys.executable)
     candidates.append(shutil.which("python.exe"))
-    candidates.append(r"C:\Python314\python.exe")
     candidates.append(str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python314" / "python.exe"))
     py_launcher = shutil.which("py.exe")
     if py_launcher:
@@ -98,11 +108,12 @@ class Launcher(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("M90 Emulator – Einrichtung und Start")
-        self.geometry("940x690")
-        self.minsize(790, 600)
+        self.geometry("1000x820")
+        self.minsize(850, 720)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.running: subprocess.Popen[str] | None = None
         self.checking = False
+        self.preparing = False
 
         try:
             saved = Selection.from_json(SETTINGS)
@@ -133,14 +144,15 @@ class Launcher(tk.Tk):
         ).pack(anchor="w", pady=(2, 10))
         notice = ttk.Label(
             outer,
-            text="Wichtig: Derzeit startet nur ein bereits vorbereitetes CF-Image. "
-                 "Die automatische Einrichtung eines unveränderten Images ist noch in Arbeit.",
+            text="Ein frisches Image wird zuerst in eine neue Arbeitskopie übernommen, "
+                 "im Windows-Gast eingerichtet und erst danach zum Start freigegeben. "
+                 "Das Original bleibt unverändert.",
             foreground="#9b3500", wraplength=870,
         )
         notice.pack(anchor="w", pady=(0, 8))
         ttk.Checkbutton(
             outer,
-            text="Ich habe eine eigene, bereits vorbereitete Image-Kopie gewählt (nicht das Original).",
+            text="Ich habe eine bereits vorbereitete Arbeitskopie gewählt (nicht das Original).",
             variable=self.prepared_copy,
         ).pack(anchor="w", pady=(0, 8))
 
@@ -166,8 +178,12 @@ class Launcher(tk.Tk):
         ).pack(anchor="w")
         controls = ttk.Frame(outer)
         controls.pack(fill="x", pady=(12, 6))
+        self.prepare_button = ttk.Button(
+            controls, text="Frisches Image einrichten", command=self._prepare,
+        )
+        self.prepare_button.pack(side="left")
         self.check_button = ttk.Button(controls, text="Dateien und Programme prüfen", command=self._check)
-        self.check_button.pack(side="left")
+        self.check_button.pack(side="left", padx=(8, 0))
         self.start_button = ttk.Button(controls, text="Emulator starten", command=self._start)
         self.start_button.pack(side="left", padx=8)
         self.install_button = ttk.Button(controls, text="QEMU installieren", command=self._install_qemu)
@@ -175,6 +191,10 @@ class Launcher(tk.Tk):
         self.python_button = ttk.Button(controls, text="Python installieren", command=self._install_python)
         self.python_button.pack(side="left", padx=(8, 0))
         ttk.Label(controls, textvariable=self.status).pack(side="left", padx=10)
+        ttk.Button(
+            outer, text="WSL/NTFS-Werkzeuge für frische Images einrichten",
+            command=self._install_wsl,
+        ).pack(anchor="w", pady=(0, 5))
 
         ttk.Label(outer, text="Startmeldungen", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(6, 2))
         output_frame = ttk.Frame(outer)
@@ -187,9 +207,18 @@ class Launcher(tk.Tk):
 
     def _browse(self, key: str) -> None:
         current = self.variables[key].get()
-        selected = filedialog.askopenfilename(
-            title=dict(FIELDS)[key], initialdir=str(Path(current).parent) if current else None,
-        )
+        if key == "image":
+            selected = filedialog.asksaveasfilename(
+                title="Name der neuen Arbeitskopie", defaultextension=".img",
+                filetypes=[("CF-Image", "*.img"), ("Alle Dateien", "*.*")],
+                initialdir=str(Path(current).parent) if current else None,
+            )
+        elif key == "qxl_driver_dir":
+            selected = filedialog.askdirectory(title=dict(FIELDS)[key])
+        else:
+            selected = filedialog.askopenfilename(
+                title=dict(FIELDS)[key], initialdir=str(Path(current).parent) if current else None,
+            )
         if selected:
             self.variables[key].set(selected)
 
@@ -248,9 +277,91 @@ class Launcher(tk.Tk):
         self.status.set("Vorprüfung vor dem Start…")
         threading.Thread(target=self._check_worker, args=(selection, True), daemon=True).start()
 
+    def _prepare(self) -> None:
+        if self.checking or self.preparing or (self.running and self.running.poll() is None):
+            return
+        selection = self._selection()
+        if not self._save(selection):
+            return
+        if not messagebox.askyesno(
+            "Frisches Image einrichten",
+            "Eine neue, etwa 16 GB große Arbeitskopie wird angelegt. "
+            "Danach startet ein temporärer Windows-Gast und installiert den von dir "
+            "ausgewählten, unsignierten QXL-Treiber. "
+            "Das gewählte Original bleibt schreibgeschützt. Fortfahren?",
+        ):
+            return
+        self.checking = True
+        self.preparing = True
+        self.prepare_button.configure(state="disabled")
+        self.start_button.configure(state="disabled")
+        self.check_button.configure(state="disabled")
+        self.status.set("Image-Vorbereitung wird geprüft…")
+        threading.Thread(target=self._prepare_worker, args=(selection,), daemon=True).start()
+
+    def _run_step(self, command: list[str], label: str) -> None:
+        self.events.put(("status", label))
+        process = subprocess.Popen(
+            command, cwd=PROJECT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, errors="replace", bufsize=1,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            self.events.put(("line", line))
+        result = process.wait()
+        if result != 0:
+            raise RuntimeError(f"{label} fehlgeschlagen (Code {result})")
+
+    def _prepare_worker(self, selection: Selection) -> None:
+        try:
+            image = Path(selection.image) if selection.image else None
+            stage = "new"
+            if image and image.is_file():
+                result = subprocess.run(
+                    stage_check_command(image, PROJECT), capture_output=True, text=True,
+                    timeout=60,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"Arbeitskopie konnte nicht geprüft werden: {result.stderr.strip()}")
+                stage = result.stdout.strip()
+                if stage == "ready":
+                    self.events.put(("prepared", str(image)))
+                    return
+                if stage != "qxl-pnp":
+                    raise RuntimeError("Bestehendes Image ist keine fortsetzbare M90-Arbeitskopie")
+            issues = check_preparation(selection, PROJECT, resume=stage == "qxl-pnp")
+            if issues:
+                raise RuntimeError("\n".join(issues))
+            if stage == "new":
+                self._run_step(stage_command(selection, PROJECT), "Arbeitskopie wird eingerichtet")
+            self._run_step(guest_setup_command(selection, PROJECT), "QXL-Gastinstallation läuft")
+            self._run_step(finalize_command(Path(selection.image), PROJECT), "Image wird abgeschlossen")
+            result = subprocess.run(
+                stage_check_command(Path(selection.image), PROJECT),
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0 or result.stdout.strip() != "ready":
+                raise RuntimeError("Abschlussmarker im Image fehlt")
+            self.events.put(("prepared", selection.image))
+        except Exception as exc:
+            self.events.put(("prepare_failed", str(exc)))
+
     def _check_worker(self, selection: Selection, start: bool) -> None:
         try:
             issues = check_runtime(selection)
+            if not issues:
+                result = subprocess.run(
+                    stage_check_command(Path(selection.image), PROJECT),
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode != 0:
+                    issues.append("CF-Image: Vorbereitungsstatus nicht lesbar; WSL/NTFS prüfen")
+                elif result.stdout.strip() not in ("ready", "legacy-ready"):
+                    issues.append(
+                        f"CF-Image: nicht startbereit ({result.stdout.strip() or 'unbekannt'}); "
+                        "zuerst ‚Frisches Image einrichten‘ ausführen"
+                    )
         except Exception as exc:
             issues = [f"Prüfung fehlgeschlagen: {exc}"]
         self.events.put(("checked", (selection, start, issues)))
@@ -260,6 +371,62 @@ class Launcher(tk.Tk):
 
     def _install_python(self) -> None:
         self._install_package("python", "Python 3.14", "Python.Python.3.14")
+
+    def _install_wsl(self) -> None:
+        if self.checking or self.preparing or self.running and self.running.poll() is None:
+            return
+        wsl = shutil.which("wsl.exe")
+        if not wsl:
+            messagebox.showerror("WSL", "wsl.exe fehlt. Windows 10/11 mit WSL-Unterstützung wird benötigt.")
+            return
+        try:
+            probe = subprocess.run(
+                [wsl, "--", "sh", "-lc", "echo WSL_READY"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            probe = None
+        if probe is None or "WSL_READY" not in probe.stdout:
+            if not messagebox.askyesno(
+                "WSL installieren",
+                "Für die automatische CF-Vorbereitung wird WSL/Ubuntu benötigt. "
+                "Ubuntu mit Windows-Administratorfreigabe installieren? "
+                "Danach können ein Neustart und eine einmalige Ubuntu-Ersteinrichtung nötig sein.",
+            ):
+                return
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", wsl, "--install -d Ubuntu", None, 1,
+            )
+            if result <= 32:
+                messagebox.showerror("WSL", f"WSL-Installation konnte nicht gestartet werden (Code {result}).")
+            else:
+                self._write("WSL/Ubuntu-Installation gestartet. Nach Abschluss ggf. Windows neu starten.\n")
+            return
+        if not messagebox.askyesno(
+            "WSL-Werkzeuge installieren",
+            "Die Linux-Pakete ntfs-3g und python3-hivex jetzt in deiner WSL-Distribution "
+            "installieren? Dafür werden Paketquellen aus dem Internet verwendet.",
+        ):
+            return
+        self.checking = True
+        self.status.set("WSL-Werkzeuge werden installiert…")
+        self.check_button.configure(state="disabled")
+        self.start_button.configure(state="disabled")
+        self.prepare_button.configure(state="disabled")
+        threading.Thread(target=self._install_wsl_worker, args=(wsl,), daemon=True).start()
+
+    def _install_wsl_worker(self, wsl: str) -> None:
+        try:
+            self._run_step(
+                [wsl, "--user", "root", "--", "bash", "-lc",
+                 "command -v apt-get >/dev/null && apt-get update && "
+                 "DEBIAN_FRONTEND=noninteractive apt-get install -y ntfs-3g python3-hivex"],
+                "WSL-Werkzeuge werden installiert",
+            )
+        except Exception as exc:
+            self.events.put(("wsl_installed", str(exc)))
+        else:
+            self.events.put(("wsl_installed", ""))
 
     def _install_package(self, key: str, label: str, package_id: str) -> None:
         if self.checking or self.running and self.running.poll() is None:
@@ -336,6 +503,37 @@ class Launcher(tk.Tk):
                 kind, payload = self.events.get_nowait()
                 if kind == "line":
                     self._write(str(payload))
+                elif kind == "status":
+                    self.status.set(str(payload))
+                elif kind == "prepared":
+                    self.preparing = False
+                    self.checking = False
+                    self.prepared_copy.set(True)
+                    self.prepare_button.configure(state="normal")
+                    self.start_button.configure(state="normal")
+                    self.check_button.configure(state="normal")
+                    self.status.set("Arbeitskopie vorbereitet; Emulator kann gestartet werden.")
+                    self._write(f"Arbeitskopie fertig: {payload}\n")
+                elif kind == "prepare_failed":
+                    self.preparing = False
+                    self.checking = False
+                    self.prepare_button.configure(state="normal")
+                    self.start_button.configure(state="normal")
+                    self.check_button.configure(state="normal")
+                    self.status.set("Image-Vorbereitung nicht abgeschlossen.")
+                    self._write(f"Vorbereitung fehlgeschlagen: {payload}\n")
+                    messagebox.showerror("Image-Vorbereitung", str(payload)[:2000])
+                elif kind == "wsl_installed":
+                    self.checking = False
+                    self.check_button.configure(state="normal")
+                    self.start_button.configure(state="normal")
+                    self.prepare_button.configure(state="normal")
+                    if payload:
+                        self.status.set("WSL-Werkzeuge fehlen noch.")
+                        self._write(f"WSL-Installation fehlgeschlagen: {payload}\n")
+                    else:
+                        self.status.set("WSL-Werkzeuge installiert.")
+                        self._write("WSL-Werkzeuge installiert.\n")
                 elif kind == "checked":
                     selection, start, issues = payload
                     self.checking = False
@@ -380,6 +578,12 @@ class Launcher(tk.Tk):
         self.output.configure(state="disabled")
 
     def _on_close(self) -> None:
+        if self.preparing:
+            messagebox.showwarning(
+                "Vorbereitung läuft", "Bitte die Image-Vorbereitung abwarten. "
+                "Ein Abbruch während des Kopierens oder der Gastinstallation wäre unsicher.",
+            )
+            return
         if self.running and self.running.poll() is None:
             if not messagebox.askyesno(
                 "Emulator läuft", "Der Emulator läuft weiter, wenn dieses Fenster geschlossen wird.\n"
@@ -394,6 +598,10 @@ if __name__ == "__main__":
         report = {
             "runtime": str(PROJECT),
             "scripts": len(list((PROJECT / "scripts").glob("*.py"))),
+            "required_python_files": {
+                name: (PROJECT / "scripts" / name).is_file()
+                for name in REQUIRED_PYTHON_FILES
+            },
             "powershell_files": {
                 name: (PROJECT / name).is_file()
                 for name in (
@@ -401,9 +609,24 @@ if __name__ == "__main__":
                     "test-swiftshader.ps1",
                 )
             },
+            "shell_files": {
+                name: (PROJECT / "scripts" / name).is_file() for name in SHELL_FILES
+            },
+            "own_binaries": {
+                str(name): (PROJECT / name).is_file() for name in OWN_BINARIES
+            },
+            "component_hashes": {
+                name: check_file(PROJECT / relative, digest, name) is None
+                for name, (relative, digest) in COMPONENTS.items()
+            },
         }
         Path(sys.argv[2]).write_text(json.dumps(report, indent=2), encoding="utf-8")
-        if not all(report["powershell_files"].values()) or report["scripts"] < 5:
+        if (not all(report["required_python_files"].values())
+                or not all(report["powershell_files"].values())
+                or not all(report["shell_files"].values())
+                or not all(report["own_binaries"].values())
+                or not all(report["component_hashes"].values())
+                or report["scripts"] < 5):
             raise SystemExit(1)
     else:
         Launcher().mainloop()

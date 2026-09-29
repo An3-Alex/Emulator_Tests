@@ -204,6 +204,25 @@ class EventLogViewerTests(unittest.TestCase):
         )
         self.assertEqual(snapshot[0].title, "SCC-A-Interrupt aktiv (Diagnose)")
 
+    def test_failed_pairing_is_not_labeled_register_override(self) -> None:
+        parser = viewer.BridgeLogParser()
+        failed = parser.feed(
+            "DB_VIRTUAL_MP_CHALLENGE_COMPARE frame_gap_fallback=False "
+            "gap=(7, 6) wire_match=False register_override=False "
+            "received_before_override=-001 forced_expected=-001 remaining=0"
+        )
+        self.assertEqual(failed[0].title, "Prüfer-Challenge ohne gültige Antwort")
+        self.assertEqual(failed[0].level, "warning")
+        error = parser.feed("DB_VIRTUAL_MP_CHALLENGE_FAILED pending=False")
+        self.assertIn("fehlgeschlagen", error[0].title)
+
+    def test_expected_com3_disconnect_is_status_not_traceback(self) -> None:
+        event = viewer.BridgeLogParser().feed(
+            "DB_COM3_DISCONNECTED XP QEMU reset COM3"
+        )[0]
+        self.assertEqual(event.title, "COM3-Verbindung zum Spiel-PC beendet")
+        self.assertEqual(event.level, "normal")
+
 
 if __name__ == "__main__":
     unittest.main()

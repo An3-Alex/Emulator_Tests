@@ -15,6 +15,7 @@ from cabinet_controls import (
     KEY_TABLE_BASE, format_tablet_packet, key_location, send_command,
     validate_command,
 )
+from cabinet_control_panel import ControlPanel
 from m68k_database_bridge import (
     BUTTON_PULSE_BOARD_SCANS, MP_STATE_ADDRESS, advance_button_pulses,
     publish_cabinet_buttons,
@@ -42,6 +43,24 @@ class MemoryRsp:
 
 
 class CabinetControlTests(unittest.TestCase):
+    def test_preview_touch_deduplicates_press_and_recovers_missed_release(self) -> None:
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.pad_touch = None
+        panel._pad_point = lambda _event: (320, 240)
+        events = []
+        panel._send = events.append
+
+        panel._touch_press(object())
+        panel._touch_press(object())
+        panel._release_pad_if_button_up(True)
+        panel._release_pad_if_button_up(False)
+        panel._touch_release(object())
+
+        self.assertEqual(events, [
+            {"type": "touch", "x": 320, "y": 240, "down": True},
+            {"type": "touch", "x": 320, "y": 240, "down": False},
+        ])
+
     def test_format_tablet_packet_has_status_and_7_bit_coordinates(self) -> None:
         self.assertEqual(format_tablet_packet(0, 0, True), b"\xC0\0\0\0\0")
         self.assertEqual(format_tablet_packet(799, 599, False),

@@ -20,6 +20,8 @@ def find_child(hive: hivex.Hivex, node: int, name: str) -> int:
 def display_value(hive: hivex.Hivex, value: int) -> str:
     key = hive.value_key(value)
     value_type = hive.value_type(value)
+    if isinstance(value_type, tuple):
+        value_type = value_type[0]
     raw = hive.value_value(value)
     if isinstance(raw, tuple):
         raw = raw[-1]

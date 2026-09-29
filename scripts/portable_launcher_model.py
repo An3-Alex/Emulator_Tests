@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 import subprocess
 
+from admission_card import ERGO_M90_ID, inspect_eeprom
+
 
 KNOWN_SHA256 = {
     "database": "593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8",
@@ -25,6 +27,9 @@ KNOWN_CF_BYTES = 16_139_354_112
 @dataclass(frozen=True)
 class Selection:
     image: str = ""
+    original_image: str = ""
+    swiftshader: str = ""
+    qxl_driver_dir: str = ""
     database: str = ""
     loader: str = ""
     factory: str = ""
@@ -91,6 +96,18 @@ def validate_selection(selection: Selection) -> list[str]:
             )
     if Path(selection.admission_eeprom).stat().st_size != 256:
         issues.append("Zulassungskarte: EEPROM muss genau 256 Byte groß sein")
+    else:
+        try:
+            _, model = inspect_eeprom(Path(selection.admission_eeprom).read_bytes())
+        except ValueError as exc:
+            issues.append(f"Zulassungskarte: {exc}")
+        else:
+            if model != ERGO_M90_ID:
+                issues.append(
+                    f"Zulassungskarte: Modell {model.hex(' ').upper()} ist nicht M90"
+                )
+    if selection.original_image and Path(selection.image).resolve() == Path(selection.original_image).resolve():
+        issues.append("CF-Image: Original darf nicht als Arbeitskopie gestartet werden")
     image_size = Path(selection.image).stat().st_size
     if image_size != KNOWN_CF_BYTES:
         issues.append(

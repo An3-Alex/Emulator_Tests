@@ -1,6 +1,6 @@
 param(
     [string]$Qemu = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
-    [string]$Image = 'C:\Users\User\Desktop\m90_work.img',
+    [string]$Image,
     [switch]$UsbTablet,
     [switch]$DryRun
 )

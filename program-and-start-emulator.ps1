@@ -2,11 +2,11 @@ param(
     [string]$Qemu = 'C:\Program Files\qemu\qemu-system-x86_64.exe',
     [string]$QemuM68k = 'C:\Program Files\qemu\qemu-system-m68k.exe',
     [string]$Python = 'python',
-    [string]$Image = 'C:\Users\User\Desktop\m90_work.img',
-    [string]$Database = 'C:\Users\User\Desktop\Merkur DB\Magie_90_CC4.bin',
-    [string]$Loader = 'C:\Users\User\Desktop\Merkur DB\Loader_61640403_L5.0b_2MB.bin',
-    [string]$FactoryReset = 'C:\Users\User\Desktop\Merkur DB\FactoryReset_61640403.xc',
-    [string]$Config = 'C:\Users\User\Desktop\Merkur DB\M90_Las_Vegas.bin',
+    [string]$Image,
+    [string]$Database,
+    [string]$Loader,
+    [string]$FactoryReset,
+    [string]$Config,
     [datetime]$DatabaseDate = [datetime]'2012-02-01T22:14:00',
     [Nullable[uint32]]$D3 = [uint32]::Parse('D27B7159', [Globalization.NumberStyles]::HexNumber),
     [string]$RuntimeDump,
@@ -58,6 +58,17 @@ if ($DryRun) {
 
 if (Get-Process qemu-system* -ErrorAction SilentlyContinue) {
     throw 'QEMU läuft bereits. Den vorhandenen Emulator erst beenden; die Datenbank wird nicht neu programmiert.'
+}
+foreach ($item in @(
+    @{ Name = 'Image'; Value = $Image },
+    @{ Name = 'Database'; Value = $Database },
+    @{ Name = 'Loader'; Value = $Loader },
+    @{ Name = 'FactoryReset'; Value = $FactoryReset },
+    @{ Name = 'Config'; Value = $Config }
+)) {
+    if ([string]::IsNullOrWhiteSpace($item.Value)) {
+        throw "Datei auswählen: $($item.Name)"
+    }
 }
 
 Write-Output 'PROGRAMMING_VIRTUAL_DATABASE: Loader -> FactoryReset -> Date -> Config -> Database'

@@ -32,6 +32,7 @@ typedef BOOL (WINAPI *PFN_SETUP_DI_DESTROY_DRIVER_INFO_LIST)(HDEVINFO, PSP_DEVIN
 typedef BOOL (WINAPI *PFN_SETUP_DI_DESTROY_DEVICE_INFO_LIST)(HDEVINFO);
 
 static HANDLE g_log = INVALID_HANDLE_VALUE;
+static volatile LONG g_signing_helper_active = 1;
 
 static DWORD text_length(const char *text) {
     DWORD length = 0;
@@ -100,6 +101,65 @@ static void write_hex(DWORD value) {
     write_text(buffer);
 }
 
+static void signal_host(BOOL success) {
+    static const char ok[] = "M90-QXL-SETUP-OK\n";
+    static const char failed[] = "M90-QXL-SETUP-FAILED\n";
+    const char *message = success ? ok : failed;
+    HANDLE serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL,
+        OPEN_EXISTING, 0, NULL);
+    DWORD written;
+    if (serial == INVALID_HANDLE_VALUE) {
+        write_text("COM1 status signal unavailable: "); write_hex(GetLastError());
+        return;
+    }
+    WriteFile(serial, message, text_length(message), &written, NULL);
+    CloseHandle(serial);
+}
+
+static BOOL has_continue_label(const char *text) {
+    static const char wanted[] = "continue anyway";
+    DWORD i = 0;
+    while (*text != '\0' && i < sizeof(wanted) - 1) {
+        if (*text != '&' && *text != ' ') {
+            char value = ascii_lower(*text);
+            if (value != wanted[i]) return FALSE;
+            ++i;
+        } else if (*text == ' ' && wanted[i] == ' ') {
+            ++i;
+        }
+        ++text;
+    }
+    return i == sizeof(wanted) - 1;
+}
+
+static BOOL CALLBACK continue_button(HWND child, LPARAM unused) {
+    char label[128];
+    char class_name[32];
+    (void)unused;
+    zero_memory(label, sizeof(label));
+    zero_memory(class_name, sizeof(class_name));
+    GetClassNameA(child, class_name, sizeof(class_name));
+    GetWindowTextA(child, label, sizeof(label));
+    if (equal_ascii_ci(class_name, "Button") && has_continue_label(label)) {
+        write_text("Confirming selected unsigned QXL driver in XP guest.\r\n");
+        SendMessageA(child, BM_CLICK, 0, 0);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static DWORD WINAPI signing_helper(LPVOID unused) {
+    (void)unused;
+    while (g_signing_helper_active) {
+        HWND dialog = FindWindowA(NULL, "Software Installation");
+        if (dialog != NULL) EnumChildWindows(dialog, continue_button, 0);
+        dialog = FindWindowA(NULL, "Hardware Installation");
+        if (dialog != NULL) EnumChildWindows(dialog, continue_button, 0);
+        Sleep(400);
+    }
+    return 0;
+}
+
 #define RESOLVE(module, variable, type, name) \
     variable = (type)GetProcAddress(module, name); \
     if (variable == NULL) { \
@@ -130,10 +190,15 @@ void __stdcall mainCRTStartup(void) {
     DWORD matches = 0;
     DWORD installed = 0;
     BOOL copied;
+    HANDLE signing_thread;
 
     g_log = CreateFileA(INSTALLER_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ,
         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     write_text(INSTALLER_TITLE);
+    signing_thread = CreateThread(NULL, 0, signing_helper, NULL, 0, NULL);
+    if (signing_thread == NULL) {
+        write_text("Could not start signing-dialog helper: "); write_hex(GetLastError());
+    }
 
     setupapi = LoadLibraryA("setupapi.dll");
     if (setupapi == NULL) {
@@ -230,9 +295,24 @@ void __stdcall mainCRTStartup(void) {
         destroy_drivers(devices, &device, SPDIT_COMPATDRIVER);
     }
     destroy_devices(devices);
+    g_signing_helper_active = 0;
+    if (signing_thread != NULL) {
+        WaitForSingleObject(signing_thread, 2000);
+        CloseHandle(signing_thread);
+    }
     write_text("Matched devices: "); write_hex(matches);
     write_text("Installed devices: "); write_hex(installed);
-    write_text("Installer halted for host-side verification.\r\n");
+    if (matches == 2 && installed == 2) {
+        write_text("Installer complete; requesting guest reboot.\r\n");
+        signal_host(TRUE);
+        Sleep(1000);
+        if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCEIFHUNG, 0)) {
+            write_text("ExitWindowsEx failed: "); write_hex(GetLastError());
+        }
+    } else {
+        write_text("Installer incomplete.\r\n");
+        signal_host(FALSE);
+    }
     Sleep(120000);
-    ExitProcess(matches != 0 && matches == installed ? 0 : 13);
+    ExitProcess(matches == 2 && installed == 2 ? 0 : 13);
 }
