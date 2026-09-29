@@ -1,0 +1,41 @@
+menu "M90 database bench probe"
+
+    config M90_DB_USB_BRIDGE
+        bool "Connect emulated database UART to native USB Serial/JTAG (PC QEMU test)"
+        default n
+        help
+            Reserve the native USB Serial/JTAG port for raw database bytes.
+            UART0 remains the diagnostic console. CPU execution waits for a
+            M90GO handshake from the PC relay and then runs until an error
+            instead of stopping after the normal bounded probe. This mode
+            does not drive any cabinet connector pins.
+
+    config M90_DB_UART_TEST
+        bool "Enable physical database UART on GPIOs (bench test only)"
+        default n
+        depends on !M90_DB_USB_BRIDGE
+        help
+            Transmit database bytes and receive controller bytes at 9600 8N1
+            on UART1. This is not a complete board interface. Only enable
+            after measuring the exact connector levels and pinout. Do not
+            attach coin, payout, protection, or other cabinet peripherals.
+
+    config M90_DB_UART_TX_GPIO
+        int "Database UART TX GPIO"
+        range 0 48
+        default 17
+        depends on M90_DB_UART_TEST
+        help
+            ESP32 output toward the controller's database-RX line. Check
+            the exact N16R8 devkit pinout before enabling this mode.
+
+    config M90_DB_UART_RX_GPIO
+        int "Database UART RX GPIO"
+        range 0 48
+        default 18
+        depends on M90_DB_UART_TEST
+        help
+            ESP32 input from the controller's database-TX line. Check
+            the exact N16R8 devkit pinout before enabling this mode.
+
+endmenu
