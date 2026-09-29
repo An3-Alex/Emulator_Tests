@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -92,6 +95,30 @@ class PortableLauncherTests(unittest.TestCase):
             issues = check_runtime(selection)
         self.assertTrue(any("Python 3.10+" in issue for issue in issues))
         self.assertEqual(run.call_args_list[-1].args[0][1], "-c")
+
+    @unittest.skipUnless(shutil.which("powershell.exe"), "Windows PowerShell required")
+    def test_python_to_powershell_dry_run_preserves_spaced_paths(self) -> None:
+        selection = Selection(
+            image=r"D:\CF Images\M90 original copy.img",
+            database=r"D:\DB Files\Magie 90.bin",
+            loader=r"D:\DB Files\Loader.bin",
+            factory=r"D:\DB Files\Factory.xc",
+            config=r"D:\DB Files\Config.bin",
+            admission_eeprom=r"D:\Cards\M90 card.bin",
+            qemu_x86=r"C:\Program Files\qemu\qemu-system-x86_64.exe",
+            qemu_m68k=r"C:\Program Files\qemu\qemu-system-m68k.exe",
+            python=r"C:\Python 3.14\python.exe",
+        )
+        completed = subprocess.run(
+            [*launch_command(selection, PROJECT), "-DryRun"],
+            cwd=PROJECT, capture_output=True, text=True, check=True,
+        )
+        plan = json.loads(completed.stdout)
+        self.assertEqual(plan["runtime"]["visible_qemu"]["image"], selection.image)
+        self.assertEqual(plan["runtime"]["visible_qemu"]["qemu"], selection.qemu_x86)
+        self.assertFalse(plan["runtime"]["event_window"]["visible"])
+        self.assertIn(selection.admission_eeprom,
+                      plan["runtime"]["database_bridge"]["arguments"])
 
 
 if __name__ == "__main__":

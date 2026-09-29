@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 import os
+import json
 from pathlib import Path
 import queue
 import shutil
@@ -17,9 +18,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from portable_launcher_model import Selection, check_runtime, launch_command
+from runtime_bundle import project_for_launcher
 
 
-PROJECT = Path(__file__).resolve().parents[1]
+PROJECT = project_for_launcher()
 SETTINGS = Path(os.environ.get("APPDATA", str(Path.home()))) / "M90 Emulator" / "settings.json"
 DATABASE_FILES = {
     "database": "Magie_90_CC4.bin",
@@ -52,8 +54,44 @@ def suggested_selection(saved: Selection) -> Selection:
             candidate = qemu_dir / executable
             values[key] = str(candidate if candidate.is_file() else shutil.which(executable) or "")
     if not values["python"]:
-        values["python"] = sys.executable if Path(sys.executable).name.lower() == "python.exe" else shutil.which("python.exe") or ""
+        values["python"] = find_python_executable()
     return Selection(**values)
+
+
+def find_python_executable() -> str:
+    candidates = []
+    if Path(sys.executable).name.lower() == "python.exe":
+        candidates.append(sys.executable)
+    candidates.append(shutil.which("python.exe"))
+    candidates.append(r"C:\Python314\python.exe")
+    candidates.append(str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python314" / "python.exe"))
+    py_launcher = shutil.which("py.exe")
+    if py_launcher:
+        try:
+            result = subprocess.run(
+                [py_launcher, "-3", "-c", "import sys; print(sys.executable)"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                candidates.insert(0, result.stdout.strip())
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    for candidate in dict.fromkeys(path for path in candidates if path):
+        path = Path(candidate)
+        if "windowsapps" in str(path).casefold():
+            continue
+        if not path.is_file() or not path.with_name("pythonw.exe").is_file():
+            continue
+        try:
+            result = subprocess.run(
+                [str(path), "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"],
+                capture_output=True, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return str(path)
+    return ""
 
 
 class Launcher(tk.Tk):
@@ -134,6 +172,8 @@ class Launcher(tk.Tk):
         self.start_button.pack(side="left", padx=8)
         self.install_button = ttk.Button(controls, text="QEMU installieren", command=self._install_qemu)
         self.install_button.pack(side="left")
+        self.python_button = ttk.Button(controls, text="Python installieren", command=self._install_python)
+        self.python_button.pack(side="left", padx=(8, 0))
         ttk.Label(controls, textvariable=self.status).pack(side="left", padx=10)
 
         ttk.Label(outer, text="Startmeldungen", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(6, 2))
@@ -216,18 +256,24 @@ class Launcher(tk.Tk):
         self.events.put(("checked", (selection, start, issues)))
 
     def _install_qemu(self) -> None:
+        self._install_package("qemu", "QEMU", "SoftwareFreedomConservancy.QEMU")
+
+    def _install_python(self) -> None:
+        self._install_package("python", "Python 3.14", "Python.Python.3.14")
+
+    def _install_package(self, key: str, label: str, package_id: str) -> None:
         if self.checking or self.running and self.running.poll() is None:
             return
         winget = shutil.which("winget.exe")
         if not winget:
             messagebox.showerror(
-                "QEMU installieren", "Windows-Paketmanager winget wurde nicht gefunden. "
-                "Bitte QEMU manuell installieren und danach die beiden EXE-Dateien auswählen."
+                f"{label} installieren", "Windows-Paketmanager winget wurde nicht gefunden. "
+                f"Bitte {label} manuell installieren und danach die EXE-Datei auswählen."
             )
             return
         if not messagebox.askyesno(
-            "QEMU installieren",
-            "QEMU über den Windows-Paketmanager installieren? Die Installation kann "
+            f"{label} installieren",
+            f"{label} über den Windows-Paketmanager installieren? Die Installation kann "
             "eine Windows-Freigabe erfordern. Es werden keine Image-/Datenbankdateien verändert.",
         ):
             return
@@ -235,12 +281,16 @@ class Launcher(tk.Tk):
         self.check_button.configure(state="disabled")
         self.start_button.configure(state="disabled")
         self.install_button.configure(state="disabled")
-        self.status.set("QEMU-Installation läuft…")
-        threading.Thread(target=self._install_qemu_worker, args=(winget,), daemon=True).start()
+        self.python_button.configure(state="disabled")
+        self.status.set(f"{label}-Installation läuft…")
+        threading.Thread(
+            target=self._install_package_worker,
+            args=(winget, key, label, package_id), daemon=True,
+        ).start()
 
-    def _install_qemu_worker(self, winget: str) -> None:
+    def _install_package_worker(self, winget: str, key: str, label: str, package_id: str) -> None:
         command = [
-            winget, "install", "--exact", "--id", "SoftwareFreedomConservancy.QEMU",
+            winget, "install", "--exact", "--id", package_id,
             "--accept-package-agreements", "--accept-source-agreements",
         ]
         try:
@@ -253,9 +303,9 @@ class Launcher(tk.Tk):
                 self.events.put(("line", line))
             result = process.wait()
         except OSError as exc:
-            self.events.put(("line", f"QEMU-Installation konnte nicht gestartet werden: {exc}\n"))
+            self.events.put(("line", f"{label}-Installation konnte nicht gestartet werden: {exc}\n"))
             result = -1
-        self.events.put(("installed", result))
+        self.events.put(("installed", (key, label, result)))
 
     def _launch(self, selection: Selection) -> None:
         command = launch_command(selection, PROJECT)
@@ -307,16 +357,18 @@ class Launcher(tk.Tk):
                     self.status.set(f"Startprozess beendet (Code {payload}).")
                     self.start_button.configure(state="normal")
                 elif kind == "installed":
+                    key, label, result = payload
                     self.checking = False
                     self.check_button.configure(state="normal")
                     self.start_button.configure(state="normal")
                     self.install_button.configure(state="normal")
-                    self.status.set("QEMU installiert." if payload == 0 else
-                                    f"QEMU-Installation fehlgeschlagen (Code {payload}).")
-                    if payload == 0:
+                    self.python_button.configure(state="normal")
+                    self.status.set(f"{label} installiert." if result == 0 else
+                                    f"{label}-Installation fehlgeschlagen (Code {result}).")
+                    if result == 0:
                         refreshed = suggested_selection(self._selection())
-                        for key in ("qemu_x86", "qemu_m68k"):
-                            self.variables[key].set(getattr(refreshed, key))
+                        for field in (("qemu_x86", "qemu_m68k") if key == "qemu" else ("python",)):
+                            self.variables[field].set(getattr(refreshed, field))
         except queue.Empty:
             pass
         self.after(100, self._drain_events)
@@ -338,4 +390,20 @@ class Launcher(tk.Tk):
 
 
 if __name__ == "__main__":
-    Launcher().mainloop()
+    if len(sys.argv) == 3 and sys.argv[1] == "--verify-bundle":
+        report = {
+            "runtime": str(PROJECT),
+            "scripts": len(list((PROJECT / "scripts").glob("*.py"))),
+            "powershell_files": {
+                name: (PROJECT / name).is_file()
+                for name in (
+                    "program-and-start-emulator.ps1", "start-real-database.ps1",
+                    "test-swiftshader.ps1",
+                )
+            },
+        }
+        Path(sys.argv[2]).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        if not all(report["powershell_files"].values()) or report["scripts"] < 5:
+            raise SystemExit(1)
+    else:
+        Launcher().mainloop()

@@ -46,6 +46,12 @@ im Projektordner. Auf einem zweiten PC ist dafür Zugriff auf das private
 GitHub-Repository nötig. Ein Update-Verfahren für ein künftiges einzelnes
 EXE-Paket fehlt noch.
 
+Eine erste einzelne Start-EXE lässt sich lokal mit `build-launcher-exe.ps1`
+erzeugen (Build-Abhängigkeit: PyInstaller). Sie legt nur unsere Laufzeit-Skripte
+im lokalen App-Datenordner ab; Images und Dumps werden nicht eingebettet. Die
+EXE ist derzeit ein getesteter Startprogramm-Prototyp, **noch kein fertiger
+Installer für frische CF-Images**.
+
 ## Hintergründe
 
 Die Datenbank ist kein bloßer Antwort-Stub: der Motorola-68k-Code läuft in
