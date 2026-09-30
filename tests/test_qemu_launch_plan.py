@@ -52,7 +52,7 @@ class QemuLaunchPlanTests(unittest.TestCase):
         arguments = plan["arguments"]
         self.assertTrue(plan["visible"])
         self.assertTrue(plan["guest_reboots_allowed"])
-        self.assertEqual(plan["display_tabs"], ["upper", "lower"])
+        self.assertEqual(plan["display_tabs"], ["lower", "upper"])
         self.assertIn("-display gtk,show-tabs=on", arguments)
         self.assertNotIn("-no-reboot", arguments)
 
@@ -67,8 +67,8 @@ class QemuLaunchPlanTests(unittest.TestCase):
 
     def test_dry_run_keeps_expected_devices_and_restricted_network(self) -> None:
         arguments = self.launch_plan()["arguments"]
-        self.assertIn("qxl-vga,id=upper", arguments)
-        self.assertIn("qxl,id=lower", arguments)
+        self.assertIn("qxl-vga,id=lower", arguments)
+        self.assertIn("qxl,id=upper", arguments)
         self.assertNotIn("-device usb-tablet", arguments)
         self.assertEqual(self.launch_plan()["guest_pointer"], "PS/2 mouse")
         self.assertIn("restrict=on", arguments)

@@ -1293,7 +1293,7 @@ class TouchClickForwarder:
         ):
             x, y = touch_point
             if not 0 <= x < 800 or not 0 <= y < 600:
-                raise ValueError("touch point outside upper display")
+                raise ValueError("touch point outside lower cabinet display")
             frame[6:10] = x.to_bytes(2, "little") + y.to_bytes(2, "little")
             return bytes(frame), touch_point
         return bytes(frame), None

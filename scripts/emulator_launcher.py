@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from image_setup import (
     COMPONENTS, check_file, check_preparation, finalize_command, guest_setup_command,
+    retry_qxl_command, stage_display_verify_command,
     stage_check_command, stage_command,
 )
 from portable_launcher_model import Selection, check_runtime, launch_command
@@ -329,7 +330,9 @@ class Launcher(tk.Tk):
         self.status.set("Image-Vorbereitung wird geprüft…")
         threading.Thread(target=self._prepare_worker, args=(selection,), daemon=True).start()
 
-    def _run_step(self, command: list[str], label: str) -> None:
+    def _run_step(
+        self, command: list[str], label: str, *, allowed_exit_codes: tuple[int, ...] = (),
+    ) -> int:
         self.events.put(("status", label))
         process = subprocess.Popen(
             command, cwd=PROJECT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -340,8 +343,9 @@ class Launcher(tk.Tk):
         for line in process.stdout:
             self.events.put(("line", line))
         result = process.wait()
-        if result != 0:
+        if result != 0 and result not in allowed_exit_codes:
             raise RuntimeError(f"{label} fehlgeschlagen (Code {result})")
+        return result
 
     def _prepare_worker(self, selection: Selection) -> None:
         try:
@@ -359,14 +363,34 @@ class Launcher(tk.Tk):
                 if stage == "ready":
                     self.events.put(("prepared", str(image)))
                     return
-                if stage != "qxl-pnp":
+                if stage not in ("qxl-pnp", "qxl-verify", "ready-unverified"):
                     raise RuntimeError("Bestehendes Image ist keine fortsetzbare M90-Arbeitskopie")
-            issues = check_preparation(selection, PROJECT, resume=stage == "qxl-pnp")
+            issues = check_preparation(selection, PROJECT, resume=stage != "new")
             if issues:
                 raise RuntimeError("\n".join(issues))
             if stage == "new":
                 self._run_step(stage_command(selection, PROJECT), "Arbeitskopie wird eingerichtet")
-            self._run_step(guest_setup_command(selection, PROJECT), "QXL-Gastinstallation läuft")
+            if stage in ("new", "qxl-pnp"):
+                self._run_step(guest_setup_command(selection, PROJECT), "QXL-Gastinstallation läuft")
+                self._run_step(stage_display_verify_command(Path(selection.image), PROJECT),
+                               "QXL-Anzeigeprüfung wird vorbereitet")
+            elif stage == "ready-unverified":
+                self._run_step(stage_display_verify_command(Path(selection.image), PROJECT,
+                                                            repair_ready=True),
+                               "Bisherige QXL-Einrichtung wird geprüft")
+            verify_result = self._run_step(
+                guest_setup_command(selection, PROJECT, verify=True),
+                "QXL-Anzeigen werden im Gast geprüft", allowed_exit_codes=(17,),
+            )
+            if verify_result == 17:
+                self._run_step(retry_qxl_command(Path(selection.image), PROJECT),
+                               "QXL-Treiber wird erneut vorbereitet")
+                self._run_step(guest_setup_command(selection, PROJECT),
+                               "QXL-Treiber wird erneut installiert")
+                self._run_step(stage_display_verify_command(Path(selection.image), PROJECT),
+                               "QXL-Anzeigeprüfung wird wiederholt")
+                self._run_step(guest_setup_command(selection, PROJECT, verify=True),
+                               "QXL-Anzeigen werden erneut geprüft")
             self._run_step(finalize_command(Path(selection.image), PROJECT), "Image wird abgeschlossen")
             self.events.put(("prepare_phase", "Abschluss wird geprüft"))
             result = subprocess.run(

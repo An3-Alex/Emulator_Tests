@@ -59,7 +59,7 @@ def format_tablet_packet(x: int, y: int, down: bool) -> bytes:
     """3M Format Tablet: status, low/high 7-bit X, low/high 7-bit Y."""
     if (type(x) is not int or type(y) is not int or type(down) is not bool
             or not 0 <= x < TOUCH_WIDTH or not 0 <= y < TOUCH_HEIGHT):
-        raise ValueError("touch point outside upper display")
+        raise ValueError("touch point outside lower cabinet display")
     raw_x = round(x * 16383 / (TOUCH_WIDTH - 1))
     raw_y = round(y * 16383 / (TOUCH_HEIGHT - 1))
     return bytes((0xC0 if down else 0x80,

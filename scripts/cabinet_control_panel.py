@@ -27,7 +27,7 @@ SCREEN_CAPTURE_INTERVAL_SECONDS = 2.0
 
 
 def qmp_screendump(port: int, destination: Path) -> None:
-    """Ask the existing x86 QEMU for the upper display; never inject VM input."""
+    """Capture the game's lower cabinet display; never inject VM input."""
     with socket.create_connection(("127.0.0.1", port), timeout=2.0) as sock:
         sock.settimeout(2.0)
         stream = sock.makefile("rwb")
@@ -37,7 +37,7 @@ def qmp_screendump(port: int, destination: Path) -> None:
         for command in (
             {"execute": "qmp_capabilities"},
             {"execute": "screendump", "arguments": {
-                "filename": str(destination), "device": "upper", "format": "png"
+                "filename": str(destination), "device": "lower", "format": "png"
             }},
         ):
             stream.write((json.dumps(command) + "\n").encode("ascii"))
@@ -63,7 +63,7 @@ class Rect(ctypes.Structure):
 def qemu_cursor_position(
     qemu_pid: int, image_size: tuple[int, int] = (TOUCH_WIDTH, TOUCH_HEIGHT)
 ) -> tuple[int, int] | None:
-    """Return upper-screen pixels when the pointer is in QEMU's video area."""
+    """Return lower-screen pixels when the pointer is in QEMU's video area."""
     if os.name != "nt" or not qemu_pid:
         return None
     user32 = ctypes.windll.user32
@@ -135,7 +135,7 @@ class ControlPanel:
         root.resizable(False, False)
         frame = ttk.Frame(root, padding=10)
         frame.grid(sticky="nsew")
-        ttk.Label(frame, text="Oberer Bildschirm – hier mit der Maus berühren").grid(
+        ttk.Label(frame, text="Unterer Automatenbildschirm – hier mit der Maus berühren").grid(
             row=0, column=0, columnspan=5, sticky="w")
         self.canvas = tk.Canvas(frame, width=400, height=300, bg="#11131a",
                                 highlightthickness=1, highlightbackground="#777")
@@ -159,13 +159,13 @@ class ControlPanel:
         ttk.Checkbutton(frame, text="Mausklicks im QEMU-Fenster als Touch",
                         variable=self.native_mouse).grid(row=4, column=2,
                                                         columnspan=3, sticky="w")
-        ttk.Label(frame, text="QEMU: Reiter upper verwenden; Tasten gedrückt halten wie am Automaten.").grid(
+        ttk.Label(frame, text="QEMU: Reiter lower verwenden; Tasten gedrückt halten wie am Automaten.").grid(
             row=5, column=0, columnspan=5, sticky="w")
         ttk.Label(frame, textvariable=self.status).grid(row=6, column=0,
                                                         columnspan=5, sticky="w", pady=(5, 0))
         root.protocol("WM_DELETE_WINDOW", self._close)
         self.capture_thread = threading.Thread(target=self._capture_loop,
-                                               name="qemu-upper-capture", daemon=True)
+                                               name="qemu-lower-capture", daemon=True)
         self.capture_thread.start()
         root.after(50, self._tick)
 

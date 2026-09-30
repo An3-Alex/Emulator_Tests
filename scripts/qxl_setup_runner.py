@@ -14,6 +14,8 @@ from qmp_capture import connect_with_retry
 
 SETUP_OK = b"M90-QXL-SETUP-OK\n"
 SETUP_FAILED = b"M90-QXL-SETUP-FAILED\n"
+VERIFY_OK = b"M90-QXL-VERIFY-OK\n"
+VERIFY_FAILED = b"M90-QXL-VERIFY-FAILED\n"
 
 
 def qemu_command(qemu: Path, image: Path, serial_port: int, qmp_port: int) -> list[str]:
@@ -23,8 +25,8 @@ def qemu_command(qemu: Path, image: Path, serial_port: int, qmp_port: int) -> li
         "-smp", "1", "-m", "2048", "-drive",
         f"file={image.as_posix()},format=raw,if=ide,index=0,media=disk",
         "-boot", "c", "-vga", "none",
-        "-device", "qxl-vga,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480",
-        "-device", "qxl,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480",
+        "-device", "qxl-vga,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480",
+        "-device", "qxl,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480",
         "-display", "gtk,show-tabs=on",
         "-netdev", "user,id=n0,restrict=on", "-device",
         "i82559c,netdev=n0,mac=00:13:95:06:EE:6E",
@@ -40,7 +42,10 @@ def require_free_port(port: int) -> None:
         probe.bind(("127.0.0.1", port))
 
 
-def wait_for_signal(process: subprocess.Popen[bytes], port: int, timeout: int) -> bytes:
+def wait_for_signal(
+    process: subprocess.Popen[bytes], port: int, timeout: int,
+    success: bytes = SETUP_OK, failure: bytes = SETUP_FAILED,
+) -> bytes:
     deadline = time.monotonic() + timeout
     connection: socket.socket | None = None
     try:
@@ -71,10 +76,10 @@ def wait_for_signal(process: subprocess.Popen[bytes], port: int, timeout: int) -
                     f"QEMU serial connection closed before installer result (code {process.poll()})"
                 )
             received.extend(chunk)
-            if SETUP_OK in received:
-                return SETUP_OK
-            if SETUP_FAILED in received:
-                return SETUP_FAILED
+            if success in received:
+                return success
+            if failure in received:
+                return failure
             if len(received) > 8192:
                 del received[:-1024]
         raise TimeoutError("QXL guest did not report completion before timeout")
@@ -110,6 +115,7 @@ def main() -> int:
     parser.add_argument("--qmp-port", type=int, default=4446)
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--max-boots", type=int, default=4)
+    parser.add_argument("--verify", action="store_true")
     args = parser.parse_args()
     if not args.qemu.is_file() or not args.image.is_file():
         parser.error("QEMU executable and staged image must exist")
@@ -117,12 +123,14 @@ def main() -> int:
     require_free_port(args.qmp_port)
     args.stderr_log.parent.mkdir(parents=True, exist_ok=True)
     command = qemu_command(args.qemu, args.image, args.serial_port, args.qmp_port)
+    success = VERIFY_OK if args.verify else SETUP_OK
+    failure = VERIFY_FAILED if args.verify else SETUP_FAILED
     with args.stderr_log.open("ab") as stderr_file:
         for attempt in range(1, args.max_boots + 1):
-            print(f"QXL setup boot {attempt}/{args.max_boots}", flush=True)
+            print(f"QXL {'verification' if args.verify else 'setup'} boot {attempt}/{args.max_boots}", flush=True)
             process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=stderr_file)
             try:
-                result = wait_for_signal(process, args.serial_port, args.timeout)
+                result = wait_for_signal(process, args.serial_port, args.timeout, success, failure)
             except (RuntimeError, TimeoutError) as exc:
                 try:
                     exit_code = process.wait(timeout=20)
@@ -135,9 +143,14 @@ def main() -> int:
                     print("Guest rebooted before setup result; continuing next boot.", flush=True)
                     continue
                 raise RuntimeError(f"QXL setup ended without success (QEMU code {exit_code})") from exc
-            if result != SETUP_OK:
+            if result != success:
+                wait_for_clean_shutdown(process, args.qmp_port)
+                if args.verify:
+                    print("QXL displays still inactive; driver retry required.", flush=True)
+                    return 17
                 raise RuntimeError("QXL guest reported incomplete driver installation")
-            print("QXL guest reports both displays installed.", flush=True)
+            print("QXL guest reports both displays active." if args.verify
+                  else "QXL guest reports both displays installed.", flush=True)
             wait_for_clean_shutdown(process, args.qmp_port)
             break
     print("QXL setup guest stopped cleanly.", flush=True)

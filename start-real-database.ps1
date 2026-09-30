@@ -73,7 +73,7 @@ if ($DryRun) {
         control_window = [ordered]@{
             visible = -not $NoControlWindow
             panel = 'scripts/cabinet_control_panel.py'
-            touch = 'upper display and QEMU mouse'
+            touch = 'lower cabinet display and QEMU mouse'
             buttons = @('menu', 'autostart', 'einsatz', 'maxeinsatz', 'start', 'auszahlung', 'service')
             door_switch = $true
             port = 4554
@@ -101,7 +101,7 @@ if (-not $qemuPidLine) {
 }
 $qemuPid = [int]($qemuPidLine -replace '^QEMU_PID=', '')
 
-Write-Output 'QEMU is visible with upper/lower tabs. The real owner database firmware is connected to guest COM3.'
+Write-Output 'QEMU is visible with lower/upper tabs. The real owner database firmware is connected to guest COM3.'
 Write-Output 'Guest reboots remain enabled. UART traffic is written to the live event log.'
 $logDirectory = Join-Path $PSScriptRoot 'logs'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
@@ -122,7 +122,7 @@ if (-not $NoEventWindow -or -not $NoControlWindow) {
         }
         if (-not $NoControlWindow) {
             $controlScript = Join-Path $PSScriptRoot 'scripts\cabinet_control_panel.py'
-            $capturePath = Join-Path $logDirectory 'cabinet-upper.png'
+            $capturePath = Join-Path $logDirectory 'cabinet-lower.png'
             $controlArgs = ('"{0}" --qemu-pid {1} --capture "{2}"' -f $controlScript, $qemuPid, $capturePath)
             if ($DoorOpen) { $controlArgs += ' --door-open' }
             $controlPanel = Start-Process -FilePath $pythonw -ArgumentList $controlArgs -PassThru

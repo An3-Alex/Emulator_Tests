@@ -34,10 +34,10 @@ loop_device=$(losetup --find --show --read-only --offset 1048576 \
   --sizelimit 16021151744 "$image")
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
-verify_hash "$mount_dir/WINDOWS/explorer.exe" 0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296
+verify_hash "$mount_dir/WINDOWS/explorer.exe" aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789
 verify_hash "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe" d5dd84e59c59a24af4f1dfdd486882bfc6fa777e0dcc22fa3ae7314999ab3aeb
-[[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-pnp' ]] || {
-  echo 'image is not in QXL preparation stage' >&2; exit 3;
+[[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-verify' ]] || {
+  echo 'image has not completed the QXL display verification boot' >&2; exit 3;
 }
 log="$mount_dir/NVRAM/qxl_install.log"
 [[ -f "$log" ]] || { echo 'QXL installer log missing; setup guest has not finished' >&2; exit 3; }
@@ -47,6 +47,17 @@ grep -Fq 'Matched devices: 0x00000002' "$log" || {
 grep -Fq 'Installed devices: 0x00000002' "$log" || {
   echo 'QXL installer did not install both displays' >&2; exit 3;
 }
+verify_log="$mount_dir/NVRAM/display_verify.log"
+[[ -f "$verify_log" ]] || { echo 'QXL display verification log missing' >&2; exit 3; }
+for expected in \
+  'Recognized QXL displays: 0x00000002' \
+  'Active QXL primary: 0x00000001' \
+  'Attached secondary displays: 0x00000001' \
+  'Global apply result: 0x00000000'; do
+  grep -Fq "$expected" "$verify_log" || {
+    echo "QXL display verification failed: $expected" >&2; exit 3;
+  }
+done
 python3 "$script_dir/hive_query.py" \
   "$mount_dir/WINDOWS/system32/config/SYSTEM" ControlSet001/Services/qxl --depth 1 \
   >/dev/null || { echo 'QXL service not registered' >&2; exit 3; }

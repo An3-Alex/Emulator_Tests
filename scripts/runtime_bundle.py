@@ -20,6 +20,8 @@ POWERSHELL_FILES = (
 )
 SHELL_FILES = (
     "prepare_image_stage.sh",
+    "stage_display_verify.sh",
+    "retry_qxl_install.sh",
     "finalize_image_stage.sh",
     "check_image_stage.sh",
 )
@@ -47,6 +49,7 @@ OWN_BINARIES = (
     Path("build/Cgos.dll"),
     Path("build/display-bootstrap.exe"),
     Path("build/qxl-installer.exe"),
+    Path("build/display-verify.exe"),
     Path("build/d3d9-proxy/d3d9.dll"),
     Path("build/sram-compat/FBWFLIB.dll"),
     Path("build/irrklang-proxy/irrKlang.dll"),

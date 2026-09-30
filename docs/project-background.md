@@ -16,8 +16,8 @@ provides missing legacy interfaces externally:
 - app-local `irrKlang.dll`: forwards to the original XP DLL with the documented
   null audio backend; the firmware's Turbobuchen readiness sound is currently
   visible in the event log but inaudible;
-- two emulated QXL devices exposed as the visible `upper` and `lower` QEMU
-  tabs required for testing both cabinet displays;
+- two emulated QXL devices exposed as the visible `lower` and `upper` QEMU
+  tabs; the primary game screen belongs to the lower physical cabinet display;
 - an optional `-UsbTablet` QEMU launch flag for testing the original PC's USB
   mouse path; the default remains PS/2 while a black-screen regression seen
   in the first USB-tablet run is investigated;
@@ -189,7 +189,7 @@ blocks; `start-real-database.ps1 -SafeTb` selects the older single-instruction
 fallback for diagnostics. The combined `program-and-start-emulator.ps1` launcher
 also accepts `-SafeTb` and `-DbIcountShift 5|6` and forwards them to the bridge.
 The debugger run slice is 50 ms and values below
-5 ms are rejected. The control panel captures the upper display every
+5 ms are rejected. The control panel captures the lower cabinet display every
 2 seconds to avoid spending startup time on repeated full-screen QMP dumps.
 Logging-only watchpoints are off by default; pass
 `start-real-database.ps1 -TraceDiagnostics` to restore them for investigation.

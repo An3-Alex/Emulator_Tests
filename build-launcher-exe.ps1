@@ -26,13 +26,15 @@ try {
         $arguments += @('--add-data', "$($file.FullName):scripts")
     }
     foreach ($name in @(
-        'prepare_image_stage.sh', 'finalize_image_stage.sh', 'check_image_stage.sh'
+        'prepare_image_stage.sh', 'stage_display_verify.sh', 'retry_qxl_install.sh',
+        'finalize_image_stage.sh', 'check_image_stage.sh'
     )) {
         $source = Join-Path $project "scripts\$name"
         $arguments += @('--add-data', "${source}:scripts")
     }
     foreach ($name in @(
         'build\Cgos.dll', 'build\display-bootstrap.exe', 'build\qxl-installer.exe',
+        'build\display-verify.exe',
         'build\d3d9-proxy\d3d9.dll', 'build\sram-compat\FBWFLIB.dll',
         'build\irrklang-proxy\irrKlang.dll'
     )) {

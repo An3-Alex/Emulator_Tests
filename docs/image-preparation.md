@@ -40,10 +40,20 @@ Der temporäre Windows-XP-Gast registriert die beiden QXL-Geräte per SetupAPI.
 Der verwendete Treiber ist nicht signiert; nach ausdrücklicher Bestätigung im
 Starter werden die dazugehörigen XP-Dialoge nur für diesen ausgewählten
 Treiber im Setup-Gast bestätigt. Der Installer sendet seinen Erfolg über COM1.
-Nach sauberem Gast-Shutdown prüft `scripts/finalize_image_stage.sh` das
-Treiberlog und den QXL-Registry-Dienst, stellt FBWF zurück und aktiviert den
-normalen Display-Bootstrap. `scripts/check_image_stage.sh` liest den Status
-schreibgeschützt aus.
+Nach sauberem Gast-Shutdown startet ein zweiter Gastlauf und prüft, ob Windows
+beide QXL-Anzeigen tatsächlich erkennt und den zweiten Bildschirm aktivieren
+kann. Falls SetupAPI zwar Erfolg meldet, die Anzeigen aber noch inaktiv sind,
+wiederholt der Starter die QXL-Installation einmal und prüft erneut. Erst nach
+erfolgreicher Anzeigeprüfung stellt `scripts/finalize_image_stage.sh` FBWF
+zurück und aktiviert den normalen Display-Bootstrap. Bereits vorbereitete
+Kopien ohne diesen Nachweis werden bei erneuter Einrichtung nachgeprüft.
+`scripts/check_image_stage.sh` liest den Status schreibgeschützt aus.
+
+Der Fall trat am 30.09.2026 bei einer frischen Kopie auf: Zwei QXL-Geräte waren
+im Gerätemanager installiert und gestartet, aber `EnumDisplayDevices` meldete
+für `DISPLAY1/2` leere Beschreibungen und keine Desktop-Anbindung. Nach der
+zweiten Geräteinstallation erkannte der Prüfstart beide Monitore; die Kopie
+wurde erst dann als `ready` abgeschlossen.
 
 Der komplette Kopier-/QXL-/Abschlussweg wurde mit einer separaten Testkopie
 des Ausgangsimages erfolgreich ausgeführt; der Status war danach `ready`.

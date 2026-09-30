@@ -22,7 +22,17 @@ if [[ -f "$marker" ]]; then
   value=$(cat "$marker")
   case "$value" in
     stage=qxl-pnp) echo qxl-pnp ;;
-    stage=ready) echo ready ;;
+    stage=qxl-verify) echo qxl-verify ;;
+    stage=ready)
+      verify_log="$mount_dir/NVRAM/display_verify.log"
+      if [[ -f "$verify_log" ]] &&
+         grep -Fq 'Recognized QXL displays: 0x00000002' "$verify_log" &&
+         grep -Fq 'Active QXL primary: 0x00000001' "$verify_log" &&
+         grep -Fq 'Attached secondary displays: 0x00000001' "$verify_log"; then
+        echo ready
+      else
+        echo ready-unverified
+      fi ;;
     *) echo unknown ;;
   esac
 else

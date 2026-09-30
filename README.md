@@ -41,7 +41,8 @@ Zeit werden im Startfenster angezeigt; eine feste Restzeit lässt sich bei der
 großen Image-Kopie und Windows-Gastinstallation nicht verlässlich angeben.
 Der Starter prüft die
 Dateien, kopiert das Image, installiert QXL automatisch in einem temporären
-Windows-Gast und gibt die Kopie erst nach Log-/Registry-Prüfung frei. Das
+Windows-Gast und gibt die Kopie erst frei, wenn Windows beide Anzeigen wirklich
+erkennt. Bei Bedarf wird die Treiberinstallation einmal wiederholt. Das
 Original bleibt unverändert. Ein unterbrochener Treiberlauf kann mit derselben
 Arbeitskopie fortgesetzt werden. Erst danach „Emulator starten“ wählen. Der
 Haken „Live-Protokoll“ öffnet optional das Ereignisfenster; die Logdatei wird
@@ -52,6 +53,8 @@ mit `ntfs-3g` und `python3-hivex` sowie genug Platz für die etwa 16-GB-Kopie.
 Die Oberfläche bietet Installationshilfen für QEMU, Python und WSL. Eine
 Ubuntu-Ersteinrichtung oder ein Windows-Neustart kann einmalig nötig sein.
 QEMU schreibt beim Spielen nur in die gewählte Arbeitskopie.
+Der QEMU-Reiter `lower` ist der untere Bildschirm des echten Automaten;
+`upper` ist der obere.
 
 ## Private Daten und Updates
 

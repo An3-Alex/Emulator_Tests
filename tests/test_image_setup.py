@@ -69,6 +69,20 @@ class ImageSetupTests(unittest.TestCase):
         self.assertIn("-no-reboot", command)
         self.assertIn("tcp:127.0.0.1:4554,server=on,wait=off", command)
 
+    def test_display_verification_and_retry_are_separate_setup_steps(self) -> None:
+        selection = Selection(
+            image=r"C:\Images\working copy.img",
+            qemu_x86=r"C:\QEMU\qemu-system-x86_64.exe",
+            python=sys.executable,
+        )
+        with mock.patch.object(image_setup, "wsl_path", side_effect=lambda path: str(path)):
+            verify_guest = image_setup.guest_setup_command(selection, PROJECT, verify=True)
+            stage = image_setup.stage_display_verify_command(Path(selection.image), PROJECT)
+            retry = image_setup.retry_qxl_command(Path(selection.image), PROJECT)
+        self.assertEqual(verify_guest[-1], "--verify")
+        self.assertIn("stage_display_verify.sh", stage[5])
+        self.assertIn("retry_qxl_install.sh", retry[5])
+
 
 if __name__ == "__main__":
     unittest.main()

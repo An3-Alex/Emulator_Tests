@@ -64,11 +64,49 @@ for break_log in "$mount_dir"/LogFiles/logComAtBreak20120201_*.bin; do
   fi
 done
 
-for name in NVRAM/display_bootstrap.log NVRAM/d3d9_proxy.log \
+for name in NVRAM/qxl_install.log NVRAM/display_verify.log \
+            NVRAM/display_bootstrap.log NVRAM/d3d9_proxy.log \
             NVRAM/irrklang_proxy.log NVRAM/cgos_shim.log \
             NVRAM/sram_compat.log NVRAM/CheckTemp.txt; do
   if [[ -f "$mount_dir/$name" ]]; then
     printf '\n%s (last 60 lines):\n' "$name"
     tail -n 60 "$mount_dir/$name"
+  fi
+done
+
+system_hive="$mount_dir/WINDOWS/system32/config/SYSTEM"
+if [[ -f "$system_hive" ]]; then
+  printf '\nSYSTEM Select:\n'
+  python3 "$(dirname -- "$0")/hive_query.py" "$system_hive" Select --depth 1
+  for control_set in ControlSet001 ControlSet002 ControlSet003; do
+    printf '\n%s QXL service:\n' "$control_set"
+    python3 "$(dirname -- "$0")/hive_query.py" "$system_hive" \
+      "$control_set/Services/qxl" --depth 1 || true
+  done
+  printf '\nDisplay class configuration:\n'
+  python3 "$(dirname -- "$0")/hive_query.py" "$system_hive" \
+    'ControlSet001/Control/Class/{4d36e968-e325-11ce-bfc1-08002be10318}' \
+    --depth 2 || true
+  printf '\nQXL PCI enumeration keys:\n'
+  python3 "$(dirname -- "$0")/hive_query.py" "$system_hive" \
+    ControlSet001/Enum/PCI --depth 4 | grep -ai -A 28 'VEN_1B36' || true
+  printf '\nQXL Control/Video settings:\n'
+  while IFS= read -r video_id; do
+    python3 "$(dirname -- "$0")/hive_query.py" "$system_hive" \
+      "ControlSet001/Control/Video/$video_id" --depth 3 || true
+  done < <(python3 "$(dirname -- "$0")/hive_query.py" "$system_hive" \
+    ControlSet001/Enum/PCI --depth 4 | sed -n 's/^value VideoID type=1 value=//p')
+fi
+if [[ -f "$mount_dir/WINDOWS/setupapi.log" ]]; then
+  printf '\nRecent QXL SetupAPI entries:\n'
+  grep -ai -B 2 -A 8 -E 'qxl|ven_1b36|Red Hat' \
+    "$mount_dir/WINDOWS/setupapi.log" | tail -n 160 || true
+fi
+printf '\nWindows driver-start diagnostics:\n'
+for diagnostic in "$mount_dir/WINDOWS/ntbtlog.txt" \
+                  "$mount_dir/WINDOWS/system32/config/SysEvent.Evt"; do
+  if [[ -f "$diagnostic" ]]; then
+    echo "${diagnostic#"$mount_dir"/}"
+    strings -el "$diagnostic" | grep -Ei -A 3 -B 2 'qxl|qxldd|video|display|failed|Fehler' | tail -n 90 || true
   fi
 done

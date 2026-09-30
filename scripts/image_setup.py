@@ -13,6 +13,7 @@ COMPONENTS = {
     "shim": ("build/Cgos.dll", "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"),
     "bootstrap": ("build/display-bootstrap.exe", "ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6"),
     "qxl_installer": ("build/qxl-installer.exe", "0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296"),
+    "display_verify": ("build/display-verify.exe", "aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789"),
     "d3d9": ("build/d3d9-proxy/d3d9.dll", "31d2d484d4821ef34dd764e68a66338ed638926c66b73b14078d360713f4987f"),
     "fbwf": ("build/sram-compat/FBWFLIB.dll", "4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94"),
     "irrklang": ("build/irrklang-proxy/irrKlang.dll", "0e811b9ddeedb53d9494e5ac3ca871743ad51a0c9ecf654cf76102a9af83b10d"),
@@ -141,9 +142,29 @@ def finalize_command(image: Path, project: Path) -> list[str]:
             wsl_path(image), wsl_path(project / COMPONENTS["bootstrap"][0])]
 
 
-def guest_setup_command(selection: Selection, project: Path) -> list[str]:
-    return [
+def stage_display_verify_command(
+    image: Path, project: Path, *, repair_ready: bool = False,
+) -> list[str]:
+    command = ["wsl.exe", "--user", "root", "--", "bash",
+               wsl_path(project / "scripts/stage_display_verify.sh"),
+               wsl_path(image), wsl_path(project / COMPONENTS["display_verify"][0])]
+    if repair_ready:
+        command.append("--repair-ready")
+    return command
+
+
+def retry_qxl_command(image: Path, project: Path) -> list[str]:
+    return ["wsl.exe", "--user", "root", "--", "bash",
+            wsl_path(project / "scripts/retry_qxl_install.sh"),
+            wsl_path(image), wsl_path(project / COMPONENTS["qxl_installer"][0])]
+
+
+def guest_setup_command(selection: Selection, project: Path, *, verify: bool = False) -> list[str]:
+    command = [
         selection.python, str(project / "scripts/qxl_setup_runner.py"),
         "--qemu", selection.qemu_x86, "--image", selection.image,
         "--stderr-log", str(project / "logs/qxl-setup-qemu.stderr.log"),
     ]
+    if verify:
+        command.append("--verify")
+    return command
