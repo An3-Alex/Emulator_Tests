@@ -20,6 +20,10 @@ noch nicht vollständig nachgebildet.
 
 ## Änderungen
 
+- 0.1.4: Die Bildschirmzuordnung lässt sich im Starter dauerhaft tauschen.
+  Spielmenü und Touch-Vorschau verwenden dabei denselben unteren Ausgang.
+  Touch erzeugt keine künstlichen Mehrfach-Downs oder verlängerten Klicks mehr:
+  einmal drücken, bei Bewegung ziehen, beim Loslassen freigeben.
 - 0.1.3: Windows-Pfade werden bei der Image-Einrichtung ohne Shell-Umdeutung
   an WSL übergeben. Ordner mit Leerzeichen bleiben erhalten; WSL-Probleme
   zeigen die konkrete Fehlermeldung und Hinweise zur Ubuntu-Einrichtung.
@@ -61,6 +65,11 @@ Ubuntu-Ersteinrichtung oder ein Windows-Neustart kann einmalig nötig sein.
 QEMU schreibt beim Spielen nur in die gewählte Arbeitskopie.
 Der QEMU-Reiter `lower` ist der untere Bildschirm des echten Automaten;
 `upper` ist der obere.
+Erscheint das Spielmenü nach „Start Game Process“ unter `upper` und bleibt die
+Touch-Vorschau schwarz, vor dem nächsten Start „Bildschirme tauschen“ aktivieren.
+Die Auswahl wird gespeichert; eine erneute Image-Einrichtung ist nicht nötig.
+Die Gerätenamen bleiben beim Gast-Neustart erhalten. Der Bootbildschirm kann
+auf dem anderen Ausgang liegen als das spätere Spielmenü.
 
 ## Private Daten und Updates
 

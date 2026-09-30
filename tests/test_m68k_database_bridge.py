@@ -1223,61 +1223,65 @@ class DatabaseBridgeTests(unittest.TestCase):
                 delivered.extend(chunk)
         self.assertEqual(bytes(delivered), b"".join(frames))
 
-    def test_quick_touch_is_held_long_enough_for_firmware(self) -> None:
+    def test_quick_touch_has_one_down_and_immediate_up(self) -> None:
         stream = bridge.TouchPacketStream()
-        stream.request(454, 530, True, 1.0)
-        stream.request(454, 530, False, 1.01)
-        self.assertTrue(stream.repeat(1.06))
-        self.assertTrue(stream.repeat(1.12))
-        self.assertTrue(stream.repeat(1.19))
+        stream.request(454, 530, True)
+        stream.request(454, 530, False)
         self.assertEqual(
             [(x, y, down) for x, y, down, _ in stream.packets],
-            [(454, 530, True)] * 3 + [(454, 530, False)],
+            [(454, 530, True), (454, 530, False)],
         )
+        self.assertIsNone(stream.active_point)
 
-    def test_drag_is_not_duplicated_and_hold_reports_repeat(self) -> None:
+    def test_drag_positions_are_not_duplicated(self) -> None:
         stream = bridge.TouchPacketStream()
-        stream.request(300, 300, True, 1.0)
-        self.assertFalse(stream.repeat(1.02))
-        self.assertTrue(stream.repeat(1.06))
-        stream.request(320, 300, True, 1.07)
-        stream.request(320, 300, False, 1.25)
+        stream.request(300, 300, True)
+        stream.request(300, 300, True)
+        stream.request(320, 300, True)
+        stream.request(320, 300, True)
+        stream.request(320, 300, False)
         self.assertEqual(
             [(x, y, down) for x, y, down, _ in stream.packets],
-            [(300, 300, True), (300, 300, True),
-             (320, 300, True), (320, 300, False)],
+            [(300, 300, True), (320, 300, True), (320, 300, False)],
         )
 
     def test_second_click_releases_first_before_next_press(self) -> None:
         stream = bridge.TouchPacketStream()
-        stream.request(100, 200, True, 1.0)
-        stream.request(100, 200, False, 1.01)
-        stream.request(300, 400, True, 1.03)
+        stream.request(100, 200, True)
+        stream.request(100, 200, False)
+        stream.request(300, 400, True)
         self.assertEqual(
             [(x, down) for x, _, down, _ in stream.packets],
-            [(100, True), (100, True), (100, True),
-             (100, False), (300, True)],
+            [(100, True), (100, False), (300, True)],
         )
 
-    def test_touch_repeat_is_bounded_when_firmware_is_busy(self) -> None:
+    def test_stationary_hold_and_duplicate_up_do_not_generate_events(self) -> None:
         stream = bridge.TouchPacketStream()
-        stream.request(400, 200, True, 1.0)
+        stream.request(400, 200, True)
         for index in range(30):
-            stream.repeat(1.1 + index * .06)
-        self.assertEqual(len(stream.packets), 3)
-        stream.request(400, 200, False, 3.0)
+            stream.request(400, 200, True)
+        self.assertEqual(len(stream.packets), 1)
+        stream.request(400, 200, False)
+        stream.request(400, 200, False)
         self.assertEqual([packet[2] for packet in stream.packets],
-                         [True, True, True, False])
+                         [True, False])
 
     def test_touch_release_drops_stale_drag_reports(self) -> None:
         stream = bridge.TouchPacketStream()
         for index in range(20):
-            stream.request(100 + index, 200, True, 1.0 + index * .01)
-        stream.request(119, 200, False, 1.3)
+            stream.request(100 + index, 200, True)
+        stream.request(119, 200, False)
         self.assertEqual(
             [(x, down) for x, _, down, _ in stream.packets],
             [(100, True), (118, True), (119, True), (119, False)],
         )
+
+    def test_touch_press_consumed_before_release_is_not_reinserted(self) -> None:
+        stream = bridge.TouchPacketStream()
+        stream.request(400, 200, True)
+        self.assertTrue(stream.packets.popleft()[2])
+        stream.request(400, 200, False)
+        self.assertEqual([packet[2] for packet in stream.packets], [False])
 
     def test_rejects_changed_initvideo_identity_fields(self) -> None:
         frame = bytearray(

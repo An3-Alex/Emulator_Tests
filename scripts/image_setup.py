@@ -185,4 +185,6 @@ def guest_setup_command(selection: Selection, project: Path, *, verify: bool = F
     ]
     if verify:
         command.append("--verify")
+    if selection.swap_displays:
+        command.append("--swap-displays")
     return command

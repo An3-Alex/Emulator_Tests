@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sys
+import json
 import unittest
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 
@@ -15,11 +17,22 @@ from cabinet_controls import (
     KEY_TABLE_BASE, format_tablet_packet, key_location, send_command,
     validate_command,
 )
-from cabinet_control_panel import ControlPanel
+from cabinet_control_panel import ControlPanel, qmp_screendump
 from m68k_database_bridge import (
     BUTTON_PULSE_BOARD_SCANS, MP_STATE_ADDRESS, advance_button_pulses,
     publish_cabinet_buttons,
 )
+
+
+class CabinetDisplayTests(unittest.TestCase):
+    def test_preview_captures_cabinet_lower_device_not_boot_primary(self) -> None:
+        stream = MagicMock()
+        stream.readline.side_effect = [b'{"QMP": {}}\n', b'{"return": {}}\n', b'{"return": {}}\n']
+        with patch("cabinet_control_panel.socket.create_connection") as connect:
+            connect.return_value.__enter__.return_value.makefile.return_value = stream
+            qmp_screendump(4444, Path("preview.png"))
+        commands = [json.loads(call.args[0]) for call in stream.write.call_args_list]
+        self.assertEqual(commands[-1]["arguments"]["device"], "lower")
 
 
 class MemoryRsp:
@@ -46,6 +59,7 @@ class CabinetControlTests(unittest.TestCase):
     def test_preview_touch_deduplicates_press_and_recovers_missed_release(self) -> None:
         panel = ControlPanel.__new__(ControlPanel)
         panel.pad_touch = None
+        panel.qemu_touch = None
         panel._pad_point = lambda _event: (320, 240)
         events = []
         panel._send = events.append
@@ -60,6 +74,50 @@ class CabinetControlTests(unittest.TestCase):
             {"type": "touch", "x": 320, "y": 240, "down": True},
             {"type": "touch", "x": 320, "y": 240, "down": False},
         ])
+
+    def test_qemu_mouse_sends_one_contact_and_releases_outside_window(self) -> None:
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.pad_touch = panel.qemu_touch = None
+        panel.previous_left_down = False
+        events = []
+        panel._send = events.append
+        panel._poll_qemu_touch(True, (100, 200), True)
+        for _ in range(10):
+            panel._poll_qemu_touch(True, (100, 200), True)
+        panel._poll_qemu_touch(True, (120, 200), True)
+        panel._poll_qemu_touch(True, None, True)
+        panel._poll_qemu_touch(False, None, True)
+        panel._poll_qemu_touch(False, None, True)
+        self.assertEqual(events, [
+            {"type": "touch", "x": 100, "y": 200, "down": True},
+            {"type": "touch", "x": 120, "y": 200, "down": True},
+            {"type": "touch", "x": 120, "y": 200, "down": False},
+        ])
+
+    def test_dragging_from_preview_to_qemu_does_not_start_second_contact(self) -> None:
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.pad_touch = panel.qemu_touch = None
+        panel.previous_left_down = False
+        panel._pad_point = lambda _event: (320, 240)
+        events = []
+        panel._send = events.append
+        panel._touch_press(object())
+        panel._poll_qemu_touch(True, (100, 200), True)
+        panel._release_pad_if_button_up(False)
+        panel._poll_qemu_touch(False, None, True)
+        self.assertEqual([event["down"] for event in events], [True, False])
+
+    def test_disabling_qemu_mouse_releases_contact_once(self) -> None:
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.pad_touch = panel.qemu_touch = None
+        panel.previous_left_down = False
+        events = []
+        panel._send = events.append
+        panel._poll_qemu_touch(True, (100, 200), True)
+        panel._poll_qemu_touch(True, None, False)
+        panel._poll_qemu_touch(True, (100, 200), True)
+        panel._poll_qemu_touch(False, None, True)
+        self.assertEqual([event["down"] for event in events], [True, False])
 
     def test_format_tablet_packet_has_status_and_7_bit_coordinates(self) -> None:
         self.assertEqual(format_tablet_packet(0, 0, True), b"\xC0\0\0\0\0")

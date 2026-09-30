@@ -39,6 +39,7 @@ class Selection:
     qemu_m68k: str = ""
     python: str = ""
     show_live_log: bool = False
+    swap_displays: bool = False
 
     @classmethod
     def from_json(cls, path: Path) -> Selection:
@@ -168,4 +169,6 @@ def launch_command(selection: Selection, project: Path) -> list[str]:
     ]
     if not selection.show_live_log:
         command.append("-NoEventWindow")
+    if selection.swap_displays:
+        command.append("-SwapDisplays")
     return command

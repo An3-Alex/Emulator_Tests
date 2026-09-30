@@ -40,6 +40,10 @@ class PortableLauncherTests(unittest.TestCase):
         self.assertNotIn("-NoEventWindow", launch_command(
             replace(selection, show_live_log=True), PROJECT
         ))
+        self.assertNotIn("-SwapDisplays", command)
+        self.assertIn("-SwapDisplays", launch_command(
+            replace(selection, swap_displays=True), PROJECT
+        ))
 
     def test_unknown_dump_is_rejected_without_changing_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -100,7 +104,7 @@ class PortableLauncherTests(unittest.TestCase):
     def test_settings_round_trip_ignores_unknown_future_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
-            source = Selection(image=r"D:\CF\M90.img", show_live_log=True)
+            source = Selection(image=r"D:\CF\M90.img", show_live_log=True, swap_displays=True)
             source.save(path)
             self.assertEqual(Selection.from_json(path), source)
 
@@ -133,6 +137,7 @@ class PortableLauncherTests(unittest.TestCase):
             qemu_x86=r"C:\Program Files\qemu\qemu-system-x86_64.exe",
             qemu_m68k=r"C:\Program Files\qemu\qemu-system-m68k.exe",
             python=r"C:\Python 3.14\python.exe",
+            swap_displays=True,
         )
         completed = subprocess.run(
             [*launch_command(selection, PROJECT), "-DryRun"],
@@ -141,6 +146,7 @@ class PortableLauncherTests(unittest.TestCase):
         plan = json.loads(completed.stdout)
         self.assertEqual(plan["runtime"]["visible_qemu"]["image"], selection.image)
         self.assertEqual(plan["runtime"]["visible_qemu"]["qemu"], selection.qemu_x86)
+        self.assertTrue(plan["runtime"]["visible_qemu"]["swap_displays"])
         self.assertFalse(plan["runtime"]["event_window"]["visible"])
         self.assertIn(selection.admission_eeprom,
                       plan["runtime"]["database_bridge"]["arguments"])

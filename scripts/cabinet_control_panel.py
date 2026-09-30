@@ -194,7 +194,7 @@ class ControlPanel:
                 max(0, min(TOUCH_HEIGHT - 1, int(event.y * TOUCH_HEIGHT / display_h))))
 
     def _touch_press(self, event: tk.Event) -> None:
-        if self.pad_touch is not None:
+        if self.pad_touch is not None or self.qemu_touch is not None:
             return
         self.pad_touch = self._pad_point(event)
         self._send({"type": "touch", "x": self.pad_touch[0],
@@ -221,6 +221,19 @@ class ControlPanel:
         x, y = self.pad_touch
         self.pad_touch = None
         self._send({"type": "touch", "x": x, "y": y, "down": False})
+
+    def _poll_qemu_touch(self, left_down: bool, point: tuple[int, int] | None,
+                         enabled: bool) -> None:
+        if self.qemu_touch is not None and (not left_down or not enabled):
+            x, y = self.qemu_touch
+            self.qemu_touch = None
+            self._send({"type": "touch", "x": x, "y": y, "down": False})
+        elif enabled and left_down and point is not None and self.pad_touch is None:
+            if ((self.qemu_touch is None and not self.previous_left_down)
+                    or (self.qemu_touch is not None and point != self.qemu_touch)):
+                self.qemu_touch = point
+                self._send({"type": "touch", "x": point[0], "y": point[1], "down": True})
+        self.previous_left_down = left_down
 
     def _capture_loop(self) -> None:
         index = 0
@@ -265,18 +278,9 @@ class ControlPanel:
             # Tk can miss ButtonRelease when the cursor leaves the preview.
             # The physical button state is an independent release fallback.
             self._release_pad_if_button_up(left_down)
-            if self.qemu_pid and self.native_mouse.get() and left_down:
-                point = qemu_cursor_position(self.qemu_pid, self.image_size)
-                if point is not None and (not self.previous_left_down or
-                                          self.qemu_touch is not None and point != self.qemu_touch):
-                    self.qemu_touch = point
-                    self._send({"type": "touch", "x": point[0],
-                                "y": point[1], "down": True})
-            if not left_down and self.qemu_touch is not None:
-                x, y = self.qemu_touch
-                self.qemu_touch = None
-                self._send({"type": "touch", "x": x, "y": y, "down": False})
-            self.previous_left_down = left_down
+            enabled = bool(self.qemu_pid and self.native_mouse.get())
+            point = qemu_cursor_position(self.qemu_pid, self.image_size) if enabled and left_down else None
+            self._poll_qemu_touch(left_down, point, enabled)
         if not self.stop.is_set():
             self.root.after(40, self._tick)
 
@@ -284,9 +288,11 @@ class ControlPanel:
         self.stop.set()
         if self.pad_touch is not None:
             x, y = self.pad_touch
+            self.pad_touch = None
             self._send({"type": "touch", "x": x, "y": y, "down": False})
         if self.qemu_touch is not None:
             x, y = self.qemu_touch
+            self.qemu_touch = None
             self._send({"type": "touch", "x": x, "y": y, "down": False})
         for name in tuple(self.held_buttons):
             self._button(name, False)

@@ -65,6 +65,20 @@ class QemuLaunchPlanTests(unittest.TestCase):
         self.assertIn("-smp 1", plan["arguments"])
         self.assertIn("-m 2048", plan["arguments"])
 
+    def test_swapped_outputs_reach_both_programming_branches(self) -> None:
+        plan = self.script_plan(PROGRAM_AND_START_LAUNCHER, "-SwapDisplays")
+        visible = plan["runtime"]["visible_qemu"]
+        self.assertEqual(visible["display_tabs"], ["upper", "lower"])
+        self.assertTrue(visible["swap_displays"])
+        self.assertEqual(visible["cabinet_lower_device"], "lower")
+        self.assertIn("qxl-vga,id=upper", visible["arguments"])
+        self.assertIn("qxl,id=lower", visible["arguments"])
+        self.assertNotIn("qxl-vga,id=lower", visible["arguments"])
+        source = PROGRAM_AND_START_LAUNCHER.read_text(encoding="utf-8")
+        calls = [line for line in source.splitlines() if "& $runtimeLauncher" in line]
+        self.assertEqual(len(calls), 4)
+        self.assertTrue(all("-SwapDisplays:$SwapDisplays" in line for line in calls))
+
     def test_dry_run_keeps_expected_devices_and_restricted_network(self) -> None:
         arguments = self.launch_plan()["arguments"]
         self.assertIn("qxl-vga,id=lower", arguments)

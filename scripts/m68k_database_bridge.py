@@ -671,9 +671,6 @@ TOUCH_WAITING_FOR_REPLY = 7
 TOUCH_IDENTITY = b"A30000"
 TOUCH_CLICK_MENUE_PREFIX = bytes.fromhex("01 02 41 00 3F 2C")
 TOUCH_CLICK_FRAME_LENGTH = 11
-TOUCH_STREAM_REPEAT_SECONDS = 0.05
-TOUCH_MIN_PRESS_SECONDS = 0.18
-MAX_PENDING_TOUCH_PACKETS = 8
 TIMER_VECTOR = 134
 TIMER_HANDLER = 0x000C6BD0
 UART_TIMER_RTE_PC = 0x000C6C0A
@@ -1300,26 +1297,16 @@ class TouchClickForwarder:
 
 
 class TouchPacketStream:
-    """Keep a detectable contact pulse without delaying its release."""
+    """One contact edge, real drag positions, then immediate queued release."""
 
     def __init__(self) -> None:
         self.packets: deque[tuple[int, int, bool, bytes]] = deque()
         self.active_point: tuple[int, int] | None = None
-        self.down_samples = 0
-        self.last_report_at = 0.0
-        self.pressed_at = 0.0
-        self.pending_release: tuple[int, int] | None = None
-        self.release_at = 0.0
 
     def _append(self, x: int, y: int, down: bool) -> None:
         self.packets.append((x, y, down, format_tablet_packet(x, y, down)))
 
-    def _finish_release(self) -> None:
-        if self.pending_release is None:
-            return
-        while self.down_samples < 3 and self.active_point is not None:
-            self._append(*self.active_point, True)
-            self.down_samples += 1
+    def _finish_release(self, x: int, y: int) -> None:
         # A slow firmware consumer must not work through a long queue of stale
         # held/move reports before seeing the release. Keep the first contact
         # sample and the two most recent positions of this contact only.
@@ -1334,44 +1321,19 @@ class TouchPacketStream:
         contact = queued[start:]
         if len(contact) > 3:
             self.packets = deque(queued[:start] + [contact[0], *contact[-2:]])
-        self._append(*self.pending_release, False)
-        self.pending_release = None
+        self._append(x, y, False)
         self.active_point = None
-        self.down_samples = 0
 
-    def request(self, x: int, y: int, down: bool, now: float) -> None:
+    def request(self, x: int, y: int, down: bool) -> None:
         if down:
-            self._finish_release()
-            if self.active_point is None:
-                self.down_samples = 0
-                self.pressed_at = now
+            if self.active_point == (x, y):
+                return
             self.active_point = (x, y)
             self._append(x, y, True)
-            self.down_samples += 1
-            self.last_report_at = now
             return
         if self.active_point is None:
             return
-        self.pending_release = (x, y)
-        self.release_at = max(now, self.pressed_at + TOUCH_MIN_PRESS_SECONDS)
-        if now >= self.release_at:
-            self._finish_release()
-
-    def repeat(self, now: float) -> bool:
-        if self.pending_release is not None and now >= self.release_at:
-            self._finish_release()
-            return True
-        if (
-            self.active_point is None
-            or self.down_samples >= 3
-            or now - self.last_report_at < TOUCH_STREAM_REPEAT_SECONDS
-            or len(self.packets) >= MAX_PENDING_TOUCH_PACKETS
-        ):
-            return False
-        self._append(*self.active_point, True)
-        self.down_samples += 1
-        self.last_report_at = now
-        return True
+        self._finish_release(x, y)
 
 
 def uart_state_is_ready(uart_state: int) -> bool:
@@ -1768,13 +1730,12 @@ def run_bridge(args: argparse.Namespace) -> int:
                             control_event["x"], control_event["y"],
                             control_event["down"],
                         )
-                        touch_packets.request(x, y, down, time.monotonic())
+                        touch_packets.request(x, y, down)
                         print(
                             f"DB_TOUCH_REQUEST x={x} y={y} down={down}",
                             flush=True,
                         )
                 if timer_enabled:
-                    touch_packets.repeat(time.monotonic())
                     touch_state = rsp.read_memory(
                         TOUCH_TRANSACTION_STATE, 1
                     )[0]

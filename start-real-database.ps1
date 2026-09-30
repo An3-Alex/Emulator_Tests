@@ -16,6 +16,7 @@ param(
     # interrupt handler during INITVIDEO. Prefer the stable CPU mode.
     [switch]$SafeTb = $true,
     [switch]$UsbTablet,
+    [switch]$SwapDisplays,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
     [switch]$TraceDiagnostics,
     [switch]$DryRun
@@ -50,7 +51,7 @@ if ($null -ne $D3) { $arguments += @('--d3', ('0x{0:X8}' -f $D3)) }
 else { $arguments += @('--runtime-dump', $RuntimeDump) }
 
 if ($DryRun) {
-    $visiblePlan = (& $visibleLauncher -Qemu $Qemu -Image $Image -DryRun -UsbTablet:$UsbTablet | ConvertFrom-Json)
+    $visiblePlan = (& $visibleLauncher -Qemu $Qemu -Image $Image -DryRun -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays | ConvertFrom-Json)
     [ordered]@{
         visible_qemu = $visiblePlan
         database_bridge = [ordered]@{
@@ -93,7 +94,7 @@ foreach ($item in @(
     }
 }
 
-$qemuLaunchOutput = @(& $visibleLauncher -Qemu $Qemu -Image $Image -UsbTablet:$UsbTablet)
+$qemuLaunchOutput = @(& $visibleLauncher -Qemu $Qemu -Image $Image -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays)
 $qemuLaunchOutput | Write-Output
 $qemuPidLine = $qemuLaunchOutput | Where-Object { $_ -match '^QEMU_PID=\d+$' } | Select-Object -First 1
 if (-not $qemuPidLine) {

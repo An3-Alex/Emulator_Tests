@@ -139,6 +139,7 @@ class Launcher(tk.Tk):
             key: tk.StringVar(value=getattr(selection, key)) for key, _ in FIELDS
         }
         self.show_log = tk.BooleanVar(value=selection.show_live_log)
+        self.swap_displays = tk.BooleanVar(value=selection.swap_displays)
         self.prepared_copy = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
         self.prepare_timer = tk.StringVar(value="Image-Einrichtung: noch nicht gestartet")
@@ -201,6 +202,10 @@ class Launcher(tk.Tk):
             variable=self.show_log,
         ).pack(anchor="w")
         controls = ttk.Frame(outer)
+        ttk.Checkbutton(
+            outer, text="Bildschirme tauschen (wenn das Spielmenü unter upper statt lower erscheint)",
+            variable=self.swap_displays,
+        ).pack(anchor="w")
         controls.pack(fill="x", pady=(12, 6))
         self.prepare_button = ttk.Button(
             controls, text="Frisches Image einrichten", command=self._prepare,
@@ -264,7 +269,7 @@ class Launcher(tk.Tk):
 
     def _selection(self) -> Selection:
         return Selection(**{key: value.get().strip() for key, value in self.variables.items()},
-                         show_live_log=self.show_log.get())
+                         show_live_log=self.show_log.get(), swap_displays=self.swap_displays.get())
 
     def _save(self, selection: Selection) -> bool:
         try:

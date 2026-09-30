@@ -23,6 +23,16 @@ def digest(data: bytes) -> str:
 
 
 class ImageSetupTests(unittest.TestCase):
+    def test_setup_and_runtime_use_the_same_swapped_device_names(self) -> None:
+        selection = Selection(image="working.img", python=sys.executable, swap_displays=True)
+        command = image_setup.guest_setup_command(selection, PROJECT, verify=True)
+        self.assertIn("--swap-displays", command)
+        self.assertIn("--verify", command)
+        devices = qemu_command(Path("qemu.exe"), Path(selection.image), 4554, 4446,
+                               swap_displays=True)
+        self.assertIn("qxl-vga,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480", devices)
+        self.assertIn("qxl,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480", devices)
+
     def test_wsl_path_bypasses_shell_and_preserves_spaces(self) -> None:
         path = PROJECT / "folder with spaces" / "working image.img"
         converted = "/mnt/c/folder with spaces/working image.img"

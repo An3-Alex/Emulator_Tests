@@ -13,6 +13,7 @@ param(
     [string]$AdmissionEeprom,
     [switch]$SafeTb = $true,
     [switch]$NoEventWindow,
+    [switch]$SwapDisplays,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
     [switch]$DryRun
 )
@@ -41,9 +42,9 @@ else { $programArgs += @('--runtime-dump', $RuntimeDump) }
 $runtimeLauncher = Join-Path $PSScriptRoot 'start-real-database.ps1'
 if ($DryRun) {
     if ($null -ne $D3) {
-        $runtimePlan = (& $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -DryRun | ConvertFrom-Json)
+        $runtimePlan = (& $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays -DryRun | ConvertFrom-Json)
     } else {
-        $runtimePlan = (& $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $null -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -DryRun | ConvertFrom-Json)
+        $runtimePlan = (& $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $null -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays -DryRun | ConvertFrom-Json)
     }
     [ordered]@{
         virtual_programming = [ordered]@{
@@ -78,8 +79,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($null -ne $D3) {
-    & $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift
+    & $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays
 } else {
-    & $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift
+    & $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays
 }
 exit $LASTEXITCODE
