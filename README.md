@@ -1,27 +1,30 @@
 # M90-Emulator
 
 Dieses Projekt bringt ein eigenes Merkur-M90-CF-Image mit der dazugehörigen
-Datenbank in einer lokalen QEMU-Testumgebung zum Laufen. Spiel-PC und
+Datenbank in einem lokalen QEMU-Emulator zum Laufen. Spiel-PC und
 Datenbankprozessor werden getrennt emuliert. Ein Bedienfenster bietet die
 Automatentasten, Türschalter, Service-Taste und Touch-Eingaben; ein Live-Protokoll
 kann beim Start zugeschaltet werden.
 
-## Aktueller Stand
+## Funktionen
 
-Das bisher vorbereitete Test-Image erreicht die Spielauswahl. Touch,
-Haupttasten und Spielstart wurden im laufenden Test beobachtet. Für ein frisches
-Image gibt es nun eine automatische Einrichtung mit eigener Arbeitskopie;
-Kopieren, QXL-Treiberinstallation und Abschluss wurden an einer frischen Kopie
-getestet. Diese Kopie hat nach beiden `INITVIDEO`-Phasen die Spielauswahl mit
-Spielkacheln angezeigt. Beim ersten Versuch blieb der Bildschirm nach einer
-Touch-Eingabe schwarz; ein weiterer Lauf deckte einen verlorenen
-Münzprüfer-Handshake auf. Nach Korrektur dieses Protokollfehlers erreichte
-dieselbe Kopie erneut die Spielauswahl und lud „African Cash“ per Touch.
-Das Laden dauerte allerdings mehrere Minuten, der zweite Bildschirm blieb
-schwarz, und Langzeitstabilität ist noch nicht bestätigt. Eine
-Spielgeld-Gutschrift ist noch nicht verfügbar. Gegen doppelte bzw. hängen
-bleibende Touch-Eingaben gibt es einen Offline-getesteten Fix; dessen Wirkung
-im laufenden Spiel ist noch nicht bestätigt.
+Der Starter erstellt aus dem eigenen CF-Image eine getrennte Arbeitskopie,
+richtet den QXL-Grafiktreiber ein und startet danach den Spiel-PC zusammen mit
+der emulierten Datenbank. Touch, die fünf Spieltasten, Auszahlungs- und
+Service-Taste sowie der Türschalter sind im Bedienfenster erreichbar. Das
+Ereignisprotokoll lässt sich beim Start optional öffnen.
+
+Der Spielstart kann mehrere Minuten dauern. Eine Spielgeld-Gutschrift ist
+derzeit nicht verfügbar; Ton, Auszahlungsgeräte und der obere Bildschirm sind
+noch nicht vollständig nachgebildet.
+
+## Änderungen
+
+- 0.1.2: Die Image-Einrichtung aktiviert beide QXL-Anzeigen und wiederholt die
+  Treiberinstallation bei Bedarf. Bereits eingerichtete Images lassen sich im
+  Startfenster fortsetzen. `lower` bezeichnet nun den unteren Automatenbildschirm,
+  `upper` den oberen.
+- 0.1.1: Das Startfenster zeigt Phase und verstrichene Zeit der Image-Einrichtung.
 
 ## Lokal starten
 
@@ -69,18 +72,13 @@ Repository nötig.
 Eine einzelne Start-EXE lässt sich lokal mit `build-launcher-exe.ps1` erzeugen
 (Build-Abhängigkeit: PyInstaller und zuvor gebaute Eigenkomponenten). Sie legt
 unsere Laufzeitdateien im lokalen App-Datenordner ab. Images, Dumps und fremde
-Grafik-/Treiberdateien werden nicht eingebettet. Die frische Image-Einrichtung
-ist neu und noch nicht als vollständig stabiler Endnutzer-Installer freigegeben.
+Grafik-/Treiberdateien werden nicht eingebettet.
 
 ## Hintergründe
 
 Die Datenbank ist kein bloßer Antwort-Stub: der Motorola-68k-Code läuft in
 QEMU; die Host-Brücke bildet die serielle Verbindung und das Board-I/O nach.
-Die virtuelle Uhr wird für das M90-Setup auf 2012 gesetzt. Originaltreue
-bei Münzprüfer, Auszahlung, Ton und zweitem Monitor ist noch Gegenstand der
-Tests. Der schreibgeschützte [Vergleich von Original und Arbeitskopie](docs/image-preparation.md)
-ist dokumentiert. Weitere technische Untersuchungen stehen in [`docs/`](docs/); ältere,
+Die virtuelle Uhr wird für das M90-Setup auf 2012 gesetzt. Details zur
+[Image-Einrichtung](docs/image-preparation.md) stehen in der Dokumentation; ältere,
 teilweise überholte Notizen liegen in
 [`docs/project-background.md`](docs/project-background.md).
-
-Offline-Tests: `python -m unittest discover -s tests -p "test_*.py" -q`.
