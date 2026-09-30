@@ -66,11 +66,7 @@ Der QEMU-Reiter `lower` ist der untere Bildschirm des echten Automaten;
 
 CF-Images, Datenbank-Dumps, Zulassungskarten, Logs und fremde Grafik-DLLs
 gehören nicht in dieses Repository. Sie werden lokal ausgewählt und durch
-`.gitignore` ausgeschlossen. Updates des Quellcodes gehen einfach per `git pull`
-im Projektordner. Für die einzelne Start-EXE lädt man bei einer neuen Version
-die neue Datei aus den privaten GitHub-Releases herunter; automatische Updates
-gibt es derzeit nicht. Auf einem zweiten PC ist GitHub-Zugriff auf das private
-Repository nötig.
+`.gitignore` ausgeschlossen.
 
 Eine einzelne Start-EXE lässt sich lokal mit `build-launcher-exe.ps1` erzeugen
 (Build-Abhängigkeit: PyInstaller und zuvor gebaute Eigenkomponenten). Sie legt
