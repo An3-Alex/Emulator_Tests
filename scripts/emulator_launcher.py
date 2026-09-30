@@ -437,7 +437,7 @@ class Launcher(tk.Tk):
             return
         try:
             probe = subprocess.run(
-                [wsl, "--", "sh", "-lc", "echo WSL_READY"],
+                [wsl, "--exec", "sh", "-lc", "echo WSL_READY"],
                 capture_output=True, text=True, timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -474,7 +474,7 @@ class Launcher(tk.Tk):
     def _install_wsl_worker(self, wsl: str) -> None:
         try:
             self._run_step(
-                [wsl, "--user", "root", "--", "bash", "-lc",
+                [wsl, "--user", "root", "--exec", "bash", "-lc",
                  "command -v apt-get >/dev/null && apt-get update && "
                  "DEBIAN_FRONTEND=noninteractive apt-get install -y ntfs-3g python3-hivex"],
                 "WSL-Werkzeuge werden installiert",

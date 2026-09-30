@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -22,6 +23,36 @@ def digest(data: bytes) -> str:
 
 
 class ImageSetupTests(unittest.TestCase):
+    def test_wsl_path_bypasses_shell_and_preserves_spaces(self) -> None:
+        path = PROJECT / "folder with spaces" / "working image.img"
+        converted = "/mnt/c/folder with spaces/working image.img"
+        with mock.patch.object(image_setup.subprocess, "run", return_value=
+                               subprocess.CompletedProcess([], 0, converted + "\n", "")) as run:
+            self.assertEqual(image_setup.wsl_path(path), converted)
+        self.assertEqual(run.call_args.args[0], [
+            "wsl.exe", "--user", "root", "--exec", "wslpath", "-a", "-u",
+            path.resolve().as_posix(),
+        ])
+
+    def test_wsl_path_failure_includes_wsl_details(self) -> None:
+        with mock.patch.object(image_setup.subprocess, "run", return_value=
+                               subprocess.CompletedProcess([], 1, "", "No installed distributions")):
+            with self.assertRaisesRegex(RuntimeError, "No installed distributions"):
+                image_setup.wsl_path(PROJECT / "working.img")
+
+    def test_wsl_path_missing_wsl_and_timeout_are_actionable(self) -> None:
+        for error in (FileNotFoundError("wsl.exe"), subprocess.TimeoutExpired("wsl.exe", 20)):
+            with self.subTest(error=type(error).__name__), \
+                 mock.patch.object(image_setup.subprocess, "run", side_effect=error):
+                with self.assertRaisesRegex(RuntimeError, "Ubuntu-Ersteinrichtung"):
+                    image_setup.wsl_path(PROJECT / "working.img")
+
+    def test_wsl_path_rejects_empty_conversion(self) -> None:
+        with mock.patch.object(image_setup.subprocess, "run", return_value=
+                               subprocess.CompletedProcess([], 0, "", "")):
+            with self.assertRaisesRegex(RuntimeError, "Pfad nicht umsetzen"):
+                image_setup.wsl_path(PROJECT / "working.img")
+
     def test_preparation_rejects_original_as_output_and_existing_copy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -82,6 +113,23 @@ class ImageSetupTests(unittest.TestCase):
         self.assertEqual(verify_guest[-1], "--verify")
         self.assertIn("stage_display_verify.sh", stage[5])
         self.assertIn("retry_qxl_install.sh", retry[5])
+        self.assertEqual(stage[:5], ["wsl.exe", "--user", "root", "--exec", "bash"])
+        self.assertEqual(retry[:5], stage[:5])
+
+    def test_all_image_steps_preserve_linux_paths_as_arguments(self) -> None:
+        selection = Selection(
+            original_image="source image.img", image="working image.img",
+            swiftshader="shader folder/d3d9.dll", qxl_driver_dir="driver folder",
+        )
+        with mock.patch.object(image_setup, "wsl_path", side_effect=lambda path: "/folder with spaces/" + path.name):
+            commands = [
+                image_setup.stage_command(selection, PROJECT),
+                image_setup.stage_check_command(Path(selection.image), PROJECT),
+                image_setup.finalize_command(Path(selection.image), PROJECT),
+            ]
+        for command in commands:
+            self.assertEqual(command[:5], ["wsl.exe", "--user", "root", "--exec", "bash"])
+            self.assertIn("/folder with spaces/working image.img", command)
 
 
 if __name__ == "__main__":

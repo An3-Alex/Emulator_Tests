@@ -96,7 +96,7 @@ def check_preparation(
         else:
             try:
                 result = subprocess.run(
-                    ["wsl.exe", "--user", "root", "--", "bash", "-lc",
+                    ["wsl.exe", "--user", "root", "--exec", "bash", "-lc",
                      "command -v ntfs-3g >/dev/null && command -v losetup >/dev/null "
                      "&& command -v python3 >/dev/null && python3 -c 'import hivex'"],
                     capture_output=True, text=True, timeout=20,
@@ -110,10 +110,28 @@ def check_preparation(
 
 
 def wsl_path(path: Path) -> str:
-    result = subprocess.run(
-        ["wsl.exe", "--", "wslpath", "-a", str(path.resolve())],
-        capture_output=True, text=True, timeout=20, check=True,
-    )
+    # WSL's default shell invocation consumes Windows backslashes. Direct exec
+    # preserves argument boundaries, including spaces in AppData/image folders.
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "--user", "root", "--exec", "wslpath", "-a", "-u",
+             path.resolve().as_posix()],
+            capture_output=True, text=True, errors="replace", timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(
+            f"WSL-Pfadumwandlung nicht verfügbar: {path}\n"
+            "WSL/Ubuntu installieren und die Ubuntu-Ersteinrichtung abschließen.\n"
+            f"Details: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        details = result.stderr.strip() or result.stdout.strip() or "Keine Fehlermeldung"
+        raise RuntimeError(
+            f"WSL konnte Pfad nicht umsetzen: {path} (Code {result.returncode})\n"
+            "WSL/Ubuntu muss eingerichtet und als Standarddistribution ausgewählt sein.\n"
+            f"Details: {details}"
+        )
     converted = result.stdout.strip()
     if not converted.startswith("/"):
         raise RuntimeError(f"WSL konnte Pfad nicht umsetzen: {path}")
@@ -128,16 +146,16 @@ def stage_command(selection: Selection, project: Path) -> list[str]:
           ("shim", "bootstrap", "qxl_installer", "d3d9", "fbwf", "irrklang")),
         Path(selection.swiftshader), Path(selection.qxl_driver_dir),
     ]
-    return ["wsl.exe", "--user", "root", "--", "bash", *(wsl_path(path) for path in paths)]
+    return ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
 
 
 def stage_check_command(image: Path, project: Path) -> list[str]:
-    return ["wsl.exe", "--user", "root", "--", "bash",
+    return ["wsl.exe", "--user", "root", "--exec", "bash",
             wsl_path(project / "scripts/check_image_stage.sh"), wsl_path(image)]
 
 
 def finalize_command(image: Path, project: Path) -> list[str]:
-    return ["wsl.exe", "--user", "root", "--", "bash",
+    return ["wsl.exe", "--user", "root", "--exec", "bash",
             wsl_path(project / "scripts/finalize_image_stage.sh"),
             wsl_path(image), wsl_path(project / COMPONENTS["bootstrap"][0])]
 
@@ -145,7 +163,7 @@ def finalize_command(image: Path, project: Path) -> list[str]:
 def stage_display_verify_command(
     image: Path, project: Path, *, repair_ready: bool = False,
 ) -> list[str]:
-    command = ["wsl.exe", "--user", "root", "--", "bash",
+    command = ["wsl.exe", "--user", "root", "--exec", "bash",
                wsl_path(project / "scripts/stage_display_verify.sh"),
                wsl_path(image), wsl_path(project / COMPONENTS["display_verify"][0])]
     if repair_ready:
@@ -154,7 +172,7 @@ def stage_display_verify_command(
 
 
 def retry_qxl_command(image: Path, project: Path) -> list[str]:
-    return ["wsl.exe", "--user", "root", "--", "bash",
+    return ["wsl.exe", "--user", "root", "--exec", "bash",
             wsl_path(project / "scripts/retry_qxl_install.sh"),
             wsl_path(image), wsl_path(project / COMPONENTS["qxl_installer"][0])]
 

@@ -20,6 +20,9 @@ noch nicht vollständig nachgebildet.
 
 ## Änderungen
 
+- 0.1.3: Windows-Pfade werden bei der Image-Einrichtung ohne Shell-Umdeutung
+  an WSL übergeben. Ordner mit Leerzeichen bleiben erhalten; WSL-Probleme
+  zeigen die konkrete Fehlermeldung und Hinweise zur Ubuntu-Einrichtung.
 - 0.1.2: Die Image-Einrichtung aktiviert beide QXL-Anzeigen und wiederholt die
   Treiberinstallation bei Bedarf. Bereits eingerichtete Images lassen sich im
   Startfenster fortsetzen. `lower` bezeichnet nun den unteren Automatenbildschirm,
