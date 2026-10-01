@@ -69,6 +69,10 @@ Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
 
 ## Lokal starten
 
+Die aktuelle [M90-Emulator.exe herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.10/M90-Emulator.exe)
+oder die [Release-Seite 0.1.10 öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.10).
+Für das private Repository ist eine GitHub-Anmeldung mit Zugriff erforderlich.
+
 Unter Windows `Start-Emulator-UI.cmd` doppelklicken oder die `M90-Emulator.exe`
 aus dem privaten GitHub-Release starten. Die Kurzanleitung im Fenster zeigt
 die Reihenfolge: Abhängigkeiten prüfen, eigene Dateien auswählen, frisches
