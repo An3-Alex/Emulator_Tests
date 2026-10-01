@@ -3,8 +3,7 @@
 Diese Notizen dokumentieren frühere Analyseschritte und sind keine aktuelle
 Installationsanleitung. Für den gegenwärtigen Stand siehe `../README.md`.
 
-Forensic Win32/x86 compatibility work for the user-supplied working copy
-`C:\Users\User\Desktop\m90_work.img`. No other disk image is an
+Forensic Win32/x86 compatibility work for the user-supplied working copy. No other disk image is an
 accepted target for the guarded installation scripts.
 
 The active design keeps the checksum-covered original `game.exe` intact and
