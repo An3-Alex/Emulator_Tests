@@ -4,9 +4,18 @@
 #include <d3d9.h>
 #undef Direct3DCreate9
 #include <stddef.h>
+#include "display_policy.h"
 
 static HMODULE g_self;
+/* Required by MSVC's float-forwarding methods; this DLL uses no CRT. */
+extern "C" { int _fltused = 0; }
 typedef IDirect3D9 *(WINAPI *PFN_Direct3DCreate9)(UINT);
+
+static void zero_memory(void *memory, size_t size)
+{
+    volatile unsigned char *bytes = (volatile unsigned char *)memory;
+    while (size--) *bytes++ = 0;
+}
 
 static void log_text(const char *text)
 {
@@ -44,6 +53,62 @@ static UINT map_adapter(UINT adapter)
     return adapter;
 }
 
+struct CabinetMonitors {
+    HMONITOR handles[2];
+    MONITORINFOEXA info[2];
+};
+
+static BOOL CALLBACK collect_monitor(HMONITOR monitor, HDC, LPRECT, LPARAM context)
+{
+    CabinetMonitors *monitors = (CabinetMonitors *)context;
+    MONITORINFOEXA info;
+    zero_memory(&info, sizeof(info));
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoA(monitor, &info)) return TRUE;
+    UINT slot = (info.dwFlags & MONITORINFOF_PRIMARY) ? 0 : 1;
+    if (!monitors->handles[slot]) {
+        monitors->handles[slot] = monitor;
+        monitors->info[slot] = info;
+    }
+    return TRUE;
+}
+
+static BOOL cabinet_monitor(UINT adapter, HMONITOR *handle, MONITORINFOEXA *info)
+{
+    if (adapter > 1) return FALSE;
+    CabinetMonitors monitors;
+    zero_memory(&monitors, sizeof(monitors));
+    if (!EnumDisplayMonitors(NULL, NULL, collect_monitor, (LPARAM)&monitors) ||
+        !monitors.handles[adapter]) return FALSE;
+    if (handle) *handle = monitors.handles[adapter];
+    if (info) *info = monitors.info[adapter];
+    return TRUE;
+}
+
+static BOOL position_cabinet_window(UINT adapter, HWND window, const MONITORINFOEXA &info,
+    const D3DPRESENT_PARAMETERS &pp)
+{
+    M90DisplayPlacement placement;
+    if (!window || !m90_display_placement(adapter, info.rcMonitor.left, info.rcMonitor.top,
+        info.rcMonitor.right, info.rcMonitor.bottom, pp.BackBufferWidth, pp.BackBufferHeight,
+        &placement)) return FALSE;
+    /* A borderless popup is still non-exclusive. It does not move the desktop
+     * or force both GPU contexts into a single physical fullscreen monitor.
+     */
+    LONG style = GetWindowLongA(window, GWL_STYLE);
+    style = (style & ~(WS_CHILD | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) | WS_POPUP;
+    SetWindowLongA(window, GWL_STYLE, style);
+    BOOL result = SetWindowPos(window, HWND_NOTOPMOST, placement.x, placement.y,
+        placement.width, placement.height,
+        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    log_hex("Presentation adapter=", adapter, "\r\n");
+    log_text("Presentation Windows device="); log_text(info.szDevice); log_text("\r\n");
+    log_hex("Presentation x=", (DWORD)placement.x, "\r\n");
+    log_hex("Presentation y=", (DWORD)placement.y, "\r\n");
+    log_hex("Presentation position result=", result, "\r\n");
+    return result;
+}
+
 static BOOL same_guid(REFIID a, const IID &b)
 {
     return a.Data1 == b.Data1 && a.Data2 == b.Data2 && a.Data3 == b.Data3 &&
@@ -52,6 +117,97 @@ static BOOL same_guid(REFIID a, const IID &b)
         a.Data4[4] == b.Data4[4] && a.Data4[5] == b.Data4[5] &&
         a.Data4[6] == b.Data4[6] && a.Data4[7] == b.Data4[7];
 }
+
+/* Retain the logical monitor across Reset (the game's video reinitialization).
+ * Only rendering uses adapter zero. COM ownership and presentation stay here.
+ */
+class Direct3DDevice9Proxy : public IDirect3DDevice9 {
+    LONG refs_;
+    IDirect3DDevice9 *inner_;
+    IDirect3D9 *parent_;
+    UINT adapter_;
+    HWND window_;
+
+    bool prepare(D3DPRESENT_PARAMETERS &pp, MONITORINFOEXA &monitor)
+    {
+        if (!cabinet_monitor(adapter_, NULL, &monitor)) return false;
+        pp.Windowed = TRUE;
+        pp.FullScreen_RefreshRateInHz = 0;
+        /* Reset must not move a device onto another display's focus window. */
+        pp.hDeviceWindow = window_;
+        return position_cabinet_window(adapter_, window_, monitor, pp);
+    }
+public:
+    static void *operator new(size_t size) { return HeapAlloc(GetProcessHeap(), 0, size); }
+    static void operator delete(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
+    Direct3DDevice9Proxy(IDirect3DDevice9 *inner, IDirect3D9 *parent,
+        UINT adapter, HWND window) : refs_(1), inner_(inner), parent_(parent),
+        adapter_(adapter), window_(window) { parent_->AddRef(); }
+    ~Direct3DDevice9Proxy() { inner_->Release(); parent_->Release(); }
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override
+    {
+        if (!object) return E_POINTER;
+        *object = NULL;
+        if (!same_guid(riid, IID_IUnknown) && !same_guid(riid, IID_IDirect3DDevice9))
+            return E_NOINTERFACE;
+        *object = static_cast<IDirect3DDevice9 *>(this);
+        AddRef();
+        return S_OK;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return (ULONG)InterlockedIncrement(&refs_); }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        ULONG refs = (ULONG)InterlockedDecrement(&refs_);
+        if (!refs) delete this;
+        return refs;
+    }
+    HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9 **parent) override
+    {
+        if (!parent) return D3DERR_INVALIDCALL;
+        *parent = parent_; parent_->AddRef(); return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS *p) override
+    {
+        HRESULT hr = inner_->GetCreationParameters(p);
+        if (SUCCEEDED(hr)) p->AdapterOrdinal = adapter_;
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS *pp) override
+    {
+        if (!pp) return D3DERR_INVALIDCALL;
+        D3DPRESENT_PARAMETERS adjusted = *pp;
+        MONITORINFOEXA monitor;
+        zero_memory(&monitor, sizeof(monitor));
+        log_hex("Reset logical adapter=", adapter_, "\r\n");
+        if (!prepare(adjusted, monitor)) return D3DERR_NOTAVAILABLE;
+        HRESULT hr = inner_->Reset(&adjusted);
+        if (SUCCEEDED(hr)) {
+            *pp = adjusted;
+            position_cabinet_window(adapter_, window_, monitor, adjusted);
+        }
+        log_hex("Reset result=", (DWORD)hr, "\r\n");
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS *pp,
+        IDirect3DSwapChain9 **chain) override
+    {
+        if (!pp) return D3DERR_INVALIDCALL;
+        D3DPRESENT_PARAMETERS adjusted = *pp;
+        MONITORINFOEXA monitor;
+        zero_memory(&monitor, sizeof(monitor));
+        if (!prepare(adjusted, monitor)) return D3DERR_NOTAVAILABLE;
+        HRESULT hr = inner_->CreateAdditionalSwapChain(&adjusted, chain);
+        if (SUCCEEDED(hr)) *pp = adjusted;
+        return hr;
+    }
+    HRESULT STDMETHODCALLTYPE Present(const RECT *source, const RECT *destination,
+        HWND override_window, const RGNDATA *dirty) override
+    {
+        /* A shared focus window must not redirect output to the other head. */
+        return inner_->Present(source, destination, override_window ? window_ : NULL, dirty);
+    }
+#include "d3d9_device_forwarders.inc"
+};
 
 class Direct3D9Proxy : public IDirect3D9 {
     LONG refs_;
@@ -80,7 +236,8 @@ public:
     HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void *init) { return inner_->RegisterSoftwareDevice(init); }
     UINT STDMETHODCALLTYPE GetAdapterCount()
     {
-        UINT count = inner_->GetAdapterCount();
+        UINT count = cabinet_monitor(1, NULL, NULL) ? 2 :
+                     (cabinet_monitor(0, NULL, NULL) ? 1 : 0);
         log_hex("GetAdapterCount -> ", count, "\r\n");
         return count;
     }
@@ -91,7 +248,20 @@ public:
     HRESULT STDMETHODCALLTYPE EnumAdapterModes(UINT a, D3DFORMAT f, UINT m, D3DDISPLAYMODE *o)
       { return inner_->EnumAdapterModes(map_adapter(a), f, m, o); }
     HRESULT STDMETHODCALLTYPE GetAdapterDisplayMode(UINT a, D3DDISPLAYMODE *m)
-      { return inner_->GetAdapterDisplayMode(map_adapter(a), m); }
+    {
+        if (!m) return D3DERR_INVALIDCALL;
+        MONITORINFOEXA monitor;
+        DEVMODEA mode;
+        zero_memory(&monitor, sizeof(monitor)); zero_memory(&mode, sizeof(mode));
+        mode.dmSize = sizeof(mode);
+        if (!cabinet_monitor(a, NULL, &monitor) ||
+            !EnumDisplaySettingsA(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode))
+            return D3DERR_NOTAVAILABLE;
+        m->Width = mode.dmPelsWidth; m->Height = mode.dmPelsHeight;
+        m->RefreshRate = mode.dmDisplayFrequency;
+        m->Format = mode.dmBitsPerPel == 32 ? D3DFMT_X8R8G8B8 : D3DFMT_R5G6B5;
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT a, D3DDEVTYPE t, D3DFORMAT ad, D3DFORMAT bb, BOOL w)
       { return inner_->CheckDeviceType(map_adapter(a), t, ad, bb, w); }
     HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT a, D3DDEVTYPE t, D3DFORMAT af, DWORD u, D3DRESOURCETYPE r, D3DFORMAT cf)
@@ -105,28 +275,64 @@ public:
     HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT a, D3DDEVTYPE t, D3DCAPS9 *c)
       { return inner_->GetDeviceCaps(map_adapter(a), t, c); }
     HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT a)
-      { return inner_->GetAdapterMonitor(map_adapter(a)); }
+    {
+        HMONITOR monitor = NULL;
+        if (!cabinet_monitor(a, &monitor, NULL)) {
+            log_hex("Missing presentation monitor for adapter=", a, "\r\n");
+            return NULL;
+        }
+        return monitor;
+    }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT a, D3DDEVTYPE t, HWND w, DWORD flags,
         D3DPRESENT_PARAMETERS *pp, IDirect3DDevice9 **device)
     {
+        if (!device || !pp || a > 1) return D3DERR_INVALIDCALL;
+        *device = NULL;
         D3DPRESENT_PARAMETERS adjusted;
         D3DPRESENT_PARAMETERS *effective = pp;
+        MONITORINFOEXA monitor;
+        zero_memory(&monitor, sizeof(monitor));
+        HWND presentation_window = pp && pp->hDeviceWindow ? pp->hDeviceWindow : w;
         log_hex("CreateDevice adapter=", a, "\r\n");
         log_hex("CreateDevice flags=", flags, "\r\n");
+        log_hex("CreateDevice focus window=", (DWORD)(ULONG_PTR)w, "\r\n");
+        log_hex("CreateDevice presentation window=", (DWORD)(ULONG_PTR)presentation_window, "\r\n");
         if (pp) {
             log_hex("CreateDevice width=", pp->BackBufferWidth, "\r\n");
             log_hex("CreateDevice height=", pp->BackBufferHeight, "\r\n");
             log_hex("CreateDevice windowed=", pp->Windowed, "\r\n");
         }
-        if (a == 1 && pp) {
+        if (a <= 1 && pp) {
+            if (!cabinet_monitor(a, NULL, &monitor) || !presentation_window) {
+                log_text("CreateDevice missing cabinet monitor or window\r\n");
+                if (device) *device = NULL;
+                return D3DERR_NOTAVAILABLE;
+            }
             adjusted = *pp;
             adjusted.Windowed = TRUE;
             adjusted.FullScreen_RefreshRateInHz = 0;
+            adjusted.hDeviceWindow = presentation_window;
             effective = &adjusted;
-            log_text("CreateDevice adapter 1: forcing non-exclusive windowed mode\r\n");
+            if (!position_cabinet_window(a, presentation_window, monitor, adjusted)) {
+                if (device) *device = NULL;
+                return D3DERR_NOTAVAILABLE;
+            }
+            log_text("CreateDevice: separate monitor, non-exclusive windowed mode\r\n");
         }
         HRESULT hr = inner_->CreateDevice(map_adapter(a), t, w, flags, effective, device);
         log_hex("CreateDevice result=", (DWORD)hr, "\r\n");
+        if (SUCCEEDED(hr) && pp && effective == &adjusted) {
+            *pp = adjusted;
+            position_cabinet_window(a, presentation_window, monitor, adjusted);
+            IDirect3DDevice9 *inner_device = *device;
+            Direct3DDevice9Proxy *wrapped = new Direct3DDevice9Proxy(
+                inner_device, this, a, presentation_window);
+            if (!wrapped) {
+                inner_device->Release(); *device = NULL;
+                return E_OUTOFMEMORY;
+            }
+            *device = wrapped;
+        }
         return hr;
     }
 };

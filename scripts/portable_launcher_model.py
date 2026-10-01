@@ -7,8 +7,10 @@ module never copies owner disk images or database dumps into the application.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 
@@ -22,6 +24,55 @@ KNOWN_SHA256 = {
     "config": "DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783",
 }
 KNOWN_CF_BYTES = 16_139_354_112
+
+# One schema for the form, saved values and start validation. No free-form
+# QEMU arguments: hardware addresses and coupled ports are intentionally fixed.
+EMULATION_FIELDS = (
+    ("guest_ram_mib", "Spiel-PC", "RAM (MiB)", int, (512, 3072), "Standard: 2048; mehr RAM beschleunigt die CPU nicht."),
+    ("guest_vcpus", "Spiel-PC", "Virtuelle CPUs", int, (1, 2), "Standard: 1; XP/Image-Kompatibilität bei Änderungen beachten."),
+    ("acceleration", "Spiel-PC", "Beschleunigung", str, ("whpx", "tcg"), "WHPX: Windows-Hypervisor; TCG: Software-Emulation, langsamer."),
+    ("qxl_vram_mib", "Spiel-PC", "QXL-Grafikspeicher je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; gilt für beide QXL-Geräte."),
+    ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
+    ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
+    ("sound_enabled", "Spiel-PC", "Ton auf dem PC ausgeben", bool, (), "AC97/WinMM über SDL, ohne Mikrofonaufnahme; aus schaltet nur die Host-Ausgabe stumm. Die virtuelle Soundkarte bleibt aktiv."),
+    ("db_icount_shift", "Datenbank", "Instruktionstakt (icount shift)", int, (6, 5), "6: max. 15,625 Mio./s; 5: 31,25 Mio./s, bekannte Absturzgefahr. Nicht zyklengenau."),
+    ("safe_tb", "Datenbank", "Stabiler Einzelinstruktionsmodus", bool, (), "Empfohlen: an. Aus nutzt größere TCG-Blöcke; bekannte Interrupt-Abstürze möglich."),
+    ("db_timer_interval", "Datenbank", "CPU-Laufabschnitt (Sekunden)", float, (0.005, 0.05), "Standard: 0.05; kleinere Abschnitte erhöhen den Debugger-Aufwand. Kein Hardware-Timer-Preset."),
+    ("duart_x1_hz", "Datenbank", "DUART-Eingangstakt (Hz)", int, (1, 10000000), "Standard: 3686400 (angenommen); nicht der 16-MHz-CPU-Takt. Änderung beeinflusst Timer."),
+    ("db_connect_timeout", "Datenbank", "Verbindungs-Wartezeit (Sekunden)", float, (10, 600), "Standard: 120; Zeitlimit für die Verbindung zum Spiel-PC."),
+    ("database_date", "Datenbank", "Startdatum/Uhrzeit (Programmer und RTC)", str, (), "Format: 2012-02-01T22:14:00; M90 erwartet normalerweise Jahr 2012. RTC läuft danach weiter."),
+    ("door_open", "Datenbank", "Tür beim Start offen", bool, (), "Standard: geschlossen; kann den Servicebetrieb auslösen."),
+    ("trace_diagnostics", "Protokoll und Bedienung", "Zusätzliche Diagnose-Watchpoints", bool, (), "Standard: aus; kann die Datenbank deutlich verlangsamen."),
+    ("show_live_log", "Protokoll und Bedienung", "Live-Protokoll öffnen", bool, (), "Die Logdatei wird auch ohne sichtbares Fenster geschrieben."),
+    ("show_control_window", "Protokoll und Bedienung", "Bedienfenster öffnen", bool, (), "Automatentasten, Tür und Touch-Vorschau anzeigen."),
+)
+
+
+def validate_emulation(selection: Selection) -> list[str]:
+    issues = []
+    for key, _group, label, kind, limits, _help in EMULATION_FIELDS:
+        value = getattr(selection, key)
+        if kind is bool:
+            valid = type(value) is bool
+        elif kind in (int, float):
+            valid = type(value) in ((int,) if kind is int else (int, float))
+            if valid:
+                valid = (value in limits if key in ("qxl_vram_mib", "db_icount_shift")
+                         else limits[0] <= value <= limits[1])
+                valid = valid and math.isfinite(value)
+        elif key == "database_date":
+            try:
+                date = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
+                valid = 2000 <= date.year <= 2099 and date.strftime("%Y-%m-%dT%H:%M:%S") == value
+            except (ValueError, TypeError):
+                valid = False
+        else:
+            valid = isinstance(value, str) and value in limits
+        if not valid:
+            issues.append(f"{label}: ungültiger Wert ({value!r})")
+    if not issues and math.ceil(selection.db_timer_interval * selection.duart_x1_hz / (32 * 0x3A)) > 128:
+        issues.append("DUART-Takt und CPU-Laufabschnitt überschreiten das Timer-Budget (128 Interrupts). Laufabschnitt verkleinern.")
+    return issues
 
 
 @dataclass(frozen=True)
@@ -40,6 +91,21 @@ class Selection:
     python: str = ""
     show_live_log: bool = False
     swap_displays: bool = False
+    sound_enabled: bool = True
+    guest_ram_mib: int = 2048
+    guest_vcpus: int = 1
+    acceleration: str = "whpx"
+    qxl_vram_mib: int = 64
+    usb_tablet: bool = False
+    db_icount_shift: int = 6
+    safe_tb: bool = True
+    db_timer_interval: float = 0.05
+    duart_x1_hz: int = 3686400
+    db_connect_timeout: float = 120.0
+    database_date: str = "2012-02-01T22:14:00"
+    door_open: bool = False
+    trace_diagnostics: bool = False
+    show_control_window: bool = True
 
     @classmethod
     def from_json(cls, path: Path) -> Selection:
@@ -47,9 +113,18 @@ class Selection:
             return cls()
         data = json.loads(path.read_text(encoding="utf-8"))
         allowed = set(cls.__dataclass_fields__)
-        return cls(**{key: value for key, value in data.items() if key in allowed})
+        if not isinstance(data, dict):
+            raise ValueError("Einstellungen müssen ein JSON-Objekt sein")
+        result = cls(**{key: value for key, value in data.items() if key in allowed})
+        issues = validate_emulation(result)
+        if issues:
+            raise ValueError("\n".join(issues))
+        return result
 
     def save(self, path: Path) -> None:
+        issues = validate_emulation(self)
+        if issues:
+            raise ValueError("\n".join(issues))
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
@@ -66,7 +141,7 @@ def file_sha256(path: Path) -> str:
 
 def validate_selection(selection: Selection) -> list[str]:
     """Return actionable failures; never modify selected files."""
-    issues: list[str] = []
+    issues: list[str] = validate_emulation(selection)
     paths = {
         "CF-Image": selection.image,
         "Datenbank": selection.database,
@@ -153,6 +228,9 @@ def check_runtime(selection: Selection) -> list[str]:
 
 def launch_command(selection: Selection, project: Path) -> list[str]:
     """Build a no-shell command; each user path remains one argument."""
+    issues = validate_emulation(selection)
+    if issues:
+        raise ValueError("\n".join(issues))
     command = [
         "powershell.exe", "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
         "-File", str(project / "program-and-start-emulator.ps1"),
@@ -165,8 +243,28 @@ def launch_command(selection: Selection, project: Path) -> list[str]:
         "-FactoryReset", selection.factory,
         "-Config", selection.config,
         "-AdmissionEeprom", selection.admission_eeprom,
-        "-DbIcountShift", "6",
+        "-GuestRamMiB", str(selection.guest_ram_mib),
+        "-GuestVcpus", str(selection.guest_vcpus),
+        "-Acceleration", selection.acceleration,
+        "-QxlVramMiB", str(selection.qxl_vram_mib),
+        "-DbIcountShift", str(selection.db_icount_shift),
+        "-DbTimerInterval", str(selection.db_timer_interval),
+        "-DuartX1Hz", str(selection.duart_x1_hz),
+        "-DbConnectTimeout", str(selection.db_connect_timeout),
+        "-DatabaseDate", selection.database_date,
     ]
+    if not selection.safe_tb:
+        command.append("-FastTb")
+    if selection.usb_tablet:
+        command.append("-UsbTablet")
+    if selection.door_open:
+        command.append("-DoorOpen")
+    if selection.trace_diagnostics:
+        command.append("-TraceDiagnostics")
+    if not selection.show_control_window:
+        command.append("-NoControlWindow")
+    if not selection.sound_enabled:
+        command.append("-MuteAudio")
     if not selection.show_live_log:
         command.append("-NoEventWindow")
     if selection.swap_displays:

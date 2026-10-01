@@ -30,8 +30,29 @@ class ImageSetupTests(unittest.TestCase):
         self.assertIn("--verify", command)
         devices = qemu_command(Path("qemu.exe"), Path(selection.image), 4554, 4446,
                                swap_displays=True)
-        self.assertIn("qxl-vga,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480", devices)
-        self.assertIn("qxl,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480", devices)
+        self.assertIn("qxl-vga,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480", devices)
+        self.assertIn("qxl,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480", devices)
+
+    def test_standard_secondary_is_the_lower_game_display(self) -> None:
+        command = qemu_command(Path("qemu.exe"), Path("working.img"), 4554, 4446)
+        self.assertIn("qxl-vga,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480", command)
+        self.assertIn("qxl,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480", command)
+
+    def test_graphics_update_guards_original_and_keeps_space_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            original = Path(folder) / "original copy.img"
+            original.write_bytes(b"source")
+            selection = Selection(original_image=str(original), image="working copy.img")
+            with mock.patch.object(image_setup, "wsl_path", side_effect=lambda p: "/folder with spaces/" + p.name):
+                command = image_setup.graphics_update_command(selection, PROJECT)
+                self.assertIn("/folder with spaces/working copy.img", command)
+                self.assertIn("/folder with spaces/original copy.img", command)
+                self.assertEqual(command[:5], ["wsl.exe", "--user", "root", "--exec", "bash"])
+                with self.assertRaisesRegex(ValueError, "verschieden"):
+                    image_setup.graphics_update_command(
+                        Selection(original_image=str(original), image=str(original)), PROJECT)
+        with self.assertRaisesRegex(ValueError, "Original-CF-Image"):
+            image_setup.graphics_update_command(Selection(image="working.img"), PROJECT)
 
     def test_wsl_path_bypasses_shell_and_preserves_spaces(self) -> None:
         path = PROJECT / "folder with spaces" / "working image.img"

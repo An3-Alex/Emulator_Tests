@@ -29,12 +29,16 @@ verify_hash() {
 [[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || {
   echo 'working image missing or wrong size' >&2; exit 3;
 }
-verify_hash "$bootstrap" ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6
+verify_hash "$bootstrap" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
 loop_device=$(losetup --find --show --read-only --offset 1048576 \
   --sizelimit 16021151744 "$image")
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
-verify_hash "$mount_dir/WINDOWS/explorer.exe" aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789
+verifier_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
+[[ "$verifier_hash" == 7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145 ||
+   "$verifier_hash" == aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789 ]] || {
+  echo 'unexpected active display verifier' >&2; exit 3;
+}
 verify_hash "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe" d5dd84e59c59a24af4f1dfdd486882bfc6fa777e0dcc22fa3ae7314999ab3aeb
 [[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-verify' ]] || {
   echo 'image has not completed the QXL display verification boot' >&2; exit 3;
@@ -76,5 +80,5 @@ cp "$bootstrap" "$mount_dir/WINDOWS/explorer.exe.new"
 mv "$mount_dir/WINDOWS/explorer.exe.new" "$mount_dir/WINDOWS/explorer.exe"
 printf 'stage=ready\n' > "$mount_dir/NVRAM/m90_setup_stage.txt"
 sync
-verify_hash "$mount_dir/WINDOWS/explorer.exe" ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6
+verify_hash "$mount_dir/WINDOWS/explorer.exe" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
 echo "Prepared image ready: $image"

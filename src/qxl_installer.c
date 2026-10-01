@@ -17,6 +17,18 @@
 #ifndef INSTALLER_LOG_PATH
 #define INSTALLER_LOG_PATH "C:\\NVRAM\\qxl_install.log"
 #endif
+#ifndef INSTALLER_EXPECTED_DEVICES
+#define INSTALLER_EXPECTED_DEVICES 2
+#endif
+#ifndef INSTALLER_OK_SIGNAL
+#define INSTALLER_OK_SIGNAL "M90-QXL-SETUP-OK\n"
+#endif
+#ifndef INSTALLER_FAILED_SIGNAL
+#define INSTALLER_FAILED_SIGNAL "M90-QXL-SETUP-FAILED\n"
+#endif
+#ifndef INSTALLER_REBOOT
+#define INSTALLER_REBOOT 1
+#endif
 
 typedef BOOL (WINAPI *PFN_SETUP_COPY_OEM_INF_A)(PCSTR, PCSTR, DWORD, DWORD, PSTR, DWORD, PDWORD, PSTR *);
 typedef HDEVINFO (WINAPI *PFN_SETUP_DI_GET_CLASS_DEVS_A)(const GUID *, PCSTR, HWND, DWORD);
@@ -102,8 +114,8 @@ static void write_hex(DWORD value) {
 }
 
 static void signal_host(BOOL success) {
-    static const char ok[] = "M90-QXL-SETUP-OK\n";
-    static const char failed[] = "M90-QXL-SETUP-FAILED\n";
+    static const char ok[] = INSTALLER_OK_SIGNAL;
+    static const char failed[] = INSTALLER_FAILED_SIGNAL;
     const char *message = success ? ok : failed;
     HANDLE serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL,
         OPEN_EXISTING, 0, NULL);
@@ -195,6 +207,14 @@ void __stdcall mainCRTStartup(void) {
     g_log = CreateFileA(INSTALLER_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ,
         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     write_text(INSTALLER_TITLE);
+#ifdef INSTALLER_PREPARE
+    if (!INSTALLER_PREPARE()) {
+        write_text("Required audio software device setup failed.\r\n");
+        signal_host(FALSE);
+        Sleep(120000);
+        ExitProcess(14);
+    }
+#endif
     signing_thread = CreateThread(NULL, 0, signing_helper, NULL, 0, NULL);
     if (signing_thread == NULL) {
         write_text("Could not start signing-dialog helper: "); write_hex(GetLastError());
@@ -287,6 +307,19 @@ void __stdcall mainCRTStartup(void) {
             destroy_drivers(devices, &device, SPDIT_COMPATDRIVER);
             continue;
         }
+#ifdef INSTALLER_REGISTER_INTERFACES
+        ok = call_installer(DIF_REGISTER_COINSTALLERS, devices, &device);
+        write_text("DIF_REGISTERCOINSTALLERS result: "); write_hex((DWORD)ok);
+        if (ok) {
+            ok = call_installer(DIF_INSTALLINTERFACES, devices, &device);
+            write_text("DIF_INSTALLINTERFACES result: "); write_hex((DWORD)ok);
+        }
+        if (!ok) {
+            write_text("Interface registration failed: "); write_hex(GetLastError());
+            destroy_drivers(devices, &device, SPDIT_COMPATDRIVER);
+            continue;
+        }
+#endif
         SetLastError(ERROR_SUCCESS);
         ok = call_installer(DIF_INSTALLDEVICE, devices, &device);
         write_text("DIF_INSTALLDEVICE result: "); write_hex((DWORD)ok);
@@ -302,17 +335,19 @@ void __stdcall mainCRTStartup(void) {
     }
     write_text("Matched devices: "); write_hex(matches);
     write_text("Installed devices: "); write_hex(installed);
-    if (matches == 2 && installed == 2) {
-        write_text("Installer complete; requesting guest reboot.\r\n");
+    if (matches == INSTALLER_EXPECTED_DEVICES && installed == INSTALLER_EXPECTED_DEVICES) {
+        write_text("Installer complete.\r\n");
         signal_host(TRUE);
+#if INSTALLER_REBOOT
         Sleep(1000);
         if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCEIFHUNG, 0)) {
             write_text("ExitWindowsEx failed: "); write_hex(GetLastError());
         }
+#endif
     } else {
         write_text("Installer incomplete.\r\n");
         signal_host(FALSE);
     }
     Sleep(120000);
-    ExitProcess(matches == 2 && installed == 2 ? 0 : 13);
+    ExitProcess(matches == INSTALLER_EXPECTED_DEVICES && installed == INSTALLER_EXPECTED_DEVICES ? 0 : 13);
 }

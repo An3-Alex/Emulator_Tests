@@ -19,7 +19,7 @@ VERIFY_FAILED = b"M90-QXL-VERIFY-FAILED\n"
 
 
 def qemu_command(qemu: Path, image: Path, serial_port: int, qmp_port: int, *, swap_displays: bool = False) -> list[str]:
-    primary, secondary = ("upper", "lower") if swap_displays else ("lower", "upper")
+    primary, secondary = ("lower", "upper") if swap_displays else ("upper", "lower")
     return [
         str(qemu), "-accel", "whpx", "-machine", "pc",
         "-cpu", "qemu32,+sse2,model-id=Intel(R) Celeron(R) M CPU 440 @ 1.86GHz",

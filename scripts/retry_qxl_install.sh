@@ -4,6 +4,15 @@ set -euo pipefail
 [[ $# -eq 2 ]] || { echo 'usage: retry_qxl_install.sh WORKING_IMAGE QXL_INSTALLER' >&2; exit 2; }
 image=$1
 installer=$2
+
+# Both shipped display verifiers may remain in an interrupted working copy.
+is_known_display_verifier() {
+  case "$1" in
+    7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145|\
+    aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 mount_dir=$(mktemp -d /tmp/m90-qxl-retry.XXXXXX)
 loop_device=
 mounted=0
@@ -13,16 +22,24 @@ cleanup() {
   rmdir "$mount_dir"
 }
 trap cleanup EXIT
-[[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || exit 3
+[[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || {
+  echo 'QXL retry: working image missing or wrong size' >&2; exit 3;
+}
 [[ -f "$installer" && $(sha256sum "$installer" | cut -d' ' -f1) == \
-  0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ]] || exit 3
+  0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ]] || {
+  echo 'QXL retry: installer missing or unrecognized' >&2; exit 3;
+}
 loop_device=$(losetup --find --show --read-only --offset 1048576 \
   --sizelimit 16021151744 "$image")
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
-[[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-verify' ]] || exit 3
-[[ $(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1) == \
-  aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789 ]] || exit 3
+[[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-verify' ]] || {
+  echo 'QXL retry: working image is not in qxl-verify stage' >&2; exit 3;
+}
+verifier_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
+is_known_display_verifier "$verifier_hash" || {
+  echo "QXL retry: unrecognized active display verifier ($verifier_hash)" >&2; exit 3;
+}
 umount "$mount_dir"
 mounted=0
 losetup -d "$loop_device"

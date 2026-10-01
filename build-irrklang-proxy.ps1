@@ -17,7 +17,7 @@ $compile = 'cl /nologo /c /Brepro /TP /O1 /GS- /Zl /W4 /D_WIN32_WINNT=0x0501 /DW
            '/Fo"' + $obj + '" "' + $src + '"'
 $link = 'link /nologo /Brepro /DLL /MACHINE:X86 /SUBSYSTEM:WINDOWS,5.01 /OSVERSION:5.1 ' +
         '/NODEFAULTLIB /ENTRY:DllMain /OUT:"' + $dll + '" ' +
-        '/MAP:"' + $map + '" "' + $obj + '" kernel32.lib'
+        '/MAP:"' + $map + '" "' + $obj + '" kernel32.lib winmm.lib'
 $command = '"' + $devcmd + '" -no_logo -arch=x86 -host_arch=x64 && ' +
            $compile + ' && ' + $link
 & $env:ComSpec /d /s /c $command

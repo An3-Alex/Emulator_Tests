@@ -15,11 +15,45 @@ Service-Taste sowie der Türschalter sind im Bedienfenster erreichbar. Das
 Ereignisprotokoll lässt sich beim Start optional öffnen.
 
 Der Spielstart kann mehrere Minuten dauern. Eine Spielgeld-Gutschrift ist
-derzeit nicht verfügbar; Ton, Auszahlungsgeräte und der obere Bildschirm sind
+derzeit nicht verfügbar; Auszahlungsgeräte und der obere Bildschirm sind
 noch nicht vollständig nachgebildet.
+Ton wird über eine virtuelle AC’97-Soundkarte und einen passenden SigmaTel-
+XP-Treiber angebunden. Wie beim einzelnen Lautsprecher im Original wird der
+Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
 
 ## Änderungen
 
+- 0.1.10: Automatische SigmaTel-Audioeinrichtung in der Arbeitskopie mit
+  Sicherung des bisherigen Starters und der Registry. Der abstürzende Realtek-
+  Treiber wird deaktiviert; XP registriert den passenden Audioausgang vor dem
+  Spielstart. Die Hostausgabe verwendet einen Monokanal.
+- 0.1.9: Host-Ton verwendet SDL ohne Aufnahme statt DirectSound. Fehlende
+  Mikrofon-/Aufnahmegeräte verhindern dadurch nicht mehr den QEMU-Start.
+  Sofortige Startabbrüche erscheinen mit QEMUs konkreter Fehlermeldung;
+  Datenbank und Bedienfenster werden dann nicht zusätzlich gestartet.
+- 0.1.8: Sound verwendet AC’97 und WinMM statt des Null-Treibers, damit das
+  Spiel echte Soundobjekte erhält. Die Audio-Anbindung wartet bei der ersten
+  Geräteerkennung bis zu zwei Minuten auf eine XP-Audioausgabe und schreibt
+  den Zustand ins Audio-Protokoll. Bestehende Arbeitskopien erhalten die neue
+  Audio-DLL beim nächsten Start mit Sicherung der bisherigen Version.
+  „Ton auf dem PC ausgeben“ schaltet nur die Host-Ausgabe um; die virtuelle
+  Soundkarte bleibt auch im stummen Betrieb aktiv.
+- 0.1.7: Neuer Tab „Emulationseinstellungen“ für Spiel-PC und Datenbank:
+  RAM, virtuelle CPUs, WHPX/TCG, QXL-Speicher, Maus und Anzeigezuordnung,
+  Instruktionslimit, TCG-Modus, Laufabschnitte, DUART-Takt, RTC-Startdatum,
+  Verbindungswartezeit, Türzustand sowie Protokoll- und Bedienfenster.
+  Werte werden geprüft und bleiben gespeichert; Standardwerte lassen sich
+  ohne Änderung der Dateipfade wiederherstellen.
+- 0.1.6: Die QXL-Wiederholung akzeptiert die aktuelle und die vorherige
+  Anzeigeprüfung. Unterbrochene Einrichtungen lassen sich mit derselben
+  Arbeitskopie fortsetzen. Fehlermeldungen zeigen zusätzlich die konkrete
+  Ursache des fehlgeschlagenen Vorbereitungsschritts.
+- 0.1.5: Der Datenbank-Timer folgt Preset und Interruptvektor der CC4-Firmware
+  statt eines fest angenommenen 10-ms-Taktes. Beide Monitor-Ausgaben werden
+  unabhängig vom gemeinsamen Software-Renderer zugeordnet; diese Zuordnung
+  bleibt auch bei erneuter Video-Initialisierung erhalten. Windows richtet
+  beide Anzeigen auf 32-Bit-Farbe ein. Der Starter aktualisiert eigene
+  Grafikdateien in bestehenden Arbeitskopien mit Sicherung der vorherigen Dateien.
 - 0.1.4: Die Bildschirmzuordnung lässt sich im Starter dauerhaft tauschen.
   Spielmenü und Touch-Vorschau verwenden dabei denselben unteren Ausgang.
   Touch erzeugt keine künstlichen Mehrfach-Downs oder verlängerten Klicks mehr:
@@ -53,10 +87,22 @@ Der Starter prüft die
 Dateien, kopiert das Image, installiert QXL automatisch in einem temporären
 Windows-Gast und gibt die Kopie erst frei, wenn Windows beide Anzeigen wirklich
 erkennt. Bei Bedarf wird die Treiberinstallation einmal wiederholt. Das
+passende Audio-Treiberpaket wird einmalig von Dell geladen und danach in der
+Arbeitskopie eingerichtet; hierfür wird Internetzugang benötigt. Das
 Original bleibt unverändert. Ein unterbrochener Treiberlauf kann mit derselben
 Arbeitskopie fortgesetzt werden. Erst danach „Emulator starten“ wählen. Der
 Haken „Live-Protokoll“ öffnet optional das Ereignisfenster; die Logdatei wird
 auch ohne Haken geschrieben.
+
+Im Tab „Emulationseinstellungen“ Optionen ändern und „Einstellungen speichern“
+wählen. Änderungen gelten ab dem nächsten Start; der temporäre Gast zur
+Image-Einrichtung verwendet weiterhin seine festen Einstellungen. Dateipfade
+und Optionen liegen unter `%APPDATA%\M90 Emulator\settings.json`.
+Empfohlen bleiben 2048 MiB, eine CPU, WHPX, icount shift 6 und der stabile
+Einzelinstruktionsmodus. Shift 5 und größere TCG-Blöcke können die bekannten
+Interrupt-Abstürze auslösen; Diagnose-Watchpoints können erheblich bremsen.
+„Emulations-Standardwerte“ setzt nur Optionen zurück, nicht die ausgewählten
+Dateien. Board-Adressen, lokale Schnittstellen und Firmware-SRAM bleiben fest.
 
 Benötigt werden Windows 10/11, Python 3.10+, QEMU (x86 und m68k), WSL/Ubuntu
 mit `ntfs-3g` und `python3-hivex` sowie genug Platz für die etwa 16-GB-Kopie.
@@ -65,11 +111,13 @@ Ubuntu-Ersteinrichtung oder ein Windows-Neustart kann einmalig nötig sein.
 QEMU schreibt beim Spielen nur in die gewählte Arbeitskopie.
 Der QEMU-Reiter `lower` ist der untere Bildschirm des echten Automaten;
 `upper` ist der obere.
-Erscheint das Spielmenü nach „Start Game Process“ unter `upper` und bleibt die
-Touch-Vorschau schwarz, vor dem nächsten Start „Bildschirme tauschen“ aktivieren.
-Die Auswahl wird gespeichert; eine erneute Image-Einrichtung ist nicht nötig.
-Die Gerätenamen bleiben beim Gast-Neustart erhalten. Der Bootbildschirm kann
-auf dem anderen Ausgang liegen als das spätere Spielmenü.
+Standardmäßig ist die primäre Windows-Anzeige `upper`, die zweite Anzeige mit
+dem Spielmenü und der Touch-Vorschau `lower`. „Bildschirme tauschen“ ist für
+abweichende Images gedacht. Wurde der Haken früher als Behelf gesetzt, zunächst
+deaktivieren. Der Bootbildschirm kann auf dem anderen Ausgang liegen als das
+spätere Spielmenü. Vor einem Grafik-Update müssen alle QEMU-Instanzen geschlossen
+sein. Die ersetzten Dateien liegen in der Arbeitskopie unter
+`NVRAM/m90-graphics-backups`; das Original wird dafür nicht eingehängt.
 
 ## Private Daten und Updates
 
@@ -86,6 +134,8 @@ Grafik-/Treiberdateien werden nicht eingebettet.
 
 Die Datenbank ist kein bloßer Antwort-Stub: der Motorola-68k-Code läuft in
 QEMU; die Host-Brücke bildet die serielle Verbindung und das Board-I/O nach.
+Der DUART-Timer verwendet zunächst einen konfigurierbaren Eingangstakt von
+3,6864 MHz; der tatsächliche Quarz der Originalplatine ist noch nicht bestätigt.
 Die virtuelle Uhr wird für das M90-Setup auf 2012 gesetzt. Details zur
 [Image-Einrichtung](docs/image-preparation.md) stehen in der Dokumentation; ältere,
 teilweise überholte Notizen liegen in

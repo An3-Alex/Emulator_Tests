@@ -10,13 +10,15 @@ from portable_launcher_model import KNOWN_CF_BYTES, Selection, file_sha256
 
 
 COMPONENTS = {
+    "audio_installer": ("build/audio-installer.exe", "cf721386f3fb40ae5364c2a09ad2b2977835db70e84381739dd3e96fea8e58e4"),
+    "audio_verify": ("build/audio-verify.exe", "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"),
     "shim": ("build/Cgos.dll", "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"),
-    "bootstrap": ("build/display-bootstrap.exe", "ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6"),
+    "bootstrap": ("build/display-bootstrap.exe", "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"),
     "qxl_installer": ("build/qxl-installer.exe", "0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296"),
-    "display_verify": ("build/display-verify.exe", "aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789"),
-    "d3d9": ("build/d3d9-proxy/d3d9.dll", "31d2d484d4821ef34dd764e68a66338ed638926c66b73b14078d360713f4987f"),
+    "display_verify": ("build/display-verify.exe", "7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145"),
+    "d3d9": ("build/d3d9-proxy/d3d9.dll", "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737"),
     "fbwf": ("build/sram-compat/FBWFLIB.dll", "4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94"),
-    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "0e811b9ddeedb53d9494e5ac3ca871743ad51a0c9ecf654cf76102a9af83b10d"),
+    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "8efc687d626c56fa995e084fa462a187446d238f871abab6c622b13a9bbbd7c8"),
 }
 QXL_HASHES = {
     "qxl.inf": "2c2ce985936c87406313d68ba54b1c36f42aec97ee357d894e3238aecda776fa",
@@ -152,6 +154,28 @@ def stage_command(selection: Selection, project: Path) -> list[str]:
 def stage_check_command(image: Path, project: Path) -> list[str]:
     return ["wsl.exe", "--user", "root", "--exec", "bash",
             wsl_path(project / "scripts/check_image_stage.sh"), wsl_path(image)]
+
+
+def graphics_update_command(selection: Selection, project: Path) -> list[str]:
+    if not selection.original_image or not Path(selection.original_image).is_file():
+        raise ValueError("Original-CF-Image auswählen, damit das Laufzeit-Update nur die Arbeitskopie ändert")
+    if Path(selection.original_image).resolve() == Path(selection.image).resolve():
+        raise ValueError("Original und Arbeitskopie müssen verschieden sein")
+    if Path(selection.image).exists() and Path(selection.original_image).samefile(selection.image):
+        raise ValueError("Original und Arbeitskopie müssen verschieden sein (derselbe Dateiknoten)")
+    paths = [project / "scripts/update_runtime_graphics.sh",
+             Path(selection.original_image), Path(selection.image),
+             project / COMPONENTS["bootstrap"][0], project / COMPONENTS["d3d9"][0],
+             project / COMPONENTS["irrklang"][0]]
+    return ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
+
+
+def audio_setup_command(selection: Selection, project: Path) -> list[str]:
+    if not selection.original_image:
+        raise ValueError("Original-CF-Image für die sichere Audiovorbereitung auswählen")
+    return [selection.python, str(project / "scripts/audio_setup_runner.py"),
+            "--original", selection.original_image, "--image", selection.image,
+            "--qemu", selection.qemu_x86, "--project", str(project)]
 
 
 def finalize_command(image: Path, project: Path) -> list[str]:

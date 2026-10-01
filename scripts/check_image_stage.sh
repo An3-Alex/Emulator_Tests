@@ -38,11 +38,18 @@ if [[ -f "$marker" ]]; then
 else
   cgos="$mount_dir/WINDOWS/system32/Cgos.dll"
   shell="$mount_dir/WINDOWS/explorer.exe"
+  if [[ -f "$mount_dir/NVRAM/m90_audio_stage.json" ]]; then
+    # Legacy working copies have no display preparation marker. During the
+    # reversible audio installation their shell is temporarily our helper.
+    audio_stage=$(python3 -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from audio_image_stage import status; print(status(Path(sys.argv[2])))' "$(dirname "$0")" "$mount_dir")
+    case "$audio_stage" in staging|install|verify|ready) echo legacy-ready; exit 0;; *) exit 3;; esac
+  fi
   if [[ -f "$cgos" && -f "$shell" ]]; then
     cgos_hash=$(sha256sum "$cgos" | cut -d' ' -f1)
     shell_hash=$(sha256sum "$shell" | cut -d' ' -f1)
     if [[ "$cgos_hash" == 16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51 && \
-          "$shell_hash" == ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6 ]]; then
+          ( "$shell_hash" == ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6 ||
+            "$shell_hash" == fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea ) ]]; then
       echo legacy-ready
     else
       echo unprepared

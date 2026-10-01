@@ -10,6 +10,7 @@ replay recorded game commands.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import math
 import queue
@@ -37,6 +38,7 @@ from owner_config_runtime import CONFIG_CLEAR_START, prepare_config_writes
 from owner_database_runtime import prepare_runtime
 from rtc4543 import DATA as RTC_DATA, DEFAULT_TIME as RTC_DEFAULT_TIME, Rtc4543
 from admission_card import ERGO_M90_ID, inspect_eeprom
+from duart_timer import DEFAULT_X1_HZ, MAX_BATCH_TICKS, DuartTimerConfig, DuartTimerBudget
 
 
 class Com3Disconnected(ConnectionError):
@@ -227,7 +229,7 @@ RETURN_BUTTON_EVENT = 0x001E2526
 RETURN_BUTTON_MASK = 0x10
 RUNTIME_IO_INIT_RETURN_PC = 0x00018482
 # Vector 64 is the original board-timer interrupt.  Its handler acknowledges
-# bit 3 at 0x80018B and calls the 10 ms service routine at 0x74CF2, which in
+# bit 3 at 0x80018B and calls the base timer service at 0x74CF2, which in
 # turn advances the command state machine at 0x6D120.  Vector 134 only services
 # the UART and cannot advance database start-up on its own.
 BOARD_TIMER_VECTOR = 64
@@ -692,8 +694,12 @@ INITVIDEO_SELECTED_TIME = bytes.fromhex("DC 07 02 01 16 0E")
 INITVIDEO_DEVICE_FIELDS = bytes.fromhex("01 00 02 FF")
 MAX_LOADER_SIZE = 1024 * 1024
 MIN_TIMER_RUN_SLICE = 0.005
-BOARD_TIMER_PERIOD_SECONDS = 0.01
-MAX_BOARD_TIMER_TICKS_PER_CYCLE = 20
+BOARD_TIMER_PERIOD_SECONDS = DuartTimerConfig().period_seconds
+MAX_BOARD_TIMER_TICKS_PER_CYCLE = MAX_BATCH_TICKS
+DUART_TIMER_ACR = 0x00800189
+DUART_TIMER_CTUR = 0x0080018D
+DUART_TIMER_CTLR = 0x0080018F
+DUART_TIMER_IVR = 0x00800199
 # QEMU icount is instruction-based, not MC68331 cycle-accurate. The requested
 # 2x setting assigns 32 ns per guest instruction, capping execution at
 # 15,625,000 instructions/second. The faster shift=5 mode repeatedly made
@@ -727,11 +733,13 @@ def validate_timer_interval(run_slice: float) -> None:
         )
 
 
-def board_timer_ticks_per_cycle(run_slice: float) -> int:
-    """Count original 10 ms board ticks within one debugger run slice."""
+def board_timer_ticks_per_cycle(run_slice: float, config: DuartTimerConfig | None = None) -> int:
+    """Validate a bounded batch using the programmed DUART timer period."""
+    validate_timer_interval(run_slice)
+    period = (config or DuartTimerConfig()).period_seconds
     ticks = max(
         1,
-        round(run_slice / BOARD_TIMER_PERIOD_SECONDS),
+        round(run_slice / period),
     )
     if ticks > MAX_BOARD_TIMER_TICKS_PER_CYCLE:
         raise ValueError(
@@ -741,13 +749,23 @@ def board_timer_ticks_per_cycle(run_slice: float) -> int:
     return ticks
 
 
+def read_duart_timer_config(rsp: RspClient, x1_hz: int = DEFAULT_X1_HZ) -> DuartTimerConfig:
+    """Read firmware-written ACR, preset and IVR from the machine=none backing."""
+    registers = rsp.read_memory(DUART_TIMER_ACR, DUART_TIMER_IVR - DUART_TIMER_ACR + 1)
+    return DuartTimerConfig.from_registers(
+        registers[0], registers[DUART_TIMER_CTUR - DUART_TIMER_ACR],
+        registers[DUART_TIMER_CTLR - DUART_TIMER_ACR], registers[-1], x1_hz=x1_hz,
+    )
+
+
 def qemu_tcg_accelerator(fast_tb: bool) -> str:
     """Use normal translation blocks unless precise single-insn fallback is requested."""
     return "tcg" if fast_tb else "tcg,one-insn-per-tb=on"
 
 
 def nested_board_schedule(run_slice: float, ticks: int, elapsed: float) -> float:
-    """Let a blocked original ISR receive its next 10 ms board tick."""
+    """Let a blocked original ISR receive its next budgeted DUART tick."""
+    ticks = max(1, ticks)
     if elapsed >= run_slice:
         return run_slice / ticks
     return min(run_slice / ticks, run_slice - elapsed)
@@ -928,10 +946,12 @@ def board_interrupt_status(
     return value & 0xFF
 
 
-def board_service_target(scc_a_command: int, scc_a_status: int) -> tuple[int, int, int]:
-    """Choose the original timer or SCC-A TX-ready ISR, never an RX response."""
-    if scc_a_command and (scc_a_status & BOARD_SCC_A_TX_READY):
+def board_service_target(vector: int = BOARD_TIMER_VECTOR) -> tuple[int, int, int]:
+    """Select the actual firmware-programmed IVR, not a pending command byte."""
+    if vector == BOARD_SCC_A_VECTOR:
         return BOARD_SCC_A_VECTOR, BOARD_SCC_A_HANDLER, BOARD_SCC_A_RTE_PC
+    if vector != BOARD_TIMER_VECTOR:
+        raise ValueError(f"unsupported board interrupt vector: {vector}")
     return BOARD_TIMER_VECTOR, BOARD_TIMER_HANDLER, BOARD_TIMER_RTE_PC
 
 
@@ -1203,14 +1223,14 @@ def inject_touch_controller_response(rsp: RspClient, response: bytes) -> bool:
     return True
 
 
-def complete_initvideo_board_profile(frame: bytes) -> bytes:
+def complete_initvideo_board_profile(frame: bytes, when: dt.datetime = RTC_DEFAULT_TIME) -> bytes:
     """Complete only RTC/cabinet fields missing from QEMU machine=none."""
-    completed = bytearray(complete_initvideo_clock(frame))
+    completed = bytearray(complete_initvideo_clock(frame, when))
     completed[34:38] = INITVIDEO_DEVICE_FIELDS
     return bytes(completed)
 
 
-def complete_initvideo_clock(frame: bytes) -> bytes:
+def complete_initvideo_clock(frame: bytes, when: dt.datetime = RTC_DEFAULT_TIME) -> bytes:
     """Replace only the absent board RTC fields in an original INITVIDEO."""
     if (
         len(frame) != INITVIDEO_FRAME_LENGTH
@@ -1223,15 +1243,16 @@ def complete_initvideo_clock(frame: bytes) -> bytes:
     # The owner's display/profile bytes at 30..33 change after the auxiliary
     # board identifies itself. They are not RTC bytes and must pass through.
     completed = bytearray(frame)
-    completed[24:30] = INITVIDEO_SELECTED_TIME
+    completed[24:30] = when.year.to_bytes(2, "little") + bytes((when.month, when.day, when.hour, when.minute))
     return bytes(completed)
 
 
 class InitvideoClockForwarder:
-    """Hold only INITVIDEO frames so their RTC bytes can be sent as 2012."""
+    """Hold only INITVIDEO frames to complete their selected RTC date."""
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], dt.datetime] | None = None) -> None:
         self.buffer = bytearray()
+        self.clock = clock or (lambda: RTC_DEFAULT_TIME)
 
     def feed(self, value: bytes) -> tuple[bytes, bool]:
         if len(value) != 1:
@@ -1247,7 +1268,7 @@ class InitvideoClockForwarder:
             return unchanged, False
         if len(self.buffer) < INITVIDEO_FRAME_LENGTH:
             return b"", False
-        completed = complete_initvideo_clock(bytes(self.buffer))
+        completed = complete_initvideo_clock(bytes(self.buffer), self.clock())
         self.buffer.clear()
         return completed, True
 
@@ -1504,6 +1525,9 @@ def run_bridge(args: argparse.Namespace) -> int:
             flush=True,
         )
     timer_ticks_per_cycle = board_timer_ticks_per_cycle(args.timer_interval)
+    timer_config = DuartTimerConfig(x1_hz=args.duart_x1_hz)
+    timer_budget = DuartTimerBudget(timer_config)
+    timer_target = board_service_target(timer_config.vector)
     door_closed = not args.door_open
     loader = args.loader.read_bytes()
     if len(loader) > MAX_LOADER_SIZE:
@@ -1618,7 +1642,8 @@ def run_bridge(args: argparse.Namespace) -> int:
             first_frame_started_at = None
             first_frame_reported = False
             wire_frame = bytearray()
-            initvideo_clock_forwarder = InitvideoClockForwarder()
+            rtc = Rtc4543(getattr(args, "rtc_date", RTC_DEFAULT_TIME))
+            initvideo_clock_forwarder = InitvideoClockForwarder(rtc.now)
             touch_click_forwarder = TouchClickForwarder()
             last_touch_point: tuple[int, int] | None = None
             last_wire_tx_at = 0.0
@@ -1654,7 +1679,6 @@ def run_bridge(args: argparse.Namespace) -> int:
             hopper_idle_reported = False
             return_button_released_reported = False
             uart_return_pc = None
-            rtc = Rtc4543()
             coin_validator = VirtualCoinValidator()
             mp_error_snapshot_reported = False
             rtc_reads_reported = 0
@@ -2044,10 +2068,10 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 ]),
                             )
                             interrupted_pc, _ = inject_interrupt(
-                                rsp, BOARD_TIMER_VECTOR, BOARD_TIMER_HANDLER
+                                rsp, *timer_target[:2]
                             )
                             board_interrupt_stack.append(
-                                (interrupted_pc, BOARD_TIMER_RTE_PC)
+                                (interrupted_pc, timer_target[2])
                             )
                             timer_injections += 1
                             nested_timer_injections += 1
@@ -2177,13 +2201,14 @@ def run_bridge(args: argparse.Namespace) -> int:
                         idle_diagnostic_at = (
                             diagnostic_now + IDLE_DIAGNOSTIC_SECONDS
                         )
+                    timer_ticks_per_cycle = timer_budget.take_slice(args.timer_interval)
+                    if not timer_ticks_per_cycle:
+                        continue
                     board_timer_ticks_remaining = timer_ticks_per_cycle - 1
                     timer_status = rsp.read_memory(BOARD_TIMER_STATUS, 1)[0]
                     scc_a_command = rsp.read_memory(BOARD_SCC_A_COMMAND, 1)[0]
                     scc_a_status = rsp.read_memory(BOARD_SCC_CONTROL_A, 1)[0]
-                    board_vector, board_handler, board_rte = board_service_target(
-                        scc_a_command, scc_a_status
-                    )
+                    board_vector, board_handler, board_rte = timer_target
                     scc_a_active = board_vector == BOARD_SCC_A_VECTOR
                     scc_tx_active = bool(
                         rsp.read_memory(BOARD_SCC_STATE, 1)[0]
@@ -2206,7 +2231,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                     timer_injections += 1
                     if scc_a_active and not board_scc_a_irq_reported:
                         print(
-                            "DB_SCC_A_TX_SERVICE "
+                            "DB_DUART_ALTERNATE_TIMER "
                             f"command={scc_a_command:02X} "
                             f"vector={BOARD_SCC_A_VECTOR} "
                             f"pc={interrupted_pc:08X}",
@@ -2225,6 +2250,24 @@ def run_bridge(args: argparse.Namespace) -> int:
                     continue
 
                 kind, address = parse_stop_address(reply)
+                if kind == "watch" and address in (
+                    DUART_TIMER_ACR, DUART_TIMER_CTUR, DUART_TIMER_CTLR, DUART_TIMER_IVR,
+                ):
+                    changed_config = read_duart_timer_config(rsp, args.duart_x1_hz)
+                    board_timer_ticks_per_cycle(args.timer_interval, changed_config)
+                    if changed_config != timer_config:
+                        timer_config = changed_config
+                        timer_budget = DuartTimerBudget(timer_config)
+                        timer_target = board_service_target(timer_config.vector)
+                        board_timer_ticks_remaining = 0
+                        print(
+                            "DB_DUART_TIMER_RECONFIGURED "
+                            f"acr={timer_config.acr:02X} preset={timer_config.preset:04X} "
+                            f"vector={timer_config.vector} x1_hz={timer_config.x1_hz} "
+                            f"period_ms={timer_config.period_seconds * 1000:.6f}",
+                            flush=True,
+                        )
+                    continue
                 if kind == "watch" and address in (
                     MP_REQUIRED_TYPE_STATE, MP_DETECTED_TYPE_STATE
                 ):
@@ -2537,7 +2580,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             )
                             uart_return_pc = interrupted_pc
                         elif board_timer_ticks_remaining:
-                            # Deliver the remaining original 10 ms hardware
+                            # Deliver the remaining programmed DUART hardware
                             # ticks as a bounded batch under the icount cap.
                             timer_status = rsp.read_memory(
                                 BOARD_TIMER_STATUS, 1
@@ -2557,16 +2600,22 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 ]),
                             )
                             interrupted_pc, _ = inject_interrupt(
-                                rsp, BOARD_TIMER_VECTOR, BOARD_TIMER_HANDLER
+                                rsp, *timer_target[:2]
                             )
                             board_interrupt_stack.append(
-                                (interrupted_pc, BOARD_TIMER_RTE_PC)
+                                (interrupted_pc, timer_target[2])
                             )
                             board_timer_ticks_remaining -= 1
                             timer_injections += 1
                         continue
                     if pc == RUNTIME_IO_INIT_RETURN_PC:
                         set_watchpoint(rsp, 0, RUNTIME_IO_INIT_RETURN_PC, False)
+                        timer_config = read_duart_timer_config(rsp, args.duart_x1_hz)
+                        timer_ticks_per_cycle = board_timer_ticks_per_cycle(args.timer_interval, timer_config)
+                        timer_budget = DuartTimerBudget(timer_config)
+                        timer_target = board_service_target(timer_config.vector)
+                        for register in (DUART_TIMER_ACR, DUART_TIMER_CTUR, DUART_TIMER_CTLR, DUART_TIMER_IVR):
+                            set_watchpoint(rsp, 2, register, True)
                         vector_target = int.from_bytes(
                             rsp.read_memory(0x1100 + TIMER_VECTOR * 4, 4), "big"
                         )
@@ -2676,13 +2725,17 @@ def run_bridge(args: argparse.Namespace) -> int:
                             f"control={RTC_CONTROL_REGISTER:08X} "
                             f"port={RTC_PORT_REGISTER:08X} "
                             f"data_mask={RTC_DATA:02X} "
-                            f"initial={RTC_DEFAULT_TIME.isoformat()}",
+                            f"initial={args.rtc_date.isoformat()}",
                             flush=True,
                         )
                         print(
                             "DB_TIMER_ENABLED source=board-io "
                             f"run_ms={args.timer_interval * 1000:.3f} "
                             f"ticks_per_cycle={timer_ticks_per_cycle} "
+                            f"acr={timer_config.acr:02X} preset={timer_config.preset:04X} "
+                            f"vector={timer_config.vector} x1_hz={timer_config.x1_hz} "
+                            f"period_ms={timer_config.period_seconds * 1000:.6f} "
+                            "x1_source=configured-default-or-cli "
                             f"icount_shift={args.icount_shift} "
                             f"max_guest_ips={1_000_000_000 // (1 << args.icount_shift)}",
                             flush=True,
@@ -2738,7 +2791,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                                     time.monotonic() - first_frame_started_at
                                 ) * 1000.0
                                 completed_frame = complete_initvideo_board_profile(
-                                    bytes(first_frame)
+                                    bytes(first_frame), rtc.now()
                                 )
                                 wire_ms = send_serial_frame(
                                     com3, completed_frame
@@ -2812,7 +2865,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             )
                             print(
                                 "DB_INITVIDEO_CLOCK_COMPLETED "
-                                f"year=2012 data={outgoing.hex(' ').upper()}",
+                                f"time={rtc.now().isoformat()} data={outgoing.hex(' ').upper()}",
                                 flush=True,
                             )
                     last_uart_activity_at = time.monotonic()
@@ -3155,7 +3208,11 @@ def main() -> int:
     parser.add_argument("--com3-port", type=int, default=4553)
     parser.add_argument("--control-port", type=int, default=4554)
     parser.add_argument("--connect-timeout", type=float, default=120.0)
+    parser.add_argument("--rtc-date", type=dt.datetime.fromisoformat, default=RTC_DEFAULT_TIME,
+                        help="initial RTC calendar; default 2012-02-01T22:14:00")
     parser.add_argument("--timer-interval", type=float, default=0.05)
+    parser.add_argument("--duart-x1-hz", type=int, default=DEFAULT_X1_HZ,
+                        help="DUART crystal/input Hz, independent of MC68331 clock (default: 3686400)")
     parser.add_argument(
         "--icount-shift", type=int, choices=(5, 6),
         default=GUEST_ICOUNT_SHIFT,

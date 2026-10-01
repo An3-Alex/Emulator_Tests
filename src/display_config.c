@@ -195,6 +195,14 @@ void __stdcall mainCRTStartup(void) {
         if (have_mode && (device.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE)) {
             primary_width = mode.dmPelsWidth;
             primary_height = mode.dmPelsHeight;
+            /* The service UI assumes true-color surfaces on both outputs. */
+            mode.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+            mode.dmPosition.x = 0;
+            mode.dmPosition.y = 0;
+            mode.dmBitsPerPel = 32;
+            result = change_settings(device.DeviceName, &mode, NULL,
+                CDS_UPDATEREGISTRY | CDS_NORESET, NULL);
+            write_text("Primary true-color result: "); write_hex((DWORD)result);
             continue;
         }
         if ((device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) != 0) continue;

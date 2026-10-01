@@ -22,10 +22,13 @@ from tkinter import filedialog, messagebox, ttk
 
 from image_setup import (
     COMPONENTS, check_file, check_preparation, finalize_command, guest_setup_command,
+    graphics_update_command, audio_setup_command,
     retry_qxl_command, stage_display_verify_command,
     stage_check_command, stage_command,
 )
-from portable_launcher_model import Selection, check_runtime, launch_command
+from portable_launcher_model import (
+    EMULATION_FIELDS, Selection, check_runtime, launch_command, validate_emulation,
+)
 from runtime_bundle import (
     OWN_BINARIES, REQUIRED_PYTHON_FILES, SHELL_FILES, project_for_launcher,
 )
@@ -140,6 +143,13 @@ class Launcher(tk.Tk):
         }
         self.show_log = tk.BooleanVar(value=selection.show_live_log)
         self.swap_displays = tk.BooleanVar(value=selection.swap_displays)
+        self.emulation_variables = {
+            key: (self.show_log if key == "show_live_log" else
+                  self.swap_displays if key == "swap_displays" else
+                  tk.BooleanVar(value=getattr(selection, key)) if kind is bool else
+                  tk.StringVar(value=str(getattr(selection, key))))
+            for key, _group, _label, kind, _limits, _help in EMULATION_FIELDS
+        }
         self.prepared_copy = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
         self.prepare_timer = tk.StringVar(value="Image-Einrichtung: noch nicht gestartet")
@@ -152,7 +162,16 @@ class Launcher(tk.Tk):
         outer = ttk.Frame(self, padding=16)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="M90 Emulator", font=("Segoe UI", 19, "bold")).pack(anchor="w")
-        guide = ttk.LabelFrame(outer, text="Kurzanleitung", padding=(10, 6))
+        notebook = ttk.Notebook(outer)
+        notebook.pack(fill="both", expand=True, pady=(6, 0))
+        setup_tab = ttk.Frame(notebook, padding=8)
+        settings_tab = ttk.Frame(notebook, padding=8)
+        notebook.add(setup_tab, text="Einrichtung und Start")
+        notebook.add(settings_tab, text="Emulationseinstellungen")
+        self._build_emulation_settings(settings_tab)
+        # Keep the start actions and output visible below both tabs.
+        content = setup_tab
+        guide = ttk.LabelFrame(content, text="Kurzanleitung", padding=(10, 6))
         guide.pack(fill="x", pady=(4, 8))
         ttk.Label(
             guide,
@@ -165,12 +184,12 @@ class Launcher(tk.Tk):
             wraplength=870, justify="left",
         ).pack(anchor="w")
         ttk.Checkbutton(
-            outer,
+            content,
             text="Ich habe eine bereits vorbereitete Arbeitskopie gewählt (nicht das Original).",
             variable=self.prepared_copy,
         ).pack(anchor="w", pady=(0, 8))
 
-        picker = ttk.Frame(outer)
+        picker = ttk.Frame(content)
         picker.pack(fill="both", expand=True, pady=(0, 5))
         picker_canvas = tk.Canvas(picker, highlightthickness=0, borderwidth=0)
         picker_scroll = ttk.Scrollbar(picker, orient="vertical", command=picker_canvas.yview)
@@ -197,15 +216,7 @@ class Launcher(tk.Tk):
             )
         form.columnconfigure(1, weight=1)
 
-        ttk.Checkbutton(
-            outer, text="Live-Protokoll in einem eigenen Fenster anzeigen",
-            variable=self.show_log,
-        ).pack(anchor="w")
         controls = ttk.Frame(outer)
-        ttk.Checkbutton(
-            outer, text="Bildschirme tauschen (wenn das Spielmenü unter upper statt lower erscheint)",
-            variable=self.swap_displays,
-        ).pack(anchor="w")
         controls.pack(fill="x", pady=(12, 6))
         self.prepare_button = ttk.Button(
             controls, text="Frisches Image einrichten", command=self._prepare,
@@ -236,6 +247,65 @@ class Launcher(tk.Tk):
         self.output.configure(yscrollcommand=scroll.set)
         self.output.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+
+    def _build_emulation_settings(self, parent: ttk.Frame) -> None:
+        ttk.Label(parent, text="Änderungen gelten beim nächsten Emulatorstart, nicht für die Image-Einrichtung.",
+                  wraplength=840).pack(anchor="w", pady=(0, 4))
+        actions = ttk.Frame(parent)
+        actions.pack(fill="x", pady=(0, 6))
+        ttk.Button(actions, text="Einstellungen speichern", command=self._save_options).pack(side="left")
+        ttk.Button(actions, text="Emulations-Standardwerte", command=self._reset_options).pack(side="left", padx=8)
+        canvas = tk.Canvas(parent, highlightthickness=0)
+        scroll = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        form = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        groups = {}
+        rows = {}
+        for key, group, label, kind, limits, help_text in EMULATION_FIELDS:
+            if group not in groups:
+                frame = ttk.LabelFrame(form, text=group, padding=10)
+                frame.pack(fill="x", pady=(0, 8))
+                frame.columnconfigure(1, weight=1)
+                groups[group] = frame
+                rows[group] = 0
+            frame, row = groups[group], rows[group]
+            variable = self.emulation_variables[key]
+            if kind is bool:
+                ttk.Checkbutton(frame, text=label, variable=variable).grid(row=row, column=0, columnspan=2, sticky="w")
+            else:
+                ttk.Label(frame, text=label, width=38).grid(row=row, column=0, sticky="w")
+                if key in ("acceleration", "qxl_vram_mib", "db_icount_shift", "guest_vcpus"):
+                    widget = ttk.Combobox(frame, textvariable=variable, values=limits, state="readonly", width=23)
+                else:
+                    widget = ttk.Entry(frame, textvariable=variable, width=25)
+                widget.grid(row=row, column=1, sticky="w", padx=6)
+            ttk.Label(frame, text=help_text, wraplength=760, foreground="#555555").grid(
+                row=row + 1, column=0, columnspan=2, sticky="w", pady=(2, 9))
+            rows[group] += 2
+        ttk.Label(form, wraplength=790, text=(
+            "Fest verdrahtet: MC68331/CPU32, Firmware-SRAM 2 MiB, Board-Adressen und lokale Schnittstellen "
+            "(COM3 4553, Bedienung 4554, QMP 4444, GDB 1235). Die Zulassungskarte ist kein eigener CPU-Prozess. "
+            "Sound verwendet AC97/WinMM; der Münzprüfer hat keine separat konfigurierbare Emulation. "
+            "Es gibt kein Windows-CPU-Prozentlimit. Ungeeignete Werte können Bootfehler oder Abstürze verursachen."
+        )).pack(anchor="w", pady=8)
+
+    def _save_options(self) -> None:
+        selection = self._read_selection()
+        if selection is not None and self._save(selection):
+            self.status.set("Einstellungen gespeichert; wirksam beim nächsten Start.")
+
+    def _reset_options(self) -> None:
+        if not messagebox.askyesno("Standardwerte", "Nur die Emulationsoptionen zurücksetzen? Dateipfade bleiben erhalten. Anschließend speichern."):
+            return
+        defaults = Selection()
+        for key, _group, _label, _kind, _limits, _help in EMULATION_FIELDS:
+            self.emulation_variables[key].set(getattr(defaults, key))
+        self.status.set("Standardwerte eingesetzt; noch nicht gespeichert.")
 
     def _browse(self, key: str) -> None:
         current = self.variables[key].get()
@@ -268,21 +338,40 @@ class Launcher(tk.Tk):
         self._write(f"Datenbank-Ordner: {found} von {len(DATABASE_FILES)} erwarteten Dateien gefunden.\n")
 
     def _selection(self) -> Selection:
-        return Selection(**{key: value.get().strip() for key, value in self.variables.items()},
-                         show_live_log=self.show_log.get(), swap_displays=self.swap_displays.get())
+        options = {}
+        for key, _group, label, kind, _limits, _help in EMULATION_FIELDS:
+            raw = self.emulation_variables[key].get()
+            try:
+                options[key] = kind(raw.strip()) if kind is not bool else raw
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"{label}: gültigen Zahlenwert eingeben") from exc
+        selection = Selection(**{key: value.get().strip() for key, value in self.variables.items()}, **options)
+        issues = validate_emulation(selection)
+        if issues:
+            raise ValueError("\n".join(issues))
+        return selection
+
+    def _read_selection(self) -> Selection | None:
+        try:
+            return self._selection()
+        except (ValueError, TypeError, tk.TclError) as exc:
+            messagebox.showerror("Emulationseinstellungen", str(exc))
+            return None
 
     def _save(self, selection: Selection) -> bool:
         try:
             selection.save(SETTINGS)
             return True
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             messagebox.showerror("Einstellungen", f"Auswahl konnte nicht gespeichert werden:\n{exc}")
             return False
 
     def _check(self) -> None:
         if self.checking:
             return
-        selection = self._selection()
+        selection = self._read_selection()
+        if selection is None:
+            return
         if not self._save(selection):
             return
         self.checking = True
@@ -300,7 +389,9 @@ class Launcher(tk.Tk):
                 "werden. Bitte eine vorbereitete Kopie auswählen und den Hinweis bestätigen.",
             )
             return
-        selection = self._selection()
+        selection = self._read_selection()
+        if selection is None:
+            return
         if not self._save(selection):
             return
         self.checking = True
@@ -312,7 +403,9 @@ class Launcher(tk.Tk):
     def _prepare(self) -> None:
         if self.checking or self.preparing or (self.running and self.running.poll() is None):
             return
-        selection = self._selection()
+        selection = self._read_selection()
+        if selection is None:
+            return
         if not self._save(selection):
             return
         if not messagebox.askyesno(
@@ -345,11 +438,16 @@ class Launcher(tk.Tk):
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         assert process.stdout is not None
+        output_tail: list[str] = []
         for line in process.stdout:
             self.events.put(("line", line))
+            output_tail.append(line.strip())
+            output_tail = output_tail[-6:]
         result = process.wait()
         if result != 0 and result not in allowed_exit_codes:
-            raise RuntimeError(f"{label} fehlgeschlagen (Code {result})")
+            details = "\n".join(line for line in output_tail if line)
+            suffix = f"\n{details}" if details else ""
+            raise RuntimeError(f"{label} fehlgeschlagen (Code {result}){suffix}")
         return result
 
     def _prepare_worker(self, selection: Selection) -> None:
@@ -366,6 +464,7 @@ class Launcher(tk.Tk):
                     raise RuntimeError(f"Arbeitskopie konnte nicht geprüft werden: {result.stderr.strip()}")
                 stage = result.stdout.strip()
                 if stage == "ready":
+                    self._update_graphics(selection)
                     self.events.put(("prepared", str(image)))
                     return
                 if stage not in ("qxl-pnp", "qxl-verify", "ready-unverified"):
@@ -404,6 +503,7 @@ class Launcher(tk.Tk):
             )
             if result.returncode != 0 or result.stdout.strip() != "ready":
                 raise RuntimeError("Abschlussmarker im Image fehlt")
+            self._update_graphics(selection)
             self.events.put(("prepared", selection.image))
         except Exception as exc:
             self.events.put(("prepare_failed", str(exc)))
@@ -423,9 +523,26 @@ class Launcher(tk.Tk):
                         f"CF-Image: nicht startbereit ({result.stdout.strip() or 'unbekannt'}); "
                         "zuerst ‚Frisches Image einrichten‘ ausführen"
                     )
+                if start and not issues:
+                    self._update_graphics(selection)
         except Exception as exc:
             issues = [f"Prüfung fehlgeschlagen: {exc}"]
         self.events.put(("checked", (selection, start, issues)))
+
+    def _update_graphics(self, selection: Selection) -> None:
+        # Refuse to mount a working image while any QEMU instance may own it.
+        probe = subprocess.run(
+            ["powershell.exe", "-NoLogo", "-NoProfile", "-Command",
+             "@(Get-Process qemu-system* -ErrorAction SilentlyContinue).Count"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if probe.returncode != 0 or probe.stdout.strip() != "0":
+            raise RuntimeError("Vor dem Laufzeit-Update alle QEMU-Instanzen schließen")
+        self._run_step(audio_setup_command(selection, PROJECT),
+                       "XP-Audiotreiber und Wiedergabeausgang werden eingerichtet")
+        self._run_step(graphics_update_command(selection, PROJECT),
+                       "Grafik- und Audiodateien der Arbeitskopie werden aktualisiert")
 
     def _install_qemu(self) -> None:
         self._install_package("qemu", "QEMU", "SoftwareFreedomConservancy.QEMU")
@@ -634,7 +751,9 @@ class Launcher(tk.Tk):
                     self.status.set(f"{label} installiert." if result == 0 else
                                     f"{label}-Installation fehlgeschlagen (Code {result}).")
                     if result == 0:
-                        refreshed = suggested_selection(self._selection())
+                        refreshed = suggested_selection(Selection(**{
+                            field: variable.get().strip() for field, variable in self.variables.items()
+                        }))
                         for field in (("qemu_x86", "qemu_m68k") if key == "qemu" else ("python",)):
                             self.variables[field].set(getattr(refreshed, field))
         except queue.Empty:

@@ -24,12 +24,19 @@ SHELL_FILES = (
     "retry_qxl_install.sh",
     "finalize_image_stage.sh",
     "check_image_stage.sh",
+    "update_runtime_graphics.sh",
+    "stage_audio_image.sh",
 )
 REQUIRED_PYTHON_FILES = (
+    "audio_driver_package.py",
+    "audio_image_stage.py",
+    "audio_setup_runner.py",
     "admission_card.py",
     "cabinet_control_panel.py",
     "cabinet_controls.py",
     "emulator_launcher.py",
+    "duart_timer.py",
+    "graphics_update.py",
     "event_log_viewer.py",
     "image_setup.py",
     "inspect_owner_database.py",
@@ -46,6 +53,8 @@ REQUIRED_PYTHON_FILES = (
     "serialloader_chip_emulator.py",
 )
 OWN_BINARIES = (
+    Path("build/audio-installer.exe"),
+    Path("build/audio-verify.exe"),
     Path("build/Cgos.dll"),
     Path("build/display-bootstrap.exe"),
     Path("build/qxl-installer.exe"),

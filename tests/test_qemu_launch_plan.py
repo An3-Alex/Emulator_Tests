@@ -52,7 +52,7 @@ class QemuLaunchPlanTests(unittest.TestCase):
         arguments = plan["arguments"]
         self.assertTrue(plan["visible"])
         self.assertTrue(plan["guest_reboots_allowed"])
-        self.assertEqual(plan["display_tabs"], ["lower", "upper"])
+        self.assertEqual(plan["display_tabs"], ["upper", "lower"])
         self.assertIn("-display gtk,show-tabs=on", arguments)
         self.assertNotIn("-no-reboot", arguments)
 
@@ -68,12 +68,12 @@ class QemuLaunchPlanTests(unittest.TestCase):
     def test_swapped_outputs_reach_both_programming_branches(self) -> None:
         plan = self.script_plan(PROGRAM_AND_START_LAUNCHER, "-SwapDisplays")
         visible = plan["runtime"]["visible_qemu"]
-        self.assertEqual(visible["display_tabs"], ["upper", "lower"])
+        self.assertEqual(visible["display_tabs"], ["lower", "upper"])
         self.assertTrue(visible["swap_displays"])
         self.assertEqual(visible["cabinet_lower_device"], "lower")
-        self.assertIn("qxl-vga,id=upper", visible["arguments"])
-        self.assertIn("qxl,id=lower", visible["arguments"])
-        self.assertNotIn("qxl-vga,id=lower", visible["arguments"])
+        self.assertIn("qxl-vga,id=lower", visible["arguments"])
+        self.assertIn("qxl,id=upper", visible["arguments"])
+        self.assertNotIn("qxl-vga,id=upper", visible["arguments"])
         source = PROGRAM_AND_START_LAUNCHER.read_text(encoding="utf-8")
         calls = [line for line in source.splitlines() if "& $runtimeLauncher" in line]
         self.assertEqual(len(calls), 4)
@@ -81,12 +81,29 @@ class QemuLaunchPlanTests(unittest.TestCase):
 
     def test_dry_run_keeps_expected_devices_and_restricted_network(self) -> None:
         arguments = self.launch_plan()["arguments"]
-        self.assertIn("qxl-vga,id=lower", arguments)
-        self.assertIn("qxl,id=upper", arguments)
+        self.assertIn("qxl-vga,id=upper", arguments)
+        self.assertIn("qxl,id=lower", arguments)
         self.assertNotIn("-device usb-tablet", arguments)
         self.assertEqual(self.launch_plan()["guest_pointer"], "PS/2 mouse")
         self.assertIn("restrict=on", arguments)
         self.assertIn("tcp:127.0.0.1:4553,server=on,wait=off", arguments)
+
+    def test_audio_device_stays_present_even_when_host_output_is_muted(self) -> None:
+        for script in (LAUNCHER, REAL_DATABASE_LAUNCHER, PROGRAM_AND_START_LAUNCHER):
+            for mute in (False, True):
+                with self.subTest(script=script.name, mute=mute):
+                    plan = self.script_plan(script, *(["-MuteAudio"] if mute else []))
+                    visible = plan.get("visible_qemu") or plan.get("runtime", {}).get("visible_qemu") or plan
+                    self.assertEqual(visible["audio_backend"], "none" if mute else "sdl")
+                    self.assertEqual(visible["audio_muted"], mute)
+                    self.assertFalse(visible["audio_recording"])
+                    self.assertEqual(visible["audio_output_channels"], 1)
+                    self.assertIn(
+                        f'-audiodev {visible["audio_backend"]},id=audio0,in.voices=0,out.channels=1',
+                        visible["arguments"],
+                    )
+                    self.assertNotIn("dsound", visible["arguments"])
+                    self.assertIn("-device AC97,audiodev=audio0", visible["arguments"])
 
     def test_cf_image_path_with_spaces_stays_quoted_for_qemu(self) -> None:
         image = r"D:\CF Images\m90img - Kopie (2).img"

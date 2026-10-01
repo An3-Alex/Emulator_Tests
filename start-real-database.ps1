@@ -3,9 +3,14 @@ param(
     [string]$QemuM68k = 'C:\Program Files\qemu\qemu-system-m68k.exe',
     [string]$Python = 'python',
     [string]$Image,
+    [ValidateRange(512, 3072)][int]$GuestRamMiB = 2048,
+    [ValidateRange(1, 2)][int]$GuestVcpus = 1,
+    [ValidateSet('whpx', 'tcg')][string]$Acceleration = 'whpx',
+    [ValidateSet(64, 128, 256)][int]$QxlVramMiB = 64,
     [string]$Database,
     [string]$Loader,
     [string]$Config,
+    [datetime]$DatabaseDate = [datetime]'2012-02-01T22:14:00',
     [Nullable[uint32]]$D3 = [uint32]::Parse('D27B7159', [Globalization.NumberStyles]::HexNumber),
     [string]$RuntimeDump,
     [string]$AdmissionEeprom,
@@ -15,14 +20,31 @@ param(
     # icount plus multi-instruction TBs intermittently aborts in QEMU's
     # interrupt handler during INITVIDEO. Prefer the stable CPU mode.
     [switch]$SafeTb = $true,
+    [switch]$FastTb,
     [switch]$UsbTablet,
     [switch]$SwapDisplays,
+    [switch]$MuteAudio,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
+    [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.05,
+    [ValidateRange(1, 10000000)][int]$DuartX1Hz = 3686400,
+    [ValidateRange(10, 600)][double]$DbConnectTimeout = 120,
     [switch]$TraceDiagnostics,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+if ($DatabaseDate.Year -lt 2000 -or $DatabaseDate.Year -gt 2099) {
+    throw 'RTC calendar requires year 2000..2099.'
+}
+if ([math]::Ceiling($DbTimerInterval * $DuartX1Hz / (32 * 58)) -gt 128) {
+    throw 'DUART clock and run slice exceed the 128-interrupt budget. Reduce DbTimerInterval.'
+}
+if ($FastTb) { $SafeTb = $false }
+$visibleOptions = @{
+    GuestRamMiB = $GuestRamMiB; GuestVcpus = $GuestVcpus
+    Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
+    MuteAudio = $MuteAudio
+}
 if (($null -eq $D3) -eq [string]::IsNullOrWhiteSpace($RuntimeDump)) {
     throw 'Specify exactly one of -D3 or -RuntimeDump. The raw flash files alone do not contain the boot-ROM D3 value.'
 }
@@ -36,7 +58,10 @@ $arguments = @(
     '--expected-database-sha256', '593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8',
     '--config', $Config,
     '--expected-config-sha256', 'DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783',
-    '--timer-interval', '0.05',
+    '--timer-interval', $DbTimerInterval.ToString([Globalization.CultureInfo]::InvariantCulture),
+    '--duart-x1-hz', [string]$DuartX1Hz,
+    '--connect-timeout', $DbConnectTimeout.ToString([Globalization.CultureInfo]::InvariantCulture),
+    '--rtc-date', $DatabaseDate.ToString('yyyy-MM-ddTHH:mm:ss'),
     '--icount-shift', [string]$DbIcountShift,
     '--control-port', '4554'
     '--qemu', $QemuM68k
@@ -51,13 +76,15 @@ if ($null -ne $D3) { $arguments += @('--d3', ('0x{0:X8}' -f $D3)) }
 else { $arguments += @('--runtime-dump', $RuntimeDump) }
 
 if ($DryRun) {
-    $visiblePlan = (& $visibleLauncher -Qemu $Qemu -Image $Image -DryRun -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays | ConvertFrom-Json)
+    $visiblePlan = (& $visibleLauncher -Qemu $Qemu -Image $Image @visibleOptions -DryRun -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays | ConvertFrom-Json)
     [ordered]@{
         visible_qemu = $visiblePlan
         database_bridge = [ordered]@{
             executable = 'python'
             arguments = $arguments
-            timer_run_seconds = 0.05
+            timer_run_seconds = $DbTimerInterval
+            duart_x1_hz = $DuartX1Hz
+            connect_timeout = $DbConnectTimeout
             host_pause_seconds = 0.0
             emulated_db_icount_shift = $DbIcountShift
             emulated_db_max_instructions_per_second = [int](1000000000 / [math]::Pow(2, $DbIcountShift))
@@ -94,7 +121,7 @@ foreach ($item in @(
     }
 }
 
-$qemuLaunchOutput = @(& $visibleLauncher -Qemu $Qemu -Image $Image -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays)
+$qemuLaunchOutput = @(& $visibleLauncher -Qemu $Qemu -Image $Image @visibleOptions -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays)
 $qemuLaunchOutput | Write-Output
 $qemuPidLine = $qemuLaunchOutput | Where-Object { $_ -match '^QEMU_PID=\d+$' } | Select-Object -First 1
 if (-not $qemuPidLine) {

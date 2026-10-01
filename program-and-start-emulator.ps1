@@ -3,6 +3,10 @@ param(
     [string]$QemuM68k = 'C:\Program Files\qemu\qemu-system-m68k.exe',
     [string]$Python = 'python',
     [string]$Image,
+    [ValidateRange(512, 3072)][int]$GuestRamMiB = 2048,
+    [ValidateRange(1, 2)][int]$GuestVcpus = 1,
+    [ValidateSet('whpx', 'tcg')][string]$Acceleration = 'whpx',
+    [ValidateSet(64, 128, 256)][int]$QxlVramMiB = 64,
     [string]$Database,
     [string]$Loader,
     [string]$FactoryReset,
@@ -12,13 +16,38 @@ param(
     [string]$RuntimeDump,
     [string]$AdmissionEeprom,
     [switch]$SafeTb = $true,
+    [switch]$FastTb,
+    [switch]$UsbTablet,
+    [switch]$DoorOpen,
+    [switch]$TraceDiagnostics,
+    [switch]$NoControlWindow,
     [switch]$NoEventWindow,
     [switch]$SwapDisplays,
+    [switch]$MuteAudio,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
+    [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.05,
+    [ValidateRange(1, 10000000)][int]$DuartX1Hz = 3686400,
+    [ValidateRange(10, 600)][double]$DbConnectTimeout = 120,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+if ($DatabaseDate.Year -lt 2000 -or $DatabaseDate.Year -gt 2099) {
+    throw 'RTC calendar requires year 2000..2099.'
+}
+if ([math]::Ceiling($DbTimerInterval * $DuartX1Hz / (32 * 58)) -gt 128) {
+    throw 'DUART clock and run slice exceed the 128-interrupt budget. Reduce DbTimerInterval.'
+}
+$runtimeOptions = @{
+    GuestRamMiB = $GuestRamMiB; GuestVcpus = $GuestVcpus
+    Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
+    MuteAudio = $MuteAudio
+    DbTimerInterval = $DbTimerInterval; DuartX1Hz = $DuartX1Hz
+    DbConnectTimeout = $DbConnectTimeout; FastTb = $FastTb
+    DatabaseDate = $DatabaseDate
+    UsbTablet = $UsbTablet; DoorOpen = $DoorOpen
+    TraceDiagnostics = $TraceDiagnostics; NoControlWindow = $NoControlWindow
+}
 if (($null -eq $D3) -eq [string]::IsNullOrWhiteSpace($RuntimeDump)) {
     throw 'Specify exactly one of -D3 or -RuntimeDump. This is the original database boot-ROM context.'
 }
@@ -42,9 +71,9 @@ else { $programArgs += @('--runtime-dump', $RuntimeDump) }
 $runtimeLauncher = Join-Path $PSScriptRoot 'start-real-database.ps1'
 if ($DryRun) {
     if ($null -ne $D3) {
-        $runtimePlan = (& $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays -DryRun | ConvertFrom-Json)
+        $runtimePlan = (& $runtimeLauncher @runtimeOptions -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays -DryRun | ConvertFrom-Json)
     } else {
-        $runtimePlan = (& $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $null -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays -DryRun | ConvertFrom-Json)
+        $runtimePlan = (& $runtimeLauncher @runtimeOptions -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $null -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays -DryRun | ConvertFrom-Json)
     }
     [ordered]@{
         virtual_programming = [ordered]@{
@@ -79,8 +108,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($null -ne $D3) {
-    & $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays
+    & $runtimeLauncher @runtimeOptions -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $D3 -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays
 } else {
-    & $runtimeLauncher -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays
+    & $runtimeLauncher @runtimeOptions -Qemu $Qemu -QemuM68k $QemuM68k -Python $Python -Image $Image -Database $Database -Loader $Loader -Config $Config -D3 $null -RuntimeDump $RuntimeDump -AdmissionEeprom $AdmissionEeprom -SafeTb:$SafeTb -NoEventWindow:$NoEventWindow -DbIcountShift $DbIcountShift -SwapDisplays:$SwapDisplays
 }
 exit $LASTEXITCODE

@@ -607,7 +607,7 @@ class DatabaseBridgeTests(unittest.TestCase):
 
     def test_database_timing_uses_icount_without_host_pause(self) -> None:
         self.assertIsNone(bridge.validate_timer_interval(0.05))
-        self.assertEqual(bridge.board_timer_ticks_per_cycle(0.05), 5)
+        self.assertEqual(bridge.board_timer_ticks_per_cycle(0.05), 50)
         self.assertEqual(bridge.GUEST_ICOUNT_SHIFT, 6)
         self.assertEqual(bridge.GUEST_MAX_INSTRUCTIONS_PER_SECOND, 15_625_000)
         self.assertLess(bridge.GUEST_MAX_INSTRUCTIONS_PER_SECOND, 16_000_000)
@@ -632,11 +632,11 @@ class DatabaseBridgeTests(unittest.TestCase):
     def test_nested_timer_batches_ticks_under_same_cpu_guard(self) -> None:
         ticks = bridge.board_timer_ticks_per_cycle(0.05)
         self.assertAlmostEqual(bridge.nested_board_schedule(0.05, ticks, 0.0),
-                               0.01)
-        self.assertAlmostEqual(bridge.nested_board_schedule(0.05, ticks, 0.048),
-                               0.002)
+                               0.001)
+        self.assertAlmostEqual(bridge.nested_board_schedule(0.05, ticks, 0.0495),
+                               0.0005)
         self.assertAlmostEqual(bridge.nested_board_schedule(0.05, ticks, 0.05),
-                               0.01)
+                               0.001)
 
     def test_only_original_unmasked_timer_queue_wait_may_expire_directly(self) -> None:
         slot = bridge.TIMER_QUEUE_BASE + 4
@@ -914,7 +914,7 @@ class DatabaseBridgeTests(unittest.TestCase):
         self.assertNotEqual(bridge.BOARD_SCC_IDLE_STATUS & 0x04, 0)
         self.assertEqual(bridge.BOARD_SCC_A_TX_READY, 0x04)
 
-    def test_board_scc_a_tx_service_needs_original_command_and_ready_bit(self) -> None:
+    def test_board_timer_uses_the_programmed_ivr(self) -> None:
         timer = (
             bridge.BOARD_TIMER_VECTOR,
             bridge.BOARD_TIMER_HANDLER,
@@ -925,9 +925,10 @@ class DatabaseBridgeTests(unittest.TestCase):
             bridge.BOARD_SCC_A_HANDLER,
             bridge.BOARD_SCC_A_RTE_PC,
         )
-        self.assertEqual(bridge.board_service_target(0, 0x04), timer)
-        self.assertEqual(bridge.board_service_target(0x64, 0), timer)
-        self.assertEqual(bridge.board_service_target(0x64, 0x04), scc_a)
+        self.assertEqual(bridge.board_service_target(64), timer)
+        self.assertEqual(bridge.board_service_target(65), scc_a)
+        with self.assertRaises(ValueError):
+            bridge.board_service_target(0)
         self.assertEqual(
             bridge.board_interrupt_status(
                 0x80,

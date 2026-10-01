@@ -50,11 +50,11 @@ verify_hash() {
   echo 'output or partial image already exists; refusing overwrite' >&2; exit 3;
 }
 verify_hash "$shim" 16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51
-verify_hash "$bootstrap" ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6
+verify_hash "$bootstrap" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
 verify_hash "$qxl_installer" 0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296
-verify_hash "$d3d9" 31d2d484d4821ef34dd764e68a66338ed638926c66b73b14078d360713f4987f
+verify_hash "$d3d9" cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737
 verify_hash "$fbwf" 4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94
-verify_hash "$irrklang" 0e811b9ddeedb53d9494e5ac3ca871743ad51a0c9ecf654cf76102a9af83b10d
+verify_hash "$irrklang" 8efc687d626c56fa995e084fa462a187446d238f871abab6c622b13a9bbbd7c8
 verify_hash "$swiftshader" fc5994b209a57a77275e5ecee1904cd9139a344c69e221e54f05af90580a90c9
 verify_hash "$qxl_dir/qxl.inf" 2c2ce985936c87406313d68ba54b1c36f42aec97ee357d894e3238aecda776fa
 verify_hash "$qxl_dir/qxl.sys" 42be54fe601af95abeb716c3ab00656e731917fa83fda72ecc6084f39a7ccceb
