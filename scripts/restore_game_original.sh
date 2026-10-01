@@ -3,14 +3,10 @@ set -euo pipefail
 
 [[ $# == 1 ]] || { echo "usage: $0 IMAGE" >&2; exit 2; }
 image=$(realpath "$1")
-expected_image=/mnt/c/Users/User/Desktop/m90_work.img
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$image" || exit 3
 expected_original=27c4553927397b1e8443d6caea12e5b4e7282e4948b67b85c80c4db0d1d0427d
 expected_patched=c86068850a80bf2405a8f5724a5cb26ad0efd9ecd7d1a75076a15b651a73d221
-
-[[ "$image" == "$expected_image" ]] || {
-  echo "refusing unexpected image: $image" >&2
-  exit 3
-}
 
 mount_dir=$(mktemp -d /tmp/m90-restore-game.XXXXXX)
 loop_device=""

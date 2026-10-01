@@ -2,7 +2,8 @@
 set -euo pipefail
 [[ $# == 2 ]] || exit 2
 image=$(realpath "$1"); patched=$2
-[[ "$image" == /mnt/c/Users/User/Desktop/m90_work.img ]] || exit 3
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$image" || exit 3
 base=13b38c44cde88ee4af9a01796814d3502505eb1eda1073f66899a35bbd32aba0
 adapter0=24d826f34ef72f9e76634b67ca16aae954090a7109da338e249bfa8c972756e9
 expected=c86068850a80bf2405a8f5724a5cb26ad0efd9ecd7d1a75076a15b651a73d221

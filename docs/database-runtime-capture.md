@@ -34,7 +34,7 @@ Validate a capture read-only with:
 
 ```powershell
 python .\scripts\validate_runtime_database_dump.py `
-  "C:\Users\User\Desktop\Merkur DB\Magie_90_CC4.bin" `
+  "C:\M90\Dateien\Magie_90_CC4.bin" `
   "C:\path\to\runtime-1000-1c4137.bin" `
   --expected-transport-sha256 593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8
 ```

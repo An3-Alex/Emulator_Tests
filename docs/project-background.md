@@ -3,9 +3,17 @@
 Diese Notizen dokumentieren frühere Analyseschritte und sind keine aktuelle
 Installationsanleitung. Für den gegenwärtigen Stand siehe `../README.md`.
 
-Forensic Win32/x86 compatibility work for the user-supplied working copy
-`C:\Users\User\Desktop\m90_work.img`. No other disk image is an
-accepted target for the guarded installation scripts.
+Forensic Win32/x86 compatibility work for the user-supplied working copy.
+Example path: `C:\M90\Images\m90_work.img`. Historical installation scripts
+require explicit `M90_WORK_IMAGE` and `M90_ORIGINAL_IMAGE` environment variables
+and refuse the original image. For example, in WSL:
+
+```bash
+export M90_WORK_IMAGE=/mnt/c/M90/Images/m90_work.img
+export M90_ORIGINAL_IMAGE=/mnt/c/M90/Images/original.img
+```
+
+The normal graphical starter selects these paths through its UI.
 
 The active design keeps the checksum-covered original `game.exe` intact and
 provides missing legacy interfaces externally:
@@ -202,7 +210,7 @@ the nine-digit ASCII number at offset 40 and packed BCD number plus
 `06 32 11 55` at offset 64. The template is never changed:
 
 ```powershell
-python scripts/admission_card.py --template 'C:\Users\User\Downloads\eeprom.bin' --number 123456789 --output build\admission-card-m90.eeprom.bin
+python scripts/admission_card.py --template 'C:\M90\Dateien\eeprom.bin' --number 123456789 --output build\admission-card-m90.eeprom.bin
 ```
 
 Use `start-real-database.ps1 -AdmissionEeprom

@@ -3,7 +3,8 @@ set -euo pipefail
 
 IMAGE_PATH=$(realpath "${1:?usage: install_shim.sh IMAGE_PATH SHIM_DLL}")
 SHIM_PATH=${2:?usage: install_shim.sh IMAGE_PATH SHIM_DLL}
-EXPECTED_IMAGE=/mnt/c/Users/User/Desktop/m90_work.img
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$IMAGE_PATH" || exit 3
 EXPECTED_ORIGINAL=480703586ea6f5bdc9ae3d8aa7bb47f03fa4d8234b48a3f2abc92356fb76a14e
 EXPECTED_SHIM=16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51
 MOUNT_PATH=/mnt/m90_rw
@@ -20,11 +21,6 @@ trap cleanup EXIT
 
 if [ ! -f "$IMAGE_PATH" ] || [ ! -f "$SHIM_PATH" ]; then
     echo 'image or shim does not exist' >&2
-    exit 1
-fi
-
-if [ "$IMAGE_PATH" != "$EXPECTED_IMAGE" ]; then
-    echo "refusing unexpected image path: $IMAGE_PATH" >&2
     exit 1
 fi
 

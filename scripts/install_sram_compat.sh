@@ -8,7 +8,8 @@ fi
 
 image=$(realpath "$1")
 proxy=$2
-expected_image=/mnt/c/Users/User/Desktop/m90_work.img
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$image" || exit 3
 expected_proxy=4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94
 legacy_proxy_runtime=cebb001fcc05beeaa78efec80de3600658399b79f54084269d48f44934302149
 legacy_proxy_v4=c504ce2519f330f12eed2f58e727823dac04c6e82d7c783c45d27a785072469d
@@ -29,10 +30,6 @@ cleanup() {
 trap cleanup EXIT
 
 proxy_hash=$(sha256sum "$proxy" | awk '{print $1}')
-[[ "$image" == "$expected_image" ]] || {
-  echo "refusing unexpected image path: $image" >&2
-  exit 1
-}
 [[ "$proxy_hash" == "$expected_proxy" ]] || {
   echo "SRAM proxy hash mismatch: $proxy_hash" >&2
   exit 1

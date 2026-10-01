@@ -4,13 +4,13 @@ set -euo pipefail
 [[ $# == 2 ]] || { echo "usage: $0 IMAGE PROXY_DLL" >&2; exit 2; }
 image=$(realpath "$1")
 proxy=$2
-expected_image=/mnt/c/Users/User/Desktop/m90_work.img
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$image" || exit 3
 expected_proxy=0e811b9ddeedb53d9494e5ac3ca871743ad51a0c9ecf654cf76102a9af83b10d
 legacy_proxy_runtime=5bb36e7dae437afb3e68895237d18b65d50f5fad2dbe4a2c905b8fc6006af361
 original_irrklang=ab0bff115cf3f55a608a7059ae3fd5fdc73a5f4ee814db4aa4b6c7e44cce8297
 expected_original_game=27c4553927397b1e8443d6caea12e5b4e7282e4948b67b85c80c4db0d1d0427d
 
-[[ "$image" == "$expected_image" ]] || exit 3
 [[ $(sha256sum "$proxy" | awk '{print $1}') == "$expected_proxy" ]] || exit 4
 
 mount_dir=$(mktemp -d /tmp/m90-irrproxy.XXXXXX)

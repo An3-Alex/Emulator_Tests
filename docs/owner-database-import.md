@@ -61,7 +61,7 @@ pinned for repeatable tests:
 
 ```powershell
 python .\scripts\inspect_owner_database.py `
-  "C:\Users\User\Desktop\Merkur DB\Magie_90_CC4.bin" `
+  "C:\M90\Dateien\Magie_90_CC4.bin" `
   --expected-sha256 593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8
 ```
 
@@ -69,7 +69,7 @@ Run the same gate separately for the paired loader with its own pinned hash:
 
 ```powershell
 python .\scripts\inspect_owner_database.py `
-  "C:\Users\User\Desktop\Merkur DB\Loader_61640403_L5.0b_2MB.bin" `
+  "C:\M90\Dateien\Loader_61640403_L5.0b_2MB.bin" `
   --expected-sha256 B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109
 ```
 
@@ -92,8 +92,8 @@ single read-only operation:
 
 ```powershell
 python .\scripts\validate_owner_database_set.py `
-  "C:\Users\User\Desktop\Merkur DB\Magie_90_CC4.bin" `
-  "C:\Users\User\Desktop\Merkur DB\Loader_61640403_L5.0b_2MB.bin" `
+  "C:\M90\Dateien\Magie_90_CC4.bin" `
+  "C:\M90\Dateien\Loader_61640403_L5.0b_2MB.bin" `
   --expected-database-sha256 593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8 `
   --expected-loader-sha256 B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109
 ```

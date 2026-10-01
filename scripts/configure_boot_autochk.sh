@@ -4,7 +4,8 @@ set -euo pipefail
 [[ $# == 2 ]] || { echo "usage: $0 IMAGE force|default" >&2; exit 2; }
 image=$(realpath "$1")
 mode=$2
-[[ "$image" == /mnt/c/Users/User/Desktop/m90_work.img ]] || exit 3
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$image" || exit 3
 default='autocheck autochk *'
 forced='autocheck autochk /p \??\C:'
 case "$mode" in

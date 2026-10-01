@@ -3,7 +3,8 @@ set -euo pipefail
 [[ $# == 2 ]] || exit 2
 image=$(realpath "$1")
 dll=$2
-[[ "$image" == /mnt/c/Users/User/Desktop/m90_work.img ]] || exit 3
+source "$(dirname -- "$0")/working_image_guard.sh"
+require_working_image "$image" || exit 3
 build3383=7c1934eb90b41ac4b6d0590abffef69ab01de5aa917f1630892174aeb537dd0c
 build5003=fc5994b209a57a77275e5ecee1904cd9139a344c69e221e54f05af90580a90c9
 expected=$(sha256sum "$dll" | cut -d' ' -f1)
