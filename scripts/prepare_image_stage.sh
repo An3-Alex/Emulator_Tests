@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # First, offline phase only. Never mounts or writes the owner's source image RW.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 if [[ $# -ne 10 ]]; then
   echo 'usage: prepare_image_stage.sh ORIGINAL OUTPUT CGOS BOOTSTRAP QXL_INSTALLER D3D9 FBWFLIB IRRKLANG SWIFTSHADER QXL_DIR' >&2
@@ -39,9 +40,6 @@ verify_hash() {
 }
 
 [[ -f "$source_image" ]] || { echo 'source image missing' >&2; exit 3; }
-[[ $(stat -c %s "$source_image") == 16139354112 ]] || {
-  echo 'unexpected source image size' >&2; exit 3;
-}
 [[ -d $(dirname -- "$output_image") ]] || { echo 'output directory missing' >&2; exit 3; }
 [[ $(realpath -m "$source_image") != $(realpath -m "$output_image") ]] || {
   echo 'source and output must differ' >&2; exit 3;
@@ -63,12 +61,10 @@ verify_hash "$qxl_dir/qxldd.dll" 4f3f81b1b8ba18282e179c6c5dad1c171b5ec54262e88d6
 mount_image() {
   local image=$1 mode=$2
   if [[ "$mode" == ro ]]; then
-    loop_device=$(losetup --find --show --read-only --offset 1048576 \
-      --sizelimit 16021151744 "$image")
+    loop_device=$(image_loop_device "$image" ro)
     ntfs-3g -o ro "$loop_device" "$mount_dir"
   else
-    loop_device=$(losetup --find --show --offset 1048576 \
-      --sizelimit 16021151744 "$image")
+    loop_device=$(image_loop_device "$image" rw)
     ntfs-3g -o big_writes "$loop_device" "$mount_dir"
   fi
   mounted=1
@@ -85,7 +81,9 @@ verify_original_guest() {
   verify_hash "$mount_dir/WINDOWS/system32/Cgos.dll" 480703586ea6f5bdc9ae3d8aa7bb47f03fa4d8234b48a3f2abc92356fb76a14e
   verify_hash "$mount_dir/WINDOWS/explorer.exe" 2fb4233b541431a1b940ed5af6f11096b7fd5846316e3c4e55bd0e9a7b37a5c1
   verify_hash "$mount_dir/WINDOWS/system32/fbwflib.dll" 17dc9581c25b9c77d2d4368c3923f83e414d6be9a8acf675871ff2ce6df28263
-  verify_hash "$mount_dir/WINDOWS/system32/config/SYSTEM" 4675f3908b18c44daab46d618e61ea0ac2932421d5267eabed33ea1d01335c90
+  [[ -f "$mount_dir/WINDOWS/system32/config/SYSTEM" ]] || {
+    echo 'XP SYSTEM hive missing' >&2; exit 3;
+  }
   for dir in NVRAM WorkDir; do
     verify_hash "$mount_dir/$dir/game.exe" 27c4553927397b1e8443d6caea12e5b4e7282e4948b67b85c80c4db0d1d0427d
     [[ ! -e "$mount_dir/$dir/d3d9.dll" ]] || {
@@ -99,12 +97,14 @@ verify_original_guest
 unmount_image
 
 available=$(df -B1 --output=avail "$(dirname -- "$output_image")" | tail -n 1 | tr -d ' ')
-[[ "$available" =~ ^[0-9]+$ && "$available" -ge 17000000000 ]] || {
-  echo 'at least 17 GB free space required for a separate working copy' >&2; exit 3;
+source_bytes=$(stat -c %s "$source_image")
+required_bytes=$((source_bytes + 268435456))
+[[ "$available" =~ ^[0-9]+$ && "$available" -ge "$required_bytes" ]] || {
+  echo "working copy needs $required_bytes bytes of free space" >&2; exit 3;
 }
 echo 'Creating separate working copy; source stays read-only.'
 cp --reflink=auto --sparse=always -- "$source_image" "$partial_image"
-[[ $(stat -c %s "$partial_image") == 16139354112 ]] || {
+[[ $(stat -c %s "$partial_image") == "$source_bytes" ]] || {
   echo "incomplete copy left at $partial_image" >&2; exit 3;
 }
 mount_image "$partial_image" rw

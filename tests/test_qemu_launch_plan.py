@@ -189,22 +189,10 @@ class QemuLaunchPlanTests(unittest.TestCase):
         programming = plan["virtual_programming"]
         arguments = programming["arguments"]
         self.assertEqual(programming["date"], "2012-02-01T22:14:00")
-        self.assertIn(
-            "B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109",
-            arguments,
-        )
-        self.assertIn(
-            "593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8",
-            arguments,
-        )
-        self.assertIn(
-            "4F088DB4AF5F4A5D112A003EF312EB19B4388C25902FFA03F75742379A0CD5C4",
-            arguments,
-        )
-        self.assertIn(
-            "DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783",
-            arguments,
-        )
+        # Dry-run without actual owner files uses placeholders, not an M90 whitelist.
+        for role in ("loader", "database", "factory", "config"):
+            flag = f"--expected-{role}-sha256"
+            self.assertEqual(arguments[arguments.index(flag) + 1], "0" * 64)
         self.assertEqual(
             plan["runtime"]["database_bridge"]["host_pause_seconds"], 0.0
         )

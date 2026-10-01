@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Read only; reports an image's preparation marker without changing its contents.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 [[ $# -eq 1 ]] || { echo 'usage: check_image_stage.sh IMAGE' >&2; exit 2; }
 image=$1
-[[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || exit 3
+[[ -f "$image" ]] || exit 3
 mount_dir=$(mktemp -d /tmp/m90-stage-check.XXXXXX)
 loop_device=
 mounted=0
@@ -13,8 +14,7 @@ cleanup() {
   rmdir "$mount_dir"
 }
 trap cleanup EXIT
-loop_device=$(losetup --find --show --read-only --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
 marker="$mount_dir/NVRAM/m90_setup_stage.txt"

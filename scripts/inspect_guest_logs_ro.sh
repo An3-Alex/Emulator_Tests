@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Inspect diagnostics in a stopped working image. The image is never mounted RW.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 [[ $# -eq 1 && -f "$1" ]] || { echo 'usage: inspect_guest_logs_ro.sh IMAGE' >&2; exit 2; }
 image=$1
@@ -14,8 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-loop_device=$(losetup --find --show --read-only --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
 

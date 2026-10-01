@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 [[ $# == 2 ]] || exit 2
 image=$(realpath "$1")
 patched=$2
@@ -12,7 +13,7 @@ mount_dir=$(mktemp -d /tmp/m90-adapter.XXXXXX)
 loop_device=""
 cleanup() { sync; umount "$mount_dir" 2>/dev/null || true; [[ -z "$loop_device" ]] || losetup -d "$loop_device"; rmdir "$mount_dir"; }
 trap cleanup EXIT
-loop_device=$(losetup --find --show --offset 1048576 --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g "$loop_device" "$mount_dir"
 for dir in NVRAM WorkDir; do
   target="$mount_dir/$dir/game.exe"

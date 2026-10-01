@@ -37,7 +37,7 @@ from cabinet_controls import (
 from owner_config_runtime import CONFIG_CLEAR_START, prepare_config_writes
 from owner_database_runtime import prepare_runtime
 from rtc4543 import DATA as RTC_DATA, DEFAULT_TIME as RTC_DEFAULT_TIME, Rtc4543
-from admission_card import ERGO_M90_ID, inspect_eeprom
+from admission_card import inspect_eeprom
 from duart_timer import DEFAULT_X1_HZ, MAX_BATCH_TICKS, DuartTimerConfig, DuartTimerBudget
 
 
@@ -1513,10 +1513,6 @@ def run_bridge(args: argparse.Namespace) -> int:
     if args.admission_eeprom is not None:
         admission_eeprom = args.admission_eeprom.read_bytes()
         admission_number, card_model = inspect_eeprom(admission_eeprom)
-        if card_model != ERGO_M90_ID:
-            raise ValueError(
-                f"admission card model {card_model.hex(' ').upper()} is not Ergoline M90"
-            )
         print(
             "DB_ADMISSION_CARD_LOADED "
             f"number_ending={admission_number[-4:]} "

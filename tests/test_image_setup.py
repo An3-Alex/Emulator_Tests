@@ -104,8 +104,7 @@ class ImageSetupTests(unittest.TestCase):
                 original_image=str(original), swiftshader=str(swift),
                 qxl_driver_dir=str(qxl), qemu_x86=sys.executable, python=sys.executable,
             )
-            with mock.patch.object(image_setup, "KNOWN_CF_BYTES", 5), \
-                 mock.patch.object(image_setup, "SWIFTSHADER_HASH", digest(b"swift")), \
+            with mock.patch.object(image_setup, "SWIFTSHADER_HASH", digest(b"swift")), \
                  mock.patch.object(image_setup, "QXL_HASHES", qxl_hashes), \
                  mock.patch.object(image_setup, "COMPONENTS", assets):
                 fresh = Selection(image=str(root / "working.img"), **common)

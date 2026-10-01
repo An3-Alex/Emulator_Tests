@@ -172,6 +172,18 @@ static DWORD WINAPI signing_helper(LPVOID unused) {
     return 0;
 }
 
+#ifdef INSTALLER_EARLY_DIALOG_HELPER
+static HANDLE start_signing_helper(void) {
+    HANDLE thread = CreateThread(NULL, 0, signing_helper, NULL, 0, NULL);
+    if (thread == NULL) {
+        write_text("Could not start signing-dialog helper: "); write_hex(GetLastError());
+    } else {
+        write_text("Signing-dialog helper started.\r\n");
+    }
+    return thread;
+}
+#endif
+
 #define RESOLVE(module, variable, type, name) \
     variable = (type)GetProcAddress(module, name); \
     if (variable == NULL) { \
@@ -207,18 +219,31 @@ void __stdcall mainCRTStartup(void) {
     g_log = CreateFileA(INSTALLER_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ,
         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     write_text(INSTALLER_TITLE);
+#ifdef INSTALLER_EARLY_DIALOG_HELPER
+    /* Audio software-device installation may itself open a signing dialog. */
+    signing_thread = start_signing_helper();
+#endif
 #ifdef INSTALLER_PREPARE
+    write_text("Preparing XP audio software devices.\r\n");
     if (!INSTALLER_PREPARE()) {
         write_text("Required audio software device setup failed.\r\n");
+        g_signing_helper_active = 0;
+        if (signing_thread != NULL) {
+            WaitForSingleObject(signing_thread, 2000);
+            CloseHandle(signing_thread);
+        }
         signal_host(FALSE);
         Sleep(120000);
         ExitProcess(14);
     }
+    write_text("XP audio software devices ready.\r\n");
 #endif
+#ifndef INSTALLER_EARLY_DIALOG_HELPER
     signing_thread = CreateThread(NULL, 0, signing_helper, NULL, 0, NULL);
     if (signing_thread == NULL) {
         write_text("Could not start signing-dialog helper: "); write_hex(GetLastError());
     }
+#endif
 
     setupapi = LoadLibraryA("setupapi.dll");
     if (setupapi == NULL) {

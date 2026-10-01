@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=${1:?usage: install_game_patch.sh IMAGE_PATH PATCHED_GAME}
 PATCHED_GAME=${2:?usage: install_game_patch.sh IMAGE_PATH PATCHED_GAME}
@@ -24,8 +25,7 @@ if [ "$PATCH_HASH" != "$EXPECTED_PATCHED" ]; then
 fi
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" rw)
 ntfs-3g -o big_writes "$LOOP_DEVICE" "$MOUNT_PATH"
 
 for DIRECTORY in NVRAM WorkDir; do

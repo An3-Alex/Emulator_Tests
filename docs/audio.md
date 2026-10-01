@@ -17,6 +17,21 @@ Arbeitskopien überspringen diese Installation. Unterbrochene Läufe können
 fortgesetzt werden; ein fehlendes Audiogerät wird nicht als Erfolg behandelt.
 Protokolle: `NVRAM/m90_audio_install.log` und `NVRAM/m90_audio_verify.log`.
 
+Der Dialog-Helfer läuft bereits parallel zur Einrichtung der XP-Audiokomponenten,
+nicht erst während der anschließenden SigmaTel-Treiberinstallation.
+Die Audio-Einrichtung zeigt den XP-Gast im QEMU-Fenster. Falls XP einen
+Installationsdialog öffnet, kann dieser dort bestätigt werden. Ein Timeout
+gibt den Spielstart weiterhin nicht frei. Vor dem Beenden der Setup-VM werden
+beide XP-Bildschirme und der QEMU-Zustand gesichert; nach ihrem Ende werden
+die Audioprotokolle, der Einrichtungsstatus und `WINDOWS/setupapi.log`
+schreibgeschützt aus der Arbeitskopie kopiert. Der Fehlerbericht liegt unter
+`%LOCALAPPDATA%\M90 Emulator\runtime\logs\audio-diagnostics\<Lauf>`;
+der Starter nennt den genauen Ordner. Fehlende Logs und fehlgeschlagene
+Erfassungen werden im Bericht ausgewiesen. Die letzten maximal 4 MiB pro
+Gastprotokoll werden übernommen. Keine Registry, Spiel- oder Datenbankdateien
+werden exportiert. Die Berichte können lokale Pfade enthalten und werden
+nicht automatisch hochgeladen.
+
 Die eigene `irrKlang.dll` in NVRAM/WorkDir lädt unverändert die originale
 irrKlang 1.1.3 aus `WINDOWS/system32`, wählt aber WinMM (3) statt NULL (6).
 Vor dem Erstellen der Engine wartet sie höchstens 120 Sekunden auf einen

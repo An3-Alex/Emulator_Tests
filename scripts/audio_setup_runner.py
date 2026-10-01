@@ -5,8 +5,10 @@ import argparse
 from pathlib import Path
 import socket
 import subprocess
+import tempfile
 import time
 
+from audio_diagnostics import capture_guest, write_report
 from audio_driver_package import ensure
 from image_setup import wsl_path
 from qmp_capture import connect_with_retry
@@ -22,13 +24,14 @@ def require_stopped() -> None:
         raise RuntimeError("Vor der Audiovorbereitung alle QEMU-Instanzen schließen")
 
 
-def boot(qemu: Path, image: Path, phase: str, log: Path, timeout: int = 300) -> None:
+def boot(qemu: Path, image: Path, phase: str, log: Path, timeout: int = 300,
+         *, diagnostics: Path | None = None) -> None:
     require_stopped()
     for port in (4654, 4466):
         require_free_port(port)
     command = qemu_command(qemu, image, 4654, 4466, swap_displays=True)
-    # Setup uses fixed hardware without the database, inaudible, hidden.
-    command[command.index("-display") + 1] = "none"
+    # Show XP so an installer dialog or boot failure is no longer invisible.
+    # The fixed setup hardware remains independent of the database, inaudible.
     command += ["-audiodev", "none,id=audio0,in.voices=0", "-device", "AC97,audiodev=audio0"]
     tag = "SETUP" if phase == "install" else "VERIFY"
     success = f"M90-AUDIO-{tag}-OK\n".encode()
@@ -41,11 +44,13 @@ def boot(qemu: Path, image: Path, phase: str, log: Path, timeout: int = 300) -> 
         qmp = None
         started = time.monotonic()
         clean = False
+        received = bytearray()
         try:
+            print(f"Audio-{phase}: XP-Einrichtung im QEMU-Fenster sichtbar; "
+                  "Installationsdialoge können dort bestätigt werden.", flush=True)
             qmp = connect_with_retry("127.0.0.1", 4466, timeout=20)
             connection = socket.create_connection(("127.0.0.1", 4654), timeout=10)
             connection.settimeout(1)
-            received = bytearray()
             last_progress = 0
             while time.monotonic() - started < timeout:
                 if process.poll() is not None:
@@ -72,6 +77,13 @@ def boot(qemu: Path, image: Path, phase: str, log: Path, timeout: int = 300) -> 
                     return
                 del received[:-8192]
             raise TimeoutError("Audio-Gast meldet kein Ergebnis; kein Spielstart freigegeben")
+        except Exception as exc:
+            if diagnostics is not None:
+                try:
+                    capture_guest(qmp, diagnostics, phase, exc, bytes(received))
+                except Exception as capture_error:
+                    print(f"Audio-Bildschirmdiagnose unvollständig: {capture_error}", flush=True)
+            raise
         finally:
             if connection:
                 connection.close()
@@ -96,7 +108,54 @@ def boot(qemu: Path, image: Path, phase: str, log: Path, timeout: int = 300) -> 
                         process.terminate()
                         process.wait(timeout=5)
             if qmp:
-                qmp.close()
+                try:
+                    qmp.close()
+                except Exception:
+                    pass
+
+
+def diagnostic_boot(original: Path, image: Path, qemu: Path, project: Path, phase: str) -> None:
+    root = project / "logs/audio-diagnostics"
+    root.mkdir(parents=True, exist_ok=True)
+    destination = Path(tempfile.mkdtemp(prefix=f"{phase}-", dir=root))
+    log = project / f"logs/audio-{'setup' if phase == 'install' else 'verify'}-qemu.stderr.log"
+    try:
+        boot(qemu, image, phase, log, diagnostics=destination)
+    except Exception as exc:
+        # boot's finally stops our VM before any image access. Fail closed if
+        # cleanup failed or another VM appeared; never mount a live image.
+        try:
+            require_stopped()
+            command = ["wsl.exe", "--user", "root", "--exec", "bash",
+                       *(wsl_path(p) for p in (project / "scripts/export_audio_diagnostics.sh",
+                                               original, image, destination))]
+            result = subprocess.run(command, capture_output=True, text=True, errors="replace",
+                timeout=90, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or result.stdout.strip()
+                                   or f"Gastprotokoll-Export fehlgeschlagen (Code {result.returncode})")
+        except Exception as export_error:
+            try:
+                write_report(destination, "export-error.json", {"error": str(export_error)})
+            except OSError as report_error:
+                print(f"Audio-Exportdiagnose konnte nicht gesichert werden: {report_error}", flush=True)
+        if not (destination / "failure.json").exists():
+            try:
+                capture_guest(None, destination, phase, exc)
+            except OSError as report_error:
+                print(f"Audio-Fehlerbericht konnte nicht gesichert werden: {report_error}", flush=True)
+        try:
+            if log.is_file():
+                with log.open("rb") as stream:
+                    stream.seek(max(0, log.stat().st_size - 4 * 1024 * 1024))
+                    (destination / "qemu.stderr.log").write_bytes(stream.read(4 * 1024 * 1024))
+        except OSError as log_error:
+            print(f"QEMU-Protokoll konnte nicht gesichert werden: {log_error}", flush=True)
+        print(f"Audio-Diagnose gespeichert: {destination}", flush=True)
+        raise RuntimeError(f"{exc}\nAudio-Diagnose: {destination}") from exc
+    else:
+        # Successful runs need no separate report folder.
+        destination.rmdir()
 
 
 def prepare(original: Path, image: Path, qemu: Path, project: Path) -> None:
@@ -122,10 +181,10 @@ def prepare(original: Path, image: Path, qemu: Path, project: Path) -> None:
     if state in ("required", "staging", "install"):
         print("Passender SigmaTel-XP-Treiber wird eingerichtet…", flush=True)
         step("install")
-        boot(qemu, image, "install", project / "logs/audio-setup-qemu.stderr.log")
+        diagnostic_boot(original, image, qemu, project, "install")
         step("verify")
     print("XP-Audioausgang und Wiedergabepuffer werden geprüft…", flush=True)
-    boot(qemu, image, "verify", project / "logs/audio-verify-qemu.stderr.log")
+    diagnostic_boot(original, image, qemu, project, "verify")
     step("finish")
     print("XP-Audio eingerichtet; ursprünglicher Spielstarter wiederhergestellt.", flush=True)
 

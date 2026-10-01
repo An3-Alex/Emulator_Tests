@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 [[ $# == 1 ]] || { echo "usage: $0 IMAGE" >&2; exit 2; }
 image=$(realpath "$1")
@@ -10,6 +11,5 @@ cleanup() {
   [[ -z "$loop_device" ]] || losetup -d "$loop_device" 2>/dev/null || true
 }
 trap cleanup EXIT
-loop_device=$(losetup --find --show --read-only --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfsfix --no-action "$loop_device"

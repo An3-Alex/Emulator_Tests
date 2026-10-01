@@ -9,7 +9,8 @@ import struct
 from audio_driver_package import FILES, validate
 from graphics_update import BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP, CGOS_HASH, inside, require_hash, durable_copy, sha256
 
-INSTALLER_HASH = "cf721386f3fb40ae5364c2a09ad2b2977835db70e84381739dd3e96fea8e58e4"
+INSTALLER_HASH = "b01a14298a15ba96fb1853ae97ceddfee8f7eb7050869b8c663fb6d38c250982"
+PREVIOUS_INSTALLERS = {"cf721386f3fb40ae5364c2a09ad2b2977835db70e84381739dd3e96fea8e58e4"}
 VERIFIER_HASH = "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"
 MARKER = "NVRAM/m90_audio_stage.json"
 BACKUP = "NVRAM/m90-audio-backup"
@@ -88,7 +89,7 @@ def status(root: Path) -> str:
     require_hash(inside(root, f"{BACKUP}/explorer.exe"), {BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP})
     if stage in ("install", "verify"):
         require_hash(inside(root, "WINDOWS/explorer.exe"),
-                     {INSTALLER_HASH} if stage == "install" else {VERIFIER_HASH, state["shell_hash"]})
+                     {INSTALLER_HASH, *PREVIOUS_INSTALLERS} if stage == "install" else {VERIFIER_HASH, state["shell_hash"]})
     if stage == "ready":
         require_hash(installed_driver(root), {FILES["stac97.sys"]})
         verify_log(root)
@@ -147,7 +148,7 @@ def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path
             durable_copy(backup / "SYSTEM", system)
             durable_copy(backup / "explorer.exe", shell)
         elif current == "install":
-            require_hash(shell, {INSTALLER_HASH})
+            require_hash(shell, {INSTALLER_HASH, *PREVIOUS_INSTALLERS})
         starts = registry(root)
         registry(root, {key:4 for key in starts})
         # SetupAPI uses the original XP installation source directory. Some
@@ -175,7 +176,7 @@ def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path
     elif action == "verify":
         if current != "install":
             raise ValueError("Audio installation must complete first")
-        require_hash(shell, {INSTALLER_HASH})
+        require_hash(shell, {INSTALLER_HASH, *PREVIOUS_INSTALLERS})
         require_log(root, "m90_audio_install.log", (
             "DIF_REGISTERCOINSTALLERS result: 0x00000001", "DIF_INSTALLINTERFACES result: 0x00000001",
             "Matched devices: 0x00000001", "Installed devices: 0x00000001", "Installer complete.",

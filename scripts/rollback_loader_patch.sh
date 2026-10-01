@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=${1:?usage: rollback_loader_patch.sh IMAGE_PATH}
 EXPECTED_ORIGINAL=2fb4233b541431a1b940ed5af6f11096b7fd5846316e3c4e55bd0e9a7b37a5c1
@@ -16,8 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" rw)
 ntfs-3g -o big_writes "$LOOP_DEVICE" "$MOUNT_PATH"
 
 ACTIVE="$MOUNT_PATH/WINDOWS/explorer.exe"

@@ -6,11 +6,11 @@ from pathlib import Path
 import shutil
 import subprocess
 
-from portable_launcher_model import KNOWN_CF_BYTES, Selection, file_sha256
+from portable_launcher_model import Selection, file_sha256
 
 
 COMPONENTS = {
-    "audio_installer": ("build/audio-installer.exe", "cf721386f3fb40ae5364c2a09ad2b2977835db70e84381739dd3e96fea8e58e4"),
+    "audio_installer": ("build/audio-installer.exe", "b01a14298a15ba96fb1853ae97ceddfee8f7eb7050869b8c663fb6d38c250982"),
     "audio_verify": ("build/audio-verify.exe", "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"),
     "shim": ("build/Cgos.dll", "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"),
     "bootstrap": ("build/display-bootstrap.exe", "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"),
@@ -46,8 +46,6 @@ def check_preparation(
     output = Path(selection.image) if selection.image else None
     if source is None or not source.is_file():
         issues.append("Original-CF-Image: Datei auswählen")
-    elif source.stat().st_size != KNOWN_CF_BYTES:
-        issues.append("Original-CF-Image: unerwartete Dateigröße")
     if output is None:
         issues.append("Arbeitskopie: neuen Dateinamen auswählen")
     else:
@@ -55,6 +53,8 @@ def check_preparation(
             issues.append("Arbeitskopie: Zielordner fehlt")
         if source and source.resolve() == output.resolve():
             issues.append("Arbeitskopie: Original und Ziel müssen verschieden sein")
+        elif source and source.is_file() and output.is_file() and source.samefile(output):
+            issues.append("Arbeitskopie: Original und Ziel müssen verschieden sein (derselbe Dateiknoten)")
         if output.is_file() and not resume:
             issues.append("Arbeitskopie existiert bereits; Fortsetzung nur nach Statusprüfung")
         if output.with_name(output.name + ".m90-partial").exists():

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Retry QXL SetupAPI installation only in a stopped, already staged working copy.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 [[ $# -eq 2 ]] || { echo 'usage: retry_qxl_install.sh WORKING_IMAGE QXL_INSTALLER' >&2; exit 2; }
 image=$1
 installer=$2
@@ -22,15 +23,14 @@ cleanup() {
   rmdir "$mount_dir"
 }
 trap cleanup EXIT
-[[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || {
-  echo 'QXL retry: working image missing or wrong size' >&2; exit 3;
+[[ -f "$image" ]] || {
+  echo 'QXL retry: working image missing' >&2; exit 3;
 }
 [[ -f "$installer" && $(sha256sum "$installer" | cut -d' ' -f1) == \
   0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ]] || {
   echo 'QXL retry: installer missing or unrecognized' >&2; exit 3;
 }
-loop_device=$(losetup --find --show --read-only --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
 [[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-verify' ]] || {
@@ -44,8 +44,7 @@ umount "$mount_dir"
 mounted=0
 losetup -d "$loop_device"
 loop_device=
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 mounted=1
 cp "$installer" "$mount_dir/WINDOWS/explorer.exe.new"

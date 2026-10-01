@@ -146,6 +146,16 @@ class ImageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unrecognized"):
             self.run_stage("install")
 
+    def test_previous_installer_can_resume_and_is_replaced_without_new_backup(self):
+        self.run_stage("install")
+        shell = self.guest / "WINDOWS/explorer.exe"
+        shell.write_bytes(b"previous installer")
+        with mock.patch.object(stage, "PREVIOUS_INSTALLERS", {digest(b"previous installer")}):
+            self.assertEqual(self.run_stage("check"), "install")
+            self.assertEqual(self.run_stage("install"), "install")
+        self.assertEqual(shell.read_bytes(), b"install")
+        self.assertEqual((self.guest / stage.BACKUP / "explorer.exe").read_bytes(), b"shell")
+
 
 class RunnerTests(unittest.TestCase):
     def test_process_guard_fails_closed(self):

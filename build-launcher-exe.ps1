@@ -28,7 +28,7 @@ try {
     foreach ($name in @(
         'prepare_image_stage.sh', 'stage_display_verify.sh', 'retry_qxl_install.sh',
         'finalize_image_stage.sh', 'check_image_stage.sh', 'update_runtime_graphics.sh',
-        'stage_audio_image.sh'
+        'stage_audio_image.sh', 'export_audio_diagnostics.sh', 'image_partition.sh'
     )) {
         $source = Join-Path $project "scripts\$name"
         $arguments += @('--add-data', "${source}:scripts")

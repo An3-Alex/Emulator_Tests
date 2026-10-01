@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 [[ $# == 1 ]] || { echo "usage: $0 IMAGE" >&2; exit 2; }
 image=$(realpath "$1")
@@ -18,8 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 
 for directory in NVRAM WorkDir; do

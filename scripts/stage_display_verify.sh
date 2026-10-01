@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stage a second XP boot that proves both QXL displays are usable.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 [[ $# -eq 2 || ( $# -eq 3 && $3 == '--repair-ready' ) ]] || {
   echo 'usage: stage_display_verify.sh WORKING_IMAGE DISPLAY_VERIFY_EXE [--repair-ready]' >&2; exit 2;
 }
@@ -17,15 +18,14 @@ cleanup() {
   rmdir "$mount_dir"
 }
 trap cleanup EXIT
-[[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || {
-  echo 'working image missing or wrong size' >&2; exit 3;
+[[ -f "$image" ]] || {
+  echo 'working image missing' >&2; exit 3;
 }
 [[ -f "$verifier" && $(sha256sum "$verifier" | cut -d' ' -f1) == \
   7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145 ]] || {
   echo 'display verifier missing or unrecognized' >&2; exit 3;
 }
-loop_device=$(losetup --find --show --read-only --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
 if [[ "$repair_ready" == '--repair-ready' ]]; then
@@ -50,8 +50,7 @@ umount "$mount_dir"
 mounted=0
 losetup -d "$loop_device"
 loop_device=
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 mounted=1
 if [[ "$repair_ready" == '--repair-ready' ]]; then

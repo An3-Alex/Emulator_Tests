@@ -20,9 +20,9 @@ class WorkingImageGuardTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn('/working_image_guard.sh"', source)
                 self.assertLess(source.index("require_working_image "),
-                                source.index("losetup --find"))
+                                source.index("image_loop_device "))
 
-    def test_guard_refuses_original_unapproved_paths_and_wrong_sizes(self):
+    def test_guard_refuses_original_unapproved_paths_but_not_other_sizes(self):
         wsl = shutil.which("wsl.exe")
         if not wsl:
             self.skipTest("WSL bash required for shell guard execution")
@@ -35,8 +35,6 @@ source "$1"
 fixture_dir=$(mktemp -d /tmp/m90-guard-fixture.XXXXXX)
 trap 'rm -f -- "$fixture_dir/original.img" "$fixture_dir/working.img" "$fixture_dir/alias.img"; rmdir -- "$fixture_dir"' EXIT
 touch "$fixture_dir/original.img" "$fixture_dir/working.img"
-stat() { printf '%s\\n' "$fixture_size"; }
-fixture_size=16139354112
 unset M90_WORK_IMAGE M90_ORIGINAL_IMAGE
 if require_working_image "$fixture_dir/working.img"; then exit 11; fi
 M90_WORK_IMAGE="$fixture_dir/working.img"
@@ -49,8 +47,8 @@ ln "$fixture_dir/original.img" "$fixture_dir/alias.img"
 M90_WORK_IMAGE="$fixture_dir/alias.img"
 if require_working_image "$fixture_dir/alias.img"; then exit 14; fi
 M90_WORK_IMAGE="$fixture_dir/working.img"
-fixture_size=4096
-if require_working_image "$fixture_dir/working.img"; then exit 15; fi
+truncate -s 4096 "$fixture_dir/working.img"
+require_working_image "$fixture_dir/working.img"
 '''
         result = subprocess.run([wsl, "--exec", "bash", "-c", code, "guard", guard],
                                 capture_output=True, text=True, timeout=30)

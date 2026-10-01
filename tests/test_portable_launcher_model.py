@@ -45,7 +45,7 @@ class PortableLauncherTests(unittest.TestCase):
             replace(selection, swap_displays=True), PROJECT
         ))
 
-    def test_unknown_dump_is_rejected_without_changing_it(self) -> None:
+    def test_other_package_files_and_cf_size_are_selectable_without_changing_them(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             paths = {}
@@ -68,16 +68,10 @@ class PortableLauncherTests(unittest.TestCase):
                 qemu_m68k=str(root / "qemu-system-m68k.exe"),
                 python=str(root / "python.exe"), **paths,
             )
-            with patch.object(model, "KNOWN_CF_BYTES", 64 * 1024 * 1024), \
-                 patch.dict(model.KNOWN_SHA256, {
-                key: model.file_sha256(Path(value)) for key, value in paths.items()
-            }):
-                self.assertEqual(validate_selection(selection), [])
-            self.assertEqual(len([issue for issue in validate_selection(selection)
-                                  if "nicht als M90-kompatibel" in issue]), 4)
+            self.assertEqual(validate_selection(selection), [])
             self.assertEqual(Path(selection.database).read_bytes(), b"database")
 
-    def test_wrong_admission_card_is_rejected_before_start(self) -> None:
+    def test_other_card_model_is_accepted_but_number_copies_are_checked(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             wrong = root / "wrong-card.bin"
@@ -97,9 +91,35 @@ class PortableLauncherTests(unittest.TestCase):
                 qemu_m68k=str(root / "qemu-system-m68k.exe"),
                 python=str(root / "python.exe"),
             )
-            with patch.object(model, "KNOWN_CF_BYTES", 0):
-                issues = validate_selection(selection)
-            self.assertTrue(any("nicht M90" in issue for issue in issues))
+            self.assertEqual(validate_selection(selection), [])
+            image[40] = ord("9")
+            wrong.write_bytes(image)
+            issues = validate_selection(selection)
+            self.assertTrue(any("copies disagree" in issue for issue in issues))
+
+    def test_selected_hashes_are_used_in_programmer_and_runtime_plans(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {}
+            for key in ("database", "loader", "factory", "config"):
+                file = root / f"different package {key}.bin"
+                file.write_bytes(key.encode())
+                files[key] = str(file)
+            selection = Selection(image="unused.img", admission_eeprom="card.bin",
+                                  qemu_x86="qemu-system-x86_64.exe",
+                                  qemu_m68k="qemu-system-m68k.exe", python="python.exe", **files)
+            completed = subprocess.run([*launch_command(selection, PROJECT), "-DryRun"],
+                                       capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            plan = json.loads(completed.stdout)
+            programmer = plan["virtual_programming"]["arguments"]
+            bridge = plan["runtime"]["database_bridge"]["arguments"]
+            for key, path in files.items():
+                flag = f"--expected-{key}-sha256"
+                expected = model.file_sha256(Path(path))
+                self.assertEqual(programmer[programmer.index(flag) + 1], expected)
+                if key != "factory":
+                    self.assertEqual(bridge[bridge.index(flag) + 1], expected)
 
     def test_settings_round_trip_ignores_unknown_future_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 IMAGE PATCHED_GAME" >&2
@@ -27,8 +28,7 @@ patch_hash=$(sha256sum "$patched_game" | awk '{print $1}')
   echo "patched game hash mismatch: $patch_hash" >&2; exit 1;
 }
 
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 
 for directory in NVRAM WorkDir; do

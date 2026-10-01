@@ -17,7 +17,6 @@ from m68k_database_transform import transform_database
 
 
 RAM_SIZE = 2 * 1024 * 1024
-CONFIG_FILE_SIZE = 1920
 CONFIG_ENTRY = 0x1500
 CONFIG_MODULE_ID = 0x61640403
 CONFIG_ENTRY_PREFIX = bytes.fromhex("42 B8 10 00 22 78 00 00")
@@ -37,8 +36,8 @@ def prepare_config_writes(
     digest = hashlib.sha256(raw).hexdigest().upper()
     if digest != expected_sha256.replace(" ", "").upper():
         raise ValueError("config SHA-256 mismatch")
-    if len(raw) != CONFIG_FILE_SIZE:
-        raise ValueError("config module size mismatch")
+    if len(raw) < CONFIG_COPY_SOURCE_OFFSET + CONFIG_COPY_SIZE:
+        raise ValueError("config module is shorter than its RAM-copy source")
     decoded = transform_database(raw, d3)
     stored_checksum, end_address, _, module_id = struct.unpack_from(">IIII", decoded)
     entrypoint = struct.unpack_from(">I", decoded, 0x4C)[0]

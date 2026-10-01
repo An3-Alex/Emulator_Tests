@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=${1:?usage: find_image_files.sh IMAGE_PATH NAME_PATTERN}
 NAME_PATTERN=${2:?usage: find_image_files.sh IMAGE_PATH NAME_PATTERN}
@@ -15,7 +16,6 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --read-only --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" ro)
 ntfs-3g -o ro "$LOOP_DEVICE" "$MOUNT_PATH"
 find "$MOUNT_PATH" -type f -iname "$NAME_PATTERN" -print

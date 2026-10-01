@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run only after the temporary QXL guest has shut down cleanly.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 [[ $# -eq 2 ]] || { echo 'usage: finalize_image_stage.sh WORKING_IMAGE DISPLAY_BOOTSTRAP' >&2; exit 2; }
 image=$1
@@ -26,12 +27,11 @@ verify_hash() {
   }
 }
 
-[[ -f "$image" && $(stat -c %s "$image") == 16139354112 ]] || {
-  echo 'working image missing or wrong size' >&2; exit 3;
+[[ -f "$image" ]] || {
+  echo 'working image missing' >&2; exit 3;
 }
 verify_hash "$bootstrap" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
-loop_device=$(losetup --find --show --read-only --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
 verifier_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
@@ -70,8 +70,7 @@ mounted=0
 losetup -d "$loop_device"
 loop_device=
 
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 mounted=1
 python3 "$script_dir/set_registry_dword.py" \

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 [[ $# == 2 ]] || { echo "usage: $0 IMAGE force|default" >&2; exit 2; }
 image=$(realpath "$1")
@@ -23,8 +24,7 @@ cleanup() {
   rmdir "$mount_dir" 2>/dev/null || true
 }
 trap cleanup EXIT
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 hive="$mount_dir/WINDOWS/system32/config/SYSTEM"
 backup="$mount_dir/WINDOWS/system32/config/SYSTEM.pre-codex-autochk"

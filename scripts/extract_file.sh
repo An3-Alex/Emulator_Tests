@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 if [[ $# -ne 3 ]]; then
   echo "usage: $0 IMAGE GUEST_PATH OUTPUT" >&2
@@ -21,8 +22,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-loop_device=$(losetup --find --show --read-only \
-  --offset 1048576 --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 
 source_file="$mount_dir/$guest_path"

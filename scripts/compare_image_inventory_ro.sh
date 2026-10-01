@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 [[ $# == 2 ]] || { echo 'usage: compare_image_inventory_ro.sh ORIGINAL WORKING' >&2; exit 2; }
 original=$1
@@ -24,8 +25,7 @@ trap cleanup EXIT
 inventory() {
   local label=$1 image=$2 candidate
   [[ -f "$image" ]] || { echo "missing image: $image" >&2; exit 3; }
-  loop_device=$(losetup --find --show --read-only --offset 1048576 \
-    --sizelimit 16021151744 "$image")
+  loop_device=$(image_loop_device "$image" ro)
   ntfs-3g -o ro "$loop_device" "$mount_dir"
   mounted=1
   find "$mount_dir" -type f -printf '%P\t%s\n' | LC_ALL=C sort > "$temp_dir/$label.files"

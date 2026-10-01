@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Update only the selected prepared copy, with guest-file backups. No VM boot.
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 [[ $# -eq 4 || $# -eq 5 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO]' >&2; exit 2; }
 audio_args=()
 if [[ $# -eq 5 ]]; then audio_args=(--audio "$5"); fi
@@ -9,7 +10,6 @@ image=$(realpath "$2")
 [[ -f "$original" && -f "$image" && "$original" != "$image" && ! "$original" -ef "$image" ]] || {
   echo 'Original and working copy must be separate existing files' >&2; exit 3;
 }
-[[ $(stat -c %s "$image") == 16139354112 ]] || { echo 'Wrong image size' >&2; exit 3; }
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 mount_dir=$(mktemp -d /tmp/m90-graphics-update.XXXXXX)
 loop_device=
@@ -23,10 +23,10 @@ trap cleanup EXIT
 mount_image() {
   local mode=$1
   if [[ "$mode" == ro ]]; then
-    loop_device=$(losetup --find --show --read-only --offset 1048576 --sizelimit 16021151744 "$image")
+    loop_device=$(image_loop_device "$image" ro)
     ntfs-3g -o ro "$loop_device" "$mount_dir"
   else
-    loop_device=$(losetup --find --show --offset 1048576 --sizelimit 16021151744 "$image")
+    loop_device=$(image_loop_device "$image" rw)
     ntfs-3g -o big_writes "$loop_device" "$mount_dir"
   fi
   mounted=1

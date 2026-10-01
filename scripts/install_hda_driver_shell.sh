@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 if [[ $# -ne 3 ]]; then
   echo "usage: $0 IMAGE PATCHED_INF HDA_INSTALLER_EXE" >&2
@@ -33,8 +34,7 @@ actual_installer=$(sha256sum "$installer" | awk '{print $1}')
   echo "installer hash mismatch: $actual_installer" >&2; exit 1;
 }
 
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 
 active="$mount_dir/WINDOWS/explorer.exe"

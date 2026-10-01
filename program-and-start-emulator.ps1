@@ -53,16 +53,29 @@ if (($null -eq $D3) -eq [string]::IsNullOrWhiteSpace($RuntimeDump)) {
 }
 
 $programmer = Join-Path $PSScriptRoot 'scripts\serialloader_chip_emulator.py'
+function Get-SelectedInputHash([string]$Path) {
+    if ($DryRun -and ([string]::IsNullOrWhiteSpace($Path) -or
+        -not (Test-Path -LiteralPath $Path -PathType Leaf))) { return ('0' * 64) }
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        $algorithm.Dispose()
+    }
+}
 $programArgs = @(
     $programmer,
     '--loader', $Loader,
-    '--expected-loader-sha256', 'B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109',
+    '--expected-loader-sha256', (Get-SelectedInputHash $Loader),
     '--factory', $FactoryReset,
-    '--expected-factory-sha256', '4F088DB4AF5F4A5D112A003EF312EB19B4388C25902FFA03F75742379A0CD5C4',
+    '--expected-factory-sha256', (Get-SelectedInputHash $FactoryReset),
     '--config', $Config,
-    '--expected-config-sha256', 'DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783',
+    '--expected-config-sha256', (Get-SelectedInputHash $Config),
     '--database', $Database,
-    '--expected-database-sha256', '593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8',
+    '--expected-database-sha256', (Get-SelectedInputHash $Database),
     '--date', $DatabaseDate.ToString('yyyy-MM-ddTHH:mm:ss')
 )
 if ($null -ne $D3) { $programArgs += @('--d3', ('0x{0:X8}' -f $D3)) }

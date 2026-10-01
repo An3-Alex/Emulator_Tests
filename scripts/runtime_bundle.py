@@ -26,9 +26,13 @@ SHELL_FILES = (
     "check_image_stage.sh",
     "update_runtime_graphics.sh",
     "stage_audio_image.sh",
+    "export_audio_diagnostics.sh",
+    "image_partition.sh",
 )
 REQUIRED_PYTHON_FILES = (
     "audio_driver_package.py",
+    "audio_diagnostics.py",
+    "image_partition.py",
     "audio_image_stage.py",
     "audio_setup_runner.py",
     "admission_card.py",

@@ -23,6 +23,13 @@ Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
 
 ## Änderungen
 
+- 0.1.11: Audio-Einrichtung mit sichtbarem XP-Fenster und frühzeitig
+  parallel laufendem Dialog-Helfer. Bei Fehlern werden Bildschirmbilder und
+  Installationsprotokolle automatisch lokal gesichert. Unterbrochene
+  Audio-Einrichtungen können mit derselben Arbeitskopie fortgesetzt werden.
+  Die feste CF-Dateigröße, feste Partitionsgrenzen und die M90-Datei-Whitelist
+  entfallen. Eigene Pakete wie M88 können ausgewählt werden; die bekannte
+  CC4-Hardwareanbindung und die Formatprüfungen gelten weiterhin.
 - 0.1.10: Automatische SigmaTel-Audioeinrichtung in der Arbeitskopie mit
   Sicherung des bisherigen Starters und der Registry. Der abstürzende Realtek-
   Treiber wird deaktiviert; XP registriert den passenden Audioausgang vor dem
@@ -69,9 +76,18 @@ Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
 
 ## Lokal starten
 
-Die aktuelle [M90-Emulator.exe herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.10/M90-Emulator.exe)
-oder die [Release-Seite 0.1.10 öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.10).
+Die aktuelle [M90-Emulator.exe herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.11/M90-Emulator.exe)
+oder die [Release-Seite 0.1.11 öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.11).
 Für das private Repository ist eine GitHub-Anmeldung mit Zugriff erforderlich.
+
+CF-Images werden unabhängig von ihrer Kapazität akzeptiert. Bei der Einrichtung
+wird die NTFS-Partition aus dem MBR einschließlich logischer Partitionen
+ermittelt; ein reines NTFS-Volume ist ebenfalls möglich. Mehrere NTFS-Volumes
+werden nicht automatisch geraten. GPT und andere Dateisysteme sind im
+XP-Profil noch nicht unterstützt. Die Arbeitskopie muss weiterhin vom Original
+getrennt sein. Die Auswahl anderer Pakete wie M88 bedeutet noch keine bestätigte
+Laufzeitkompatibilität: Boot-ROM-Kontext, Firmware-Struktur, Config-Code und
+die anzupassenden XP-/Spielkomponenten müssen zur bisherigen Anbindung passen.
 
 Unter Windows `Start-Emulator-UI.cmd` doppelklicken oder die `M90-Emulator.exe`
 aus dem privaten GitHub-Release starten. Die Kurzanleitung im Fenster zeigt

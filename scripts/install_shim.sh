@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=$(realpath "${1:?usage: install_shim.sh IMAGE_PATH SHIM_DLL}")
 SHIM_PATH=${2:?usage: install_shim.sh IMAGE_PATH SHIM_DLL}
@@ -31,8 +32,7 @@ if [ "$SHIM_HASH" != "$EXPECTED_SHIM" ]; then
 fi
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" rw)
 ntfs-3g -o big_writes "$LOOP_DEVICE" "$MOUNT_PATH"
 
 SYSTEM32="$MOUNT_PATH/WINDOWS/system32"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 IMAGE QXL_INSTALLER_EXE" >&2
@@ -29,8 +30,7 @@ actual_installer=$(sha256sum "$installer" | awk '{print $1}')
   exit 1
 }
 
-loop_device=$(losetup --find --show --offset 1048576 \
-  --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 active="$mount_dir/WINDOWS/explorer.exe"
 backup="$mount_dir/WINDOWS/explorer_adp_before_qxl.exe"

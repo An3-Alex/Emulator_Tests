@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 if [[ $# -ne 2 ]]; then
   echo "usage: $0 IMAGE OUTPUT_DIRECTORY" >&2
@@ -20,8 +21,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-loop_device=$(losetup --find --show --read-only \
-  --offset 1048576 --sizelimit 16021151744 "$image")
+loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mkdir -p "$output_dir/NVRAM" "$output_dir/LogFiles" "$output_dir/Crash"
 

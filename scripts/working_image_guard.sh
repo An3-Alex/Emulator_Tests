@@ -13,8 +13,4 @@ require_working_image() {
     echo 'Refusing an original image or an unapproved working-copy path.' >&2
     return 3
   }
-  [[ $(stat -c %s -- "$working") == 16139354112 ]] || {
-    echo 'Unexpected working image size.' >&2
-    return 3
-  }
 }

@@ -1,7 +1,7 @@
 """Selection, validation, and launch plan for a user-supplied M90 setup.
 
-Only hashes of known-compatible input files are accepted. In particular, this
-module never copies owner disk images or database dumps into the application.
+Owner inputs are selectable independently of the original M90 file identities.
+This module never copies disk images or database dumps into the application.
 """
 
 from __future__ import annotations
@@ -14,16 +14,8 @@ import math
 from pathlib import Path
 import subprocess
 
-from admission_card import ERGO_M90_ID, inspect_eeprom
+from admission_card import inspect_eeprom
 
-
-KNOWN_SHA256 = {
-    "database": "593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8",
-    "loader": "B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109",
-    "factory": "4F088DB4AF5F4A5D112A003EF312EB19B4388C25902FFA03F75742379A0CD5C4",
-    "config": "DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783",
-}
-KNOWN_CF_BYTES = 16_139_354_112
 
 # One schema for the form, saved values and start validation. No free-form
 # QEMU arguments: hardware addresses and coupled ports are intentionally fixed.
@@ -160,35 +152,18 @@ def validate_selection(selection: Selection) -> list[str]:
             issues.append(f"{label}: Datei nicht gefunden: {value}")
     if issues:
         return issues
-    for key, label in (
-        ("database", "Datenbank"), ("loader", "Loader"),
-        ("factory", "Factory"), ("config", "Konfiguration"),
-    ):
-        actual = file_sha256(Path(getattr(selection, key)))
-        if actual != KNOWN_SHA256[key]:
-            issues.append(
-                f"{label}: Diese Version ist noch nicht als M90-kompatibel "
-                f"verifiziert (SHA-256 {actual[:12]}…)."
-            )
     if Path(selection.admission_eeprom).stat().st_size != 256:
         issues.append("Zulassungskarte: EEPROM muss genau 256 Byte groß sein")
     else:
         try:
-            _, model = inspect_eeprom(Path(selection.admission_eeprom).read_bytes())
+            inspect_eeprom(Path(selection.admission_eeprom).read_bytes())
         except ValueError as exc:
             issues.append(f"Zulassungskarte: {exc}")
-        else:
-            if model != ERGO_M90_ID:
-                issues.append(
-                    f"Zulassungskarte: Modell {model.hex(' ').upper()} ist nicht M90"
-                )
     if selection.original_image and Path(selection.image).resolve() == Path(selection.original_image).resolve():
         issues.append("CF-Image: Original darf nicht als Arbeitskopie gestartet werden")
-    image_size = Path(selection.image).stat().st_size
-    if image_size != KNOWN_CF_BYTES:
-        issues.append(
-            f"CF-Image: erwartete Größe {KNOWN_CF_BYTES} Byte, gefunden {image_size} Byte"
-        )
+    if selection.original_image and Path(selection.original_image).is_file() and \
+            Path(selection.image).samefile(selection.original_image):
+        issues.append("CF-Image: Original darf nicht als Arbeitskopie gestartet werden (derselbe Dateiknoten)")
     for key, expected in (
         ("qemu_x86", "qemu-system-x86_64.exe"),
         ("qemu_m68k", "qemu-system-m68k.exe"),

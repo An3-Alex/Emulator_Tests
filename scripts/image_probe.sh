@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=${1:?usage: image_probe.sh IMAGE_PATH}
 MOUNT_PATH=/mnt/m90_ro
@@ -14,8 +15,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --read-only --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" ro)
 ntfs-3g -o ro "$LOOP_DEVICE" "$MOUNT_PATH"
 
 stat -c '%n %s bytes' \

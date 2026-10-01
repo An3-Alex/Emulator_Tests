@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=${1:?usage: archive_log.sh IMAGE_PATH ARCHIVE_NAME}
 ARCHIVE_NAME=${2:?usage: archive_log.sh IMAGE_PATH ARCHIVE_NAME}
@@ -20,8 +21,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" rw)
 ntfs-3g -o big_writes "$LOOP_DEVICE" "$MOUNT_PATH"
 
 SOURCE="$MOUNT_PATH/NVRAM/cgos_shim.log"

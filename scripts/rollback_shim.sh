@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
 
 IMAGE_PATH=${1:?usage: rollback_shim.sh IMAGE_PATH}
 EXPECTED_ORIGINAL=480703586ea6f5bdc9ae3d8aa7bb47f03fa4d8234b48a3f2abc92356fb76a14e
@@ -16,8 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$MOUNT_PATH"
-LOOP_DEVICE=$(losetup --find --show --offset 1048576 \
-    --sizelimit 16021151744 "$IMAGE_PATH")
+LOOP_DEVICE=$(image_loop_device "$IMAGE_PATH" rw)
 ntfs-3g -o big_writes "$LOOP_DEVICE" "$MOUNT_PATH"
 
 SYSTEM32="$MOUNT_PATH/WINDOWS/system32"
