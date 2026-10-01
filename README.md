@@ -23,6 +23,11 @@ Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
 
 ## Änderungen
 
+- 0.1.12: XP-Audiobasis wird ohne virtuelle Soundkarte eingerichtet. Danach
+  folgen die getrennte SigmaTel-Installation und Ausgabeprüfung. Die alten
+  Realtek-Treiberdateien werden aus den aktiven Pfaden genommen und mit
+  Wiederherstellungsmanifest gesichert. Abgebrochene Audio-Einrichtungen
+  früherer Versionen können mit derselben Arbeitskopie fortgesetzt werden.
 - 0.1.11: Audio-Einrichtung mit sichtbarem XP-Fenster und frühzeitig
   parallel laufendem Dialog-Helfer. Bei Fehlern werden Bildschirmbilder und
   Installationsprotokolle automatisch lokal gesichert. Unterbrochene
@@ -76,9 +81,9 @@ Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
 
 ## Lokal starten
 
-Die aktuelle [M90-Emulator.exe herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.11/M90-Emulator.exe)
-oder die [Release-Seite 0.1.11 öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.11).
-Für das private Repository ist eine GitHub-Anmeldung mit Zugriff erforderlich.
+Die aktuelle [M90-Emulator.exe herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.12/M90-Emulator.exe)
+oder die [Release-Seite 0.1.12 öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.12).
+Repository und Releases sind öffentlich zugänglich.
 
 CF-Images werden unabhängig von ihrer Kapazität akzeptiert. Bei der Einrichtung
 wird die NTFS-Partition aus dem MBR einschließlich logischer Partitionen
@@ -90,7 +95,7 @@ Laufzeitkompatibilität: Boot-ROM-Kontext, Firmware-Struktur, Config-Code und
 die anzupassenden XP-/Spielkomponenten müssen zur bisherigen Anbindung passen.
 
 Unter Windows `Start-Emulator-UI.cmd` doppelklicken oder die `M90-Emulator.exe`
-aus dem privaten GitHub-Release starten. Die Kurzanleitung im Fenster zeigt
+aus dem GitHub-Release starten. Die Kurzanleitung im Fenster zeigt
 die Reihenfolge: Abhängigkeiten prüfen, eigene Dateien auswählen, frisches
 Image einrichten, danach prüfen und starten. Das Startfenster fragt nach:
 

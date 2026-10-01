@@ -8,9 +8,12 @@ import struct
 
 from audio_driver_package import FILES, validate
 from graphics_update import BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP, CGOS_HASH, inside, require_hash, durable_copy, sha256
+from audio_legacy_driver import quarantine, validate_quarantine
 
-INSTALLER_HASH = "b01a14298a15ba96fb1853ae97ceddfee8f7eb7050869b8c663fb6d38c250982"
-PREVIOUS_INSTALLERS = {"cf721386f3fb40ae5364c2a09ad2b2977835db70e84381739dd3e96fea8e58e4"}
+INSTALLER_HASH = "f1b73821f23db2f817b226c1a85c84398c6f6779100273d5d2c9123deeffb860"
+PREVIOUS_INSTALLERS = {"cf721386f3fb40ae5364c2a09ad2b2977835db70e84381739dd3e96fea8e58e4",
+                       "b01a14298a15ba96fb1853ae97ceddfee8f7eb7050869b8c663fb6d38c250982"}
+SOFTWARE_HASH = "0393fe5c8cdeb593afa330a50003b06048c11bbc0f5a527a887598e98db9e7b9"
 VERIFIER_HASH = "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"
 MARKER = "NVRAM/m90_audio_stage.json"
 BACKUP = "NVRAM/m90-audio-backup"
@@ -74,7 +77,7 @@ def read_state(root: Path) -> dict | None:
     if not marker.exists():
         return None
     state = json.loads(marker.read_text(encoding="utf-8"))
-    if state.get("version") != 1 or state.get("stage") not in ("staging", "install", "verify", "ready"):
+    if state.get("version") != 1 or state.get("stage") not in ("staging", "software", "install", "verify", "ready"):
         raise ValueError("Unknown audio setup state")
     return state
 
@@ -87,6 +90,8 @@ def status(root: Path) -> str:
         return "required"
     stage = state["stage"]
     require_hash(inside(root, f"{BACKUP}/explorer.exe"), {BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP})
+    if stage == "software":
+        require_hash(inside(root, "WINDOWS/explorer.exe"), {SOFTWARE_HASH})
     if stage in ("install", "verify"):
         require_hash(inside(root, "WINDOWS/explorer.exe"),
                      {INSTALLER_HASH, *PREVIOUS_INSTALLERS} if stage == "install" else {VERIFIER_HASH, state["shell_hash"]})
@@ -97,6 +102,10 @@ def status(root: Path) -> str:
         if any(value != 4 for key, value in starts.items() if key.endswith("/ALCXWDM")):
             raise ValueError("Crashing Realtek service is active again")
         require_hash(inside(root, "WINDOWS/explorer.exe"), {BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP})
+    if stage in ("install", "verify", "ready") and state.get("audio_protocol") != 2:
+        return f"legacy-{stage}"
+    if stage in ("install", "verify", "ready"):
+        validate_quarantine(root)
     return stage
 
 
@@ -113,22 +122,27 @@ def verify_log(root: Path) -> None:
     ))
 
 
-def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path) -> str:
+def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path,
+          software: Path | None = None) -> str:
     root = root.resolve()
     current = status(root)
     if action == "check":
         return current
     require_hash(installer, {INSTALLER_HASH})
     require_hash(verifier, {VERIFIER_HASH})
+    software = software or installer.with_name("audio-software.exe")
+    require_hash(software, {SOFTWARE_HASH})
     validate(driver)
     state = read_state(root)
     backup = inside(root, BACKUP)
     shell = inside(root, "WINDOWS/explorer.exe")
     system = inside(root, "WINDOWS/system32/config/SYSTEM")
-    if action == "install":
+    if state is not None:
+        require_hash(backup / "SYSTEM", {state["system_hash"]})
+    if action == "software":
         if current == "ready":
             return current
-        if current == "verify":
+        if current in ("install", "verify"):
             raise ValueError("Audio already installed; verify it instead")
         if state is None:
             if backup.exists():
@@ -137,8 +151,8 @@ def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path
             backup.mkdir()
             durable_copy(shell, backup / "explorer.exe")
             durable_copy(system, backup / "SYSTEM")
-            software = inside(root, "WINDOWS/system32/config/SOFTWARE")
-            durable_copy(software, backup / "SOFTWARE")
+            software_hive = inside(root, "WINDOWS/system32/config/SOFTWARE")
+            durable_copy(software_hive, backup / "SOFTWARE")
             state = {"version":1, "stage":"staging", "starts":starts,
                      "shell_hash":sha256(shell), "system_hash":sha256(system)}
             write_state(root, state)
@@ -147,10 +161,11 @@ def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path
         if current == "staging":
             durable_copy(backup / "SYSTEM", system)
             durable_copy(backup / "explorer.exe", shell)
-        elif current == "install":
-            require_hash(shell, {INSTALLER_HASH, *PREVIOUS_INSTALLERS})
         starts = registry(root)
         registry(root, {key:4 for key in starts})
+        # Start=4 alone does not make old files unavailable to PnP/SetupAPI.
+        # Preserve SYS, cached copies, matching INF and PNF outside active paths.
+        quarantine(root)
         # SetupAPI uses the original XP installation source directory. Some
         # embedded images retain the live files but not their source copies.
         for name, relative in {
@@ -171,6 +186,22 @@ def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path
             destination = inside(root, f"NVRAM/m90-audio-driver/{name}")
             durable_copy(driver / name, destination)
             require_hash(destination, {expected})
+        for name in ("m90_audio_software.log", "m90_audio_install.log", "m90_audio_verify.log"):
+            previous_log = inside(root, f"NVRAM/{name}")
+            if previous_log.exists():
+                previous_log.unlink()
+        durable_copy(software, shell)
+        state["audio_protocol"] = 2
+        state["stage"] = "software"
+    elif action == "install":
+        if current not in ("software", "install"):
+            raise ValueError("Prepare software audio without AC97 before installing the driver")
+        require_log(root, "m90_audio_software.log", (
+            "XP audio software devices ready.", "Software audio preparation complete.",
+        ))
+        quarantine(root)
+        starts = registry(root)
+        registry(root, {key:4 for key in starts})
         durable_copy(installer, shell)
         state["stage"] = "install"
     elif action == "verify":
@@ -205,9 +236,10 @@ def stage(root: Path, action: str, installer: Path, verifier: Path, driver: Path
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
-    parser.add_argument("action", choices=("check", "install", "verify", "finish"))
+    parser.add_argument("action", choices=("check", "software", "install", "verify", "finish"))
     parser.add_argument("installer", type=Path)
     parser.add_argument("verifier", type=Path)
     parser.add_argument("driver", type=Path)
+    parser.add_argument("software", type=Path)
     args = parser.parse_args()
-    print(stage(args.root, args.action, args.installer, args.verifier, args.driver))
+    print(stage(args.root, args.action, args.installer, args.verifier, args.driver, args.software))

@@ -8,6 +8,7 @@ from pathlib import Path
 from graphics_update import inside
 
 GUEST_FILES = (
+    "NVRAM/m90_audio_software.log",
     "NVRAM/m90_audio_install.log",
     "NVRAM/m90_audio_verify.log",
     "NVRAM/m90_audio_stage.json",

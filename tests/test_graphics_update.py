@@ -154,6 +154,20 @@ class GraphicsUpdateTests(unittest.TestCase):
                 target.write_bytes(self.before[relative])
         self.assert_original_files()
 
+    def test_audio_update_accepts_only_validated_legacy_quarantine(self):
+        audio = self.audio_fixture()
+        from audio_legacy_driver import quarantine, MANIFEST
+        (self.guest / "WINDOWS/INF/realtekac97.inf").write_bytes(b"ALCXWDM.SYS")
+        quarantine(self.guest)
+        self.assertEqual(self.run_update(audio=audio, check_only=True), "Runtime update required")
+        record = self.guest / MANIFEST
+        data = record.read_text()
+        record.write_text('{"version":1,"files":[]}')
+        with self.assertRaisesRegex(ValueError, "manifest"):
+            self.run_update(audio=audio)
+        self.assertFalse((self.guest / "NVRAM/m90-graphics-backups").exists())
+        record.write_text(data)
+
     def test_audio_replace_failure_rolls_back_graphics_and_audio(self):
         audio = self.audio_fixture()
         original_replace = graphics.os.replace

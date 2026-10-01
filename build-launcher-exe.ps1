@@ -36,7 +36,7 @@ try {
     foreach ($name in @(
         'build\Cgos.dll', 'build\display-bootstrap.exe', 'build\qxl-installer.exe',
         'build\display-verify.exe',
-        'build\audio-installer.exe', 'build\audio-verify.exe',
+        'build\audio-software.exe', 'build\audio-installer.exe', 'build\audio-verify.exe',
         'build\d3d9-proxy\d3d9.dll', 'build\sram-compat\FBWFLIB.dll',
         'build\irrklang-proxy\irrKlang.dll'
     )) {

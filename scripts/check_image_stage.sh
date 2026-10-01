@@ -42,7 +42,11 @@ else
     # Legacy working copies have no display preparation marker. During the
     # reversible audio installation their shell is temporarily our helper.
     audio_stage=$(python3 -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from audio_image_stage import status; print(status(Path(sys.argv[2])))' "$(dirname "$0")" "$mount_dir")
-    case "$audio_stage" in staging|install|verify|ready) echo legacy-ready; exit 0;; *) exit 3;; esac
+    case "$audio_stage" in
+      staging|software|install|verify|ready|legacy-install|legacy-verify|legacy-ready)
+        echo legacy-ready; exit 0;;
+      *) exit 3;;
+    esac
   fi
   if [[ -f "$cgos" && -f "$shell" ]]; then
     cgos_hash=$(sha256sum "$cgos" | cut -d' ' -f1)

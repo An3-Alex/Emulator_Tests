@@ -32,6 +32,7 @@ SHELL_FILES = (
 REQUIRED_PYTHON_FILES = (
     "audio_driver_package.py",
     "audio_diagnostics.py",
+    "audio_legacy_driver.py",
     "image_partition.py",
     "audio_image_stage.py",
     "audio_setup_runner.py",
@@ -57,6 +58,7 @@ REQUIRED_PYTHON_FILES = (
     "serialloader_chip_emulator.py",
 )
 OWN_BINARIES = (
+    Path("build/audio-software.exe"),
     Path("build/audio-installer.exe"),
     Path("build/audio-verify.exe"),
     Path("build/Cgos.dll"),

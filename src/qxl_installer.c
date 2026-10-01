@@ -194,6 +194,7 @@ static HANDLE start_signing_helper(void) {
     }
 
 void __stdcall mainCRTStartup(void) {
+#ifndef INSTALLER_SOFTWARE_ONLY
     static const char inf_path[] = INSTALLER_INF_PATH;
     static const char hardware_id[] = INSTALLER_HARDWARE_ID;
     HMODULE setupapi;
@@ -214,6 +215,7 @@ void __stdcall mainCRTStartup(void) {
     DWORD matches = 0;
     DWORD installed = 0;
     BOOL copied;
+#endif
     HANDLE signing_thread;
 
     g_log = CreateFileA(INSTALLER_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ,
@@ -238,6 +240,18 @@ void __stdcall mainCRTStartup(void) {
     }
     write_text("XP audio software devices ready.\r\n");
 #endif
+#ifdef INSTALLER_SOFTWARE_ONLY
+    /* No hardware enumeration/installation until the next, separate boot. */
+    write_text("Software audio preparation complete.\r\n");
+    g_signing_helper_active = 0;
+    if (signing_thread != NULL) {
+        WaitForSingleObject(signing_thread, 2000);
+        CloseHandle(signing_thread);
+    }
+    signal_host(TRUE);
+    Sleep(120000);
+    ExitProcess(0);
+#else
 #ifndef INSTALLER_EARLY_DIALOG_HELPER
     signing_thread = CreateThread(NULL, 0, signing_helper, NULL, 0, NULL);
     if (signing_thread == NULL) {
@@ -375,4 +389,5 @@ void __stdcall mainCRTStartup(void) {
     }
     Sleep(120000);
     ExitProcess(matches == INSTALLER_EXPECTED_DEVICES && installed == INSTALLER_EXPECTED_DEVICES ? 0 : 13);
+#endif
 }

@@ -74,9 +74,15 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
     if audio is not None:
         require_hash(audio, {AUDIO_HASH})
         require_hash(inside(root, "WINDOWS/system32/irrKlang.dll"), {ORIGINAL_AUDIO_HASH})
-        for relative in ("WINDOWS/INF/realtekac97.inf", "WINDOWS/system32/drivers/ALCXWDM.SYS"):
-            if not inside(root, relative).is_file():
-                raise ValueError(f"AC97 driver file missing: {relative}")
+        # New audio setup intentionally removes the legacy driver from active
+        # paths. Accept only its complete, hash-checked quarantine, not absence.
+        from audio_legacy_driver import MANIFEST, validate_quarantine
+        if inside(root, MANIFEST).exists():
+            validate_quarantine(root)
+        else:
+            for relative in ("WINDOWS/INF/realtekac97.inf", "WINDOWS/system32/drivers/ALCXWDM.SYS"):
+                if not inside(root, relative).is_file():
+                    raise ValueError(f"AC97 driver file missing: {relative}")
     require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH})
     marker = inside(root, "NVRAM/m90_setup_stage.txt")
     if marker.exists() and marker.read_text().strip() != "stage=ready":

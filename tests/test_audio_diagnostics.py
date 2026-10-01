@@ -151,6 +151,30 @@ class BootTests(unittest.TestCase):
         early = common.index("signing_thread = start_signing_helper();", common.index("write_text(INSTALLER_TITLE)"))
         self.assertLess(early, common.index("if (!INSTALLER_PREPARE())"))
 
+    def test_card_is_absent_for_software_and_present_only_for_hardware_phases(self):
+        for phase, signal, has_card in (("software", "SOFTWARE", False), ("install", "SETUP", True), ("verify", "VERIFY", True)):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as folder, ExitStack() as stack:
+                process = mock.Mock()
+                process.poll.return_value = None
+                process.wait.return_value = 0
+                connection = mock.Mock()
+                connection.recv.return_value = f"M90-AUDIO-{signal}-OK\n".encode()
+                stack.enter_context(mock.patch.object(runner, "require_stopped"))
+                stack.enter_context(mock.patch.object(runner, "require_free_port"))
+                popen = stack.enter_context(mock.patch.object(runner.subprocess, "Popen", return_value=process))
+                stack.enter_context(mock.patch.object(runner, "connect_with_retry", return_value=mock.Mock()))
+                stack.enter_context(mock.patch.object(runner.socket, "create_connection", return_value=connection))
+                runner.boot(Path("qemu"), Path("work.img"), phase, Path(folder) / "stderr.log")
+                command = popen.call_args.args[0]
+                self.assertEqual("AC97,audiodev=audio0" in command, has_card)
+                self.assertEqual("-audiodev" in command, has_card)
+
+    def test_unknown_phase_cannot_start_qemu(self):
+        with mock.patch.object(runner, "require_stopped"), mock.patch.object(runner.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(ValueError, "phase"):
+                runner.boot(Path("qemu"), Path("work.img"), "wrong", Path("unused.log"))
+            popen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

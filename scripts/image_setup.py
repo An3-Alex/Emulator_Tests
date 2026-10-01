@@ -10,7 +10,8 @@ from portable_launcher_model import Selection, file_sha256
 
 
 COMPONENTS = {
-    "audio_installer": ("build/audio-installer.exe", "b01a14298a15ba96fb1853ae97ceddfee8f7eb7050869b8c663fb6d38c250982"),
+    "audio_software": ("build/audio-software.exe", "0393fe5c8cdeb593afa330a50003b06048c11bbc0f5a527a887598e98db9e7b9"),
+    "audio_installer": ("build/audio-installer.exe", "f1b73821f23db2f817b226c1a85c84398c6f6779100273d5d2c9123deeffb860"),
     "audio_verify": ("build/audio-verify.exe", "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"),
     "shim": ("build/Cgos.dll", "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"),
     "bootstrap": ("build/display-bootstrap.exe", "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"),

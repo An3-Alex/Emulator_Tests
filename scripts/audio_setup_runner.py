@@ -27,13 +27,17 @@ def require_stopped() -> None:
 def boot(qemu: Path, image: Path, phase: str, log: Path, timeout: int = 300,
          *, diagnostics: Path | None = None) -> None:
     require_stopped()
+    tags = {"software": "SOFTWARE", "install": "SETUP", "verify": "VERIFY"}
+    if phase not in tags:
+        raise ValueError("Unbekannte Audio-Einrichtungsphase")
     for port in (4654, 4466):
         require_free_port(port)
     command = qemu_command(qemu, image, 4654, 4466, swap_displays=True)
     # Show XP so an installer dialog or boot failure is no longer invisible.
     # The fixed setup hardware remains independent of the database, inaudible.
-    command += ["-audiodev", "none,id=audio0,in.voices=0", "-device", "AC97,audiodev=audio0"]
-    tag = "SETUP" if phase == "install" else "VERIFY"
+    if phase != "software":
+        command += ["-audiodev", "none,id=audio0,in.voices=0", "-device", "AC97,audiodev=audio0"]
+    tag = tags[phase]
     success = f"M90-AUDIO-{tag}-OK\n".encode()
     failure = f"M90-AUDIO-{tag}-FAILED\n".encode()
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -118,7 +122,7 @@ def diagnostic_boot(original: Path, image: Path, qemu: Path, project: Path, phas
     root = project / "logs/audio-diagnostics"
     root.mkdir(parents=True, exist_ok=True)
     destination = Path(tempfile.mkdtemp(prefix=f"{phase}-", dir=root))
-    log = project / f"logs/audio-{'setup' if phase == 'install' else 'verify'}-qemu.stderr.log"
+    log = project / f"logs/audio-{'setup' if phase == 'install' else phase}-qemu.stderr.log"
     try:
         boot(qemu, image, phase, log, diagnostics=destination)
     except Exception as exc:
@@ -163,7 +167,8 @@ def prepare(original: Path, image: Path, qemu: Path, project: Path) -> None:
         raise ValueError("Original und Arbeitskopie müssen verschiedene vorhandene Dateien sein")
     driver = project / "downloads/sigmatel-xp"
     paths = [project / "scripts/stage_audio_image.sh", original, image]
-    parts = [project / "build/audio-installer.exe", project / "build/audio-verify.exe", driver]
+    parts = [project / "build/audio-installer.exe", project / "build/audio-verify.exe", driver,
+             project / "build/audio-software.exe"]
     prefix = ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(p) for p in paths)]
     suffix = [wsl_path(p) for p in parts]
     def step(action: str) -> str:
@@ -178,11 +183,18 @@ def prepare(original: Path, image: Path, qemu: Path, project: Path) -> None:
         print("XP-Audio bereits eingerichtet und geprüft.", flush=True)
         return
     ensure(driver)
-    if state in ("required", "staging", "install"):
+    if state in ("required", "staging", "software", "legacy-install", "legacy-verify", "legacy-ready"):
+        print("XP-Audiokomponenten werden ohne virtuelle Soundkarte vorbereitet…", flush=True)
+        step("software")
+        diagnostic_boot(original, image, qemu, project, "software")
+        state = "install"
+    if state == "install":
         print("Passender SigmaTel-XP-Treiber wird eingerichtet…", flush=True)
         step("install")
         diagnostic_boot(original, image, qemu, project, "install")
         step("verify")
+    elif state != "verify":
+        raise ValueError(f"Unbekannter Audio-Status: {state}")
     print("XP-Audioausgang und Wiedergabepuffer werden geprüft…", flush=True)
     diagnostic_boot(original, image, qemu, project, "verify")
     step("finish")

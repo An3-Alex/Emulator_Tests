@@ -9,13 +9,22 @@ nicht zur eigenen EXE oder zum Repository.
 
 Die Einrichtung verändert ausschließlich die getrennte Arbeitskopie, sichert
 Starter und Registry unter `NVRAM/m90-audio-backup` und deaktiviert dort den
-abstürzenden Realtek-Dienst. XP installiert den SigmaTel-Treiber samt
-Audioschnittstellen. Ein zweiter Gaststart muss den Ausgang öffnen, einen
+abstürzenden Realtek-Dienst. Zusätzlich werden dessen SYS-Datei, vorhandene
+Cache-Kopien sowie die zugehörigen INF-/PNF-Dateien mit Hash-Manifest unter
+`NVRAM/m90-audio-backup/realtek` gesichert und aus den aktiven Treiberpfaden
+entfernt. Diese Dateien bleiben wiederherstellbar; fremde Treiber bleiben erhalten.
+
+Die Einrichtung läuft in drei getrennten Gaststarts: Zuerst registriert XP
+Software-Enumerator und WDM-Basiskomponenten **ohne virtuelle Soundkarte**.
+Erst nach bestätigtem Abschluss wird AC’97 für die gezielte SigmaTel-Installation
+samt Audioschnittstellen angeschlossen. Ein dritter Gaststart muss den Ausgang öffnen, einen
 Mono-Prüfpuffer annehmen und dessen vollständige Wiedergabe bestätigen.
 Erst dann wird der Spielstarter wiederhergestellt. Bereits eingerichtete
 Arbeitskopien überspringen diese Installation. Unterbrochene Läufe können
 fortgesetzt werden; ein fehlendes Audiogerät wird nicht als Erfolg behandelt.
-Protokolle: `NVRAM/m90_audio_install.log` und `NVRAM/m90_audio_verify.log`.
+Protokolle: `NVRAM/m90_audio_software.log`, `NVRAM/m90_audio_install.log`
+und `NVRAM/m90_audio_verify.log`. Abgebrochene Einrichtungen früherer Versionen
+beginnen mit der neuen Basisvorbereitung, ohne die ursprünglichen Backups zu überschreiben.
 
 Der Dialog-Helfer läuft bereits parallel zur Einrichtung der XP-Audiokomponenten,
 nicht erst während der anschließenden SigmaTel-Treiberinstallation.
@@ -60,6 +69,13 @@ Quellen: [QEMU SDL-Backend](https://github.com/qemu/qemu/blob/master/audio/sdlau
 und [Audio-Optionen](https://www.qemu.org/docs/master/system/qemu-manpage.html).
 
 ## Bekannter XP-Gastabbruch
+
+Der übermittelte Diagnoseordner vom 01.10.2026 endet im eigenen Installationslog
+bei `Preparing XP audio software devices.`; weder `Software bus setup` noch
+der Abschluss der SigmaTel-Installation sind enthalten. Das grenzt den Abbruch
+auf die Software-Basisvorbereitung ein, beweist aber ohne neuen Dump nicht,
+welcher Treiber diesmal auf dem Stack lag. Der neue Ablauf trennt diesen
+Schritt von AC’97 und macht den alten Realtek-Treiber nicht mehr ladbar.
 
 Am 01.10.2026 wurde beim Start mit AC’97 auch ein XP-Bluescreen gemeldet:
 `STOP 0x0000007E (0xC0000005, 0x90A6246D, ...)`,
