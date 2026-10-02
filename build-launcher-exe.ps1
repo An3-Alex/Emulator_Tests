@@ -23,12 +23,14 @@ try {
         $arguments += @('--add-data', "${source}:.")
     }
     foreach ($file in Get-ChildItem -LiteralPath 'scripts' -Filter '*.py' -File) {
+        if ($file.Name -in @('audio_driver_package.py', 'audio_diagnostics.py',
+                            'audio_image_stage.py', 'audio_setup_runner.py')) { continue }
         $arguments += @('--add-data', "$($file.FullName):scripts")
     }
     foreach ($name in @(
         'prepare_image_stage.sh', 'stage_display_verify.sh', 'retry_qxl_install.sh',
         'finalize_image_stage.sh', 'check_image_stage.sh', 'update_runtime_graphics.sh',
-        'stage_audio_image.sh', 'export_audio_diagnostics.sh', 'image_partition.sh',
+        'image_partition.sh',
         'stage_audio_bridge.sh', 'install_qxl_helper_shell.sh'
     )) {
         $source = Join-Path $project "scripts\$name"
@@ -37,7 +39,6 @@ try {
     foreach ($name in @(
         'build\Cgos.dll', 'build\display-bootstrap.exe', 'build\qxl-installer.exe',
         'build\display-verify.exe',
-        'build\audio-software.exe', 'build\audio-installer.exe', 'build\audio-verify.exe',
         'build\d3d9-proxy\d3d9.dll', 'build\sram-compat\FBWFLIB.dll',
         'build\irrklang-proxy\irrKlang.dll'
     )) {

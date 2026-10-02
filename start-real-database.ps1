@@ -24,7 +24,7 @@ param(
     [switch]$UsbTablet,
     [switch]$SwapDisplays,
     [switch]$MuteAudio,
-    [switch]$AudioBridge,
+    [switch]$AudioBridge = $true,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
     [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.01,
     [ValidateRange(1, 10000000)][int]$DuartX1Hz = 3686400,
@@ -34,6 +34,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $AudioBridge) { throw 'Nur PCM-Bridge wird unterstützt.' }
 if ($DatabaseDate.Year -lt 2000 -or $DatabaseDate.Year -gt 2099) {
     throw 'RTC calendar requires year 2000..2099.'
 }

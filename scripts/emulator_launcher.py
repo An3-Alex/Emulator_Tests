@@ -25,7 +25,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from image_setup import (
     COMPONENTS, check_file, check_preparation, finalize_command, guest_setup_command,
-    graphics_update_command, audio_setup_command, audio_bridge_setup_command,
+    graphics_update_command, audio_bridge_setup_command,
     retry_qxl_command, stage_display_verify_command,
     stage_check_command, stage_command,
 )
@@ -552,9 +552,6 @@ class Launcher(tk.Tk):
         )
         if probe.returncode != 0 or probe.stdout.strip() != "0":
             raise RuntimeError("Vor dem Laufzeit-Update alle QEMU-Instanzen schließen")
-        if selection.audio_output == "ac97":
-            self._run_step(audio_setup_command(selection, PROJECT),
-                           "XP-Audiotreiber und Wiedergabeausgang werden eingerichtet")
         self._run_step(graphics_update_command(selection, PROJECT),
                        "Grafik- und Audiodateien der Arbeitskopie werden aktualisiert")
         self._run_step(audio_bridge_setup_command(selection, PROJECT),
@@ -895,6 +892,7 @@ if __name__ == "__main__":
             "component_hashes": {
                 name: check_file(PROJECT / relative, digest, name) is None
                 for name, (relative, digest) in COMPONENTS.items()
+                if not name.startswith("audio_")
             },
         }
         Path(sys.argv[2]).write_text(json.dumps(report, indent=2), encoding="utf-8")

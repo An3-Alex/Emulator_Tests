@@ -12,7 +12,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "scripts"))
 from runtime_bundle import (
     OWN_BINARIES, POWERSHELL_FILES, REQUIRED_PYTHON_FILES, SHELL_FILES,
-    materialize_runtime, runtime_payload,
+    RETIRED_PYTHON_FILES, materialize_runtime, runtime_payload,
 )
 
 
@@ -28,6 +28,8 @@ class RuntimeBundleTests(unittest.TestCase):
             for name in REQUIRED_PYTHON_FILES:
                 (source / "scripts" / name).write_text(name, encoding="utf-8")
             (source / "scripts" / "bridge.py").write_text("v1", encoding="utf-8")
+            for name in RETIRED_PYTHON_FILES:
+                (source / "scripts" / name).write_text("retired installer", encoding="utf-8")
             for name in SHELL_FILES:
                 (source / "scripts" / name).write_text(name, encoding="utf-8")
             for relative in OWN_BINARIES:
@@ -46,6 +48,9 @@ class RuntimeBundleTests(unittest.TestCase):
             materialize_runtime(source, target)
             self.assertEqual((target / "scripts" / "bridge.py").read_text(), "v1")
             self.assertFalse((target / "scripts" / "dump.bin").exists())
+            for name in RETIRED_PYTHON_FILES:
+                self.assertFalse((target / "scripts" / name).exists())
+            self.assertFalse(any("audio-" in str(name) for name in OWN_BINARIES))
             (source / "scripts" / "bridge.py").write_text("v2", encoding="utf-8")
             materialize_runtime(source, target)
             self.assertEqual((target / "scripts" / "bridge.py").read_text(), "v2")

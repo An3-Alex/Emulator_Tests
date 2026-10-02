@@ -1,45 +1,62 @@
 # M90-Emulator
 
-Dieses Projekt bringt ein eigenes Merkur-M90-CF-Image mit der dazugehörigen
-Datenbank in einem lokalen QEMU-Emulator zum Laufen. Spiel-PC und
-Datenbankprozessor werden getrennt emuliert. Ein Bedienfenster bietet die
-Automatentasten, Türschalter, Service-Taste und Touch-Eingaben; ein Live-Protokoll
-kann beim Start zugeschaltet werden.
+Windows-Starter für die Emulation eines Merkur-M90-Automaten mit eigenen
+CF-Images und Datenbankdateien. QEMU emuliert den Spiel-PC und den
+Motorola-68k-Datenbankprozessor getrennt. Die Einrichtung, der Start und die
+Bedienung erfolgen über eine grafische Oberfläche.
+
+CF-Images, Datenbankdateien und fremde Software werden nicht mitgeliefert.
 
 ## Funktionen
 
-Der Starter erstellt aus dem eigenen CF-Image eine getrennte Arbeitskopie,
-richtet den QXL-Grafiktreiber ein und startet danach den Spiel-PC zusammen mit
-der emulierten Datenbank. Touch, die fünf Spieltasten, Auszahlungs- und
-Service-Taste sowie der Türschalter sind im Bedienfenster erreichbar. Das
-Ereignisprotokoll lässt sich beim Start optional öffnen.
-„Alles beenden“ fährt den Spiel-PC herunter und beendet die Prozesse dieses
-Emulatorlaufs einschließlich Datenbank, Bridges, Bedienfenster und Protokoll.
-Falls XP nicht reagiert, wird nur dieser Prozessverbund beendet. Beim Schließen
-des Starters werden zugehörige Prozesse ebenfalls aufgeräumt.
+- Automatische Einrichtung einer getrennten Arbeitskopie des CF-Images,
+  einschließlich QXL-Grafiktreiber und PCM-Audio-Bridge.
+- Bedienfenster für Touch, Menü, Autostart, Einsatz, Maximaleinsatz, Start,
+  Auszahlung, Service-Taste und Türschalter.
+- Optionales Live-Protokoll der Datenbankkommunikation.
+- Gespeicherte Dateipfade und Einstellungen für Spiel-PC und Datenbank.
+- „Alles beenden“ fährt den Spiel-PC herunter und beendet die zu diesem Lauf
+  gehörenden Prozesse. Reagiert XP nicht, wird nur der eigene Prozessverbund
+  beendet. Beim Schließen des Starters werden diese Prozesse ebenfalls beendet.
 
-Der Spielstart kann mehrere Minuten dauern. Eine Spielgeld-Gutschrift ist
-derzeit nicht verfügbar; Auszahlungsgeräte und der obere Bildschirm sind
-noch nicht vollständig nachgebildet.
-Ton wird über eine virtuelle AC’97-Soundkarte und einen passenden SigmaTel-
-XP-Treiber angebunden. Wie beim einzelnen Lautsprecher im Original wird der
-Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
-Unter „Emulationseinstellungen → Audio-Ausgabe“ steht außerdem `bridge` zur
-Verfügung: Die originale irrKlang-Bibliothek liefert PCM über einen eigenen
-COM1-Kanal an einen lokalen Windows-Audiohelfer. Dieser Weg benötigt keine
-virtuelle Soundkarte; COM3 bleibt der Datenbank vorbehalten. Die vorhandenen
-XP-Kerneltreiber werden dabei nicht zur Wiedergabe verwendet. Der Helfer startet
-vor QEMU. Stille wird zeitlich korrekt lokal abgearbeitet, ohne Leerdaten zu
-übertragen; der Tonkanal öffnet erst beim ersten hörbaren Puffer. Mono-Mischung
-im Gast und ein schnellerer Audio-UART reduzieren den Übertragungsaufwand.
-Der Helfer beendet sich mit dem Datenbank-Lauf. Der bisherige AC’97-Weg bleibt
-Standard. Auf diesem Laptop ist der serielle Tonweg noch zu langsam für eine
-flüssige laufende Wiedergabe; `bridge` ist deshalb vorläufig.
+## Audio
+
+Der Starter verwendet ausschließlich die PCM-Bridge: Die originale
+irrKlang-Bibliothek liefert Audiodaten über COM1 an einen Windows-Audiohelfer.
+Eine virtuelle Soundkarte und zusätzliche XP-Audiotreiber werden nicht
+installiert. Alte AC’97-Einstellungen werden beim Laden auf Bridge umgestellt;
+die ausgewählten Dateien bleiben erhalten.
+
+Die Ausgabe verwendet Mono, entsprechend dem einzelnen Lautsprecher im
+Originalautomaten. „Ton auf dem PC ausgeben“ schaltet die Hostausgabe ein oder
+stumm; die Bridge bleibt auch im stummen Betrieb aktiv.
+
+Der Audiohelfer startet vor QEMU und endet mit dem Datenbank-Lauf.
+Stille wird im Gast mit ihrer ursprünglichen Dauer abgearbeitet, ohne Leerdaten
+zu übertragen. Der Tonkanal öffnet sich erst beim ersten nichtstummen Puffer.
+Mono-Mischung im Gast und ein schnellerer Audio-UART reduzieren den
+Übertragungsaufwand; die Datenbankverbindung auf COM3 bleibt unverändert.
+Flüssige Echtzeitwiedergabe über diesen seriellen Ausgabeweg ist noch nicht
+gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
+
+## Bekannte Einschränkungen
+
+- Der Spielstart kann mehrere Minuten dauern.
+- Eine Spielgeld-Gutschrift ist derzeit nicht verfügbar.
+- Auszahlungsgeräte und der obere Bildschirm sind noch nicht vollständig
+  nachgebildet.
+- Andere Spielepakete können ausgewählt werden, benötigen aber kompatible
+  Firmware, Konfiguration und Spiel-PC-Komponenten. Die Dateiauswahl allein
+  bedeutet keine Laufzeitkompatibilität.
 
 ## Änderungen
 
-- Lokal, noch nicht veröffentlicht: optionale PCM-Bridge mit Monowiedergabe,
-  begrenzten Puffern und eigener Prozessverwaltung. Der Datenbank-Laufabschnitt
+- 0.1.13: ausschließliche
+  PCM-Bridge mit Monowiedergabe, lokal abgearbeiteter Stille, schnellerem
+  Audio-UART, begrenzten Puffern und eigener Prozessverwaltung. Der zusätzliche
+  Audiotreiber-Installer entfällt. Oberfläche und Dokumentation verwenden
+  neutrale Texte ohne persönliche Rechner- oder Benutzerpfadbezüge.
+  „Alles beenden“ beendet den zugehörigen Prozessverbund. Der Datenbank-Laufabschnitt
   ist standardmäßig 0,01 Sekunden; vorhandene Einstellungen bleiben erhalten.
   Leere DUART-Empfangspuffer melden wieder den korrekten Status.
   QXL-Abschlussmeldungen warten auf den verfügbaren Gast-Port. Unterbrochene
@@ -100,11 +117,12 @@ flüssige laufende Wiedergabe; `bridge` ist deshalb vorläufig.
   `upper` den oberen.
 - 0.1.1: Das Startfenster zeigt Phase und verstrichene Zeit der Image-Einrichtung.
 
-## Lokal starten
+## Einrichtung und Start
 
-Die aktuelle [M90-Emulator.exe herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.12/M90-Emulator.exe)
-oder die [Release-Seite 0.1.12 öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.12).
-Repository und Releases sind öffentlich zugänglich.
+Die [M90-Emulator.exe aus Release 0.1.13 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.13/M90-Emulator.exe)
+oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.13).
+Änderungen aus dem Entwicklungsstand `main` sind erst nach einem neuen Build
+in der EXE enthalten.
 
 CF-Images werden unabhängig von ihrer Kapazität akzeptiert. Bei der Einrichtung
 wird die NTFS-Partition aus dem MBR einschließlich logischer Partitionen
@@ -132,10 +150,9 @@ großen Image-Kopie und Windows-Gastinstallation nicht verlässlich angeben.
 Der Starter prüft die
 Dateien, kopiert das Image, installiert QXL automatisch in einem temporären
 Windows-Gast und gibt die Kopie erst frei, wenn Windows beide Anzeigen wirklich
-erkennt. Bei Bedarf wird die Treiberinstallation einmal wiederholt. Das
-passende Audio-Treiberpaket wird einmalig von Dell geladen und danach in der
-Arbeitskopie eingerichtet; hierfür wird Internetzugang benötigt. Das
-Original bleibt unverändert. Ein unterbrochener Treiberlauf kann mit derselben
+erkennt. Bei Bedarf wird die Treiberinstallation einmal wiederholt.
+Audio wird über die PCM-Bridge eingerichtet, ohne zusätzliches Audiotreiberpaket.
+Das Original bleibt unverändert. Ein unterbrochener QXL-Treiberlauf kann mit derselben
 Arbeitskopie fortgesetzt werden. Erst danach „Emulator starten“ wählen. Der
 Haken „Live-Protokoll“ öffnet optional das Ereignisfenster; die Logdatei wird
 auch ohne Haken geschrieben.
@@ -151,7 +168,8 @@ Interrupt-Abstürze auslösen; Diagnose-Watchpoints können erheblich bremsen.
 Dateien. Board-Adressen, lokale Schnittstellen und Firmware-SRAM bleiben fest.
 
 Benötigt werden Windows 10/11, Python 3.10+, QEMU (x86 und m68k), WSL/Ubuntu
-mit `ntfs-3g` und `python3-hivex` sowie genug Platz für die etwa 16-GB-Kopie.
+mit `ntfs-3g` und `python3-hivex` sowie genug freier Speicherplatz für die
+Arbeitskopie des ausgewählten CF-Images und die Laufzeitdateien.
 Die Oberfläche bietet Installationshilfen für QEMU, Python und WSL. Eine
 Ubuntu-Ersteinrichtung oder ein Windows-Neustart kann einmalig nötig sein.
 QEMU schreibt beim Spielen nur in die gewählte Arbeitskopie.
@@ -165,16 +183,21 @@ spätere Spielmenü. Vor einem Grafik-Update müssen alle QEMU-Instanzen geschlo
 sein. Die ersetzten Dateien liegen in der Arbeitskopie unter
 `NVRAM/m90-graphics-backups`; das Original wird dafür nicht eingehängt.
 
-## Private Daten und Updates
+## Eigene Dateien, Build und Updates
 
 CF-Images, Datenbank-Dumps, Zulassungskarten, Logs und fremde Grafik-DLLs
 gehören nicht in dieses Repository. Sie werden lokal ausgewählt und durch
 `.gitignore` ausgeschlossen.
 
-Eine einzelne Start-EXE lässt sich lokal mit `build-launcher-exe.ps1` erzeugen
+Eine einzelne Start-EXE lässt sich mit `build-launcher-exe.ps1` erzeugen
 (Build-Abhängigkeit: PyInstaller und zuvor gebaute Eigenkomponenten). Sie legt
-unsere Laufzeitdateien im lokalen App-Datenordner ab. Images, Dumps und fremde
+die Laufzeitdateien im App-Datenordner ab. Images, Dumps und fremde
 Grafik-/Treiberdateien werden nicht eingebettet.
+
+Der Quellcode wird über Git aktualisiert (`git pull` im Repository).
+Eigene Änderungen vorher sichern oder committen. Für eine aktualisierte
+Start-EXE anschließend neu bauen oder eine neue Release-EXE verwenden.
+Ein Git-Update ersetzt keine bereits heruntergeladene EXE.
 
 ## Hintergründe
 

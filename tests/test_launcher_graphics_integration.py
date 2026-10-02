@@ -60,40 +60,37 @@ class LauncherGraphicsTests(unittest.TestCase):
                 command.assert_not_called()
                 target._run_step.assert_not_called()
 
-    def test_clear_probe_installs_audio_before_graphics_update(self):
+    def test_clear_probe_updates_runtime_then_enables_bridge(self):
         target = SimpleNamespace(_run_step=mock.Mock())
         selection = Selection(image="working.img")
         with mock.patch.object(launcher.subprocess, "run", return_value=
                                subprocess.CompletedProcess([], 0, "0\n", "")), \
-             mock.patch.object(launcher, "audio_setup_command", return_value=["guarded-audio"]), \
              mock.patch.object(launcher, "graphics_update_command", return_value=["guarded-update"]), \
              mock.patch.object(launcher, "audio_bridge_setup_command", return_value=["guarded-backend"]):
             launcher.Launcher._update_graphics(target, selection)
-        self.assertEqual(target._run_step.call_count, 3)
-        self.assertEqual(target._run_step.call_args_list[0].args[0], ["guarded-audio"])
-        self.assertEqual(target._run_step.call_args_list[1].args[0], ["guarded-update"])
+        self.assertEqual(target._run_step.call_count, 2)
+        self.assertEqual(target._run_step.call_args_list[0].args[0], ["guarded-update"])
         self.assertEqual(target._run_step.call_args.args[0], ["guarded-backend"])
 
     def test_bridge_skips_ac97_driver_installation(self):
         target = SimpleNamespace(_run_step=mock.Mock())
         with mock.patch.object(launcher.subprocess, "run", return_value=
                                subprocess.CompletedProcess([], 0, "0\n", "")), \
-             mock.patch.object(launcher, "audio_setup_command") as audio, \
              mock.patch.object(launcher, "graphics_update_command", return_value=["guarded-update"]), \
              mock.patch.object(launcher, "audio_bridge_setup_command", return_value=["guarded-backend"]):
             launcher.Launcher._update_graphics(target, Selection(audio_output="bridge"))
-        audio.assert_not_called()
+        self.assertFalse(hasattr(launcher, "audio_setup_command"))
         self.assertEqual(target._run_step.call_count, 2)
 
-    def test_failed_audio_setup_prevents_graphics_mount(self):
-        target = SimpleNamespace(_run_step=mock.Mock(side_effect=RuntimeError("Audio failed")))
+    def test_failed_graphics_update_prevents_bridge_marker_change(self):
+        target = SimpleNamespace(_run_step=mock.Mock(side_effect=RuntimeError("Update failed")))
         with mock.patch.object(launcher.subprocess, "run", return_value=
                                subprocess.CompletedProcess([], 0, "0\n", "")), \
-             mock.patch.object(launcher, "audio_setup_command", return_value=["guarded-audio"]), \
-             mock.patch.object(launcher, "graphics_update_command") as graphics:
-            with self.assertRaisesRegex(RuntimeError, "Audio failed"):
+             mock.patch.object(launcher, "graphics_update_command", return_value=["guarded-update"]), \
+             mock.patch.object(launcher, "audio_bridge_setup_command") as backend:
+            with self.assertRaisesRegex(RuntimeError, "Update failed"):
                 launcher.Launcher._update_graphics(target, Selection())
-        graphics.assert_not_called()
+        backend.assert_not_called()
 
 
 if __name__ == "__main__":

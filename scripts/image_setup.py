@@ -74,6 +74,8 @@ def check_preparation(
             if problem:
                 issues.append(problem)
     for name, (relative, expected) in COMPONENTS.items():
+        if name.startswith("audio_"):
+            continue  # Retired AC97 setup tools are not part of the starter.
         problem = check_file(project / relative, expected, name)
         if problem:
             issues.append(problem)
@@ -193,7 +195,7 @@ def audio_bridge_setup_command(selection: Selection, project: Path) -> list[str]
         raise ValueError("Original und Arbeitskopie müssen verschieden sein")
     return ["wsl.exe", "--user", "root", "--exec", "bash",
             wsl_path(project / "scripts/stage_audio_bridge.sh"),
-            wsl_path(original), wsl_path(image), selection.audio_output]
+            wsl_path(original), wsl_path(image), "bridge"]
 
 
 def finalize_command(image: Path, project: Path) -> list[str]:

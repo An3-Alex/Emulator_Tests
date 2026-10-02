@@ -26,8 +26,7 @@ EMULATION_FIELDS = (
     ("qxl_vram_mib", "Spiel-PC", "QXL-Grafikspeicher je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; gilt für beide QXL-Geräte."),
     ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
     ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
-    ("sound_enabled", "Spiel-PC", "Ton auf dem PC ausgeben", bool, (), "Windows-Ausgabe ohne Mikrofonaufnahme; aus schaltet nur die Host-Ausgabe stumm. Der gewählte Audio-Weg bleibt aktiv."),
-    ("audio_output", "Spiel-PC", "Audio-Ausgabe", str, ("ac97", "bridge"), "ac97: bisheriger Treiberweg. bridge (vorläufig): direkte PCM-Ausgabe über COM1 nach Windows, ohne virtuelle Soundkarte. Auf diesem Laptop ist der Tonkanal noch zu langsam; die Datenbank bleibt auf COM3."),
+    ("sound_enabled", "Spiel-PC", "Ton auf dem PC ausgeben", bool, (), "PCM-Bridge über COM1, ohne zusätzliche XP-Audiotreiber oder Mikrofonaufnahme. Aus schaltet nur die Host-Ausgabe stumm; die Bridge bleibt aktiv."),
     ("db_icount_shift", "Datenbank", "Instruktionstakt (icount shift)", int, (6, 5), "6: max. 15,625 Mio./s; 5: 31,25 Mio./s, bekannte Absturzgefahr. Nicht zyklengenau."),
     ("safe_tb", "Datenbank", "Stabiler Einzelinstruktionsmodus", bool, (), "Empfohlen: an. Aus nutzt größere TCG-Blöcke; bekannte Interrupt-Abstürze möglich."),
     ("db_timer_interval", "Datenbank", "CPU-Laufabschnitt (Sekunden)", float, (0.005, 0.05), "Standard: 0.01; häufigere Geräte-/Eingabebedienung. Kein Hardware-Timer-Preset und keine Änderung des Instruktionstakts."),
@@ -43,6 +42,8 @@ EMULATION_FIELDS = (
 
 def validate_emulation(selection: Selection) -> list[str]:
     issues = []
+    if selection.audio_output != "bridge":
+        issues.append("Audio-Ausgabe: ausschließlich PCM-Bridge unterstützt")
     for key, _group, label, kind, limits, _help in EMULATION_FIELDS:
         value = getattr(selection, key)
         if kind is bool:
@@ -85,7 +86,7 @@ class Selection:
     show_live_log: bool = False
     swap_displays: bool = False
     sound_enabled: bool = True
-    audio_output: str = "ac97"
+    audio_output: str = "bridge"
     guest_ram_mib: int = 2048
     guest_vcpus: int = 1
     acceleration: str = "whpx"
@@ -109,6 +110,9 @@ class Selection:
         allowed = set(cls.__dataclass_fields__)
         if not isinstance(data, dict):
             raise ValueError("Einstellungen müssen ein JSON-Objekt sein")
+        # Migrate the retired output without changing owner file selections.
+        if data.get("audio_output") == "ac97":
+            data["audio_output"] = "bridge"
         result = cls(**{key: value for key, value in data.items() if key in allowed})
         issues = validate_emulation(result)
         if issues:
@@ -242,8 +246,7 @@ def launch_command(selection: Selection, project: Path) -> list[str]:
         command.append("-NoControlWindow")
     if not selection.sound_enabled:
         command.append("-MuteAudio")
-    if selection.audio_output == "bridge":
-        command.append("-AudioBridge")
+    command.append("-AudioBridge")
     if not selection.show_live_log:
         command.append("-NoEventWindow")
     if selection.swap_displays:

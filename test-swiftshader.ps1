@@ -8,32 +8,24 @@ param(
     [switch]$UsbTablet,
     [switch]$SwapDisplays,
     [switch]$MuteAudio,
-    [switch]$AudioBridge,
+    [switch]$AudioBridge = $true,
     [string]$Python = 'python',
     [switch]$DryRun
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $AudioBridge) { throw 'Nur PCM-Bridge wird unterstützt.' }
 $qemuImage = $Image.Replace('\', '/')
 $primaryDisplay = if ($SwapDisplays) { 'lower' } else { 'upper' }
 $secondaryDisplay = if ($SwapDisplays) { 'upper' } else { 'lower' }
 $qemuArgs = '-accel whpx -machine pc -cpu "qemu32,+sse2,model-id=Intel(R) Celeron(R) M CPU 440 @ 1.86GHz" -smp 1 -m 2048 -drive file="' + $qemuImage + '",format=raw,if=ide,index=0,media=disk -boot c -vga none -device qxl-vga,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480 -device qxl,id=upper,revision=2,vgamem_mb=64,xres=640,yres=480 -display gtk,show-tabs=on -netdev user,id=n0,restrict=on -device i82559c,netdev=n0,mac=00:13:95:06:EE:6E -serial null -serial null -serial tcp:127.0.0.1:4553,server=on,wait=off -serial null -qmp tcp:127.0.0.1:4444,server=on,wait=off'
 if ($UsbTablet) { $qemuArgs += ' -usb -device usb-tablet' }
-$audioBackend = if ($AudioBridge) { 'bridge' } elseif ($MuteAudio) { 'none' } else { 'sdl' }
-# Keep the emulated sound card present when muted. Guest WinMM must still
-# create real sound objects; irrKlang's NULL driver cannot do that.
-# DirectSound initializes host capture unconditionally and can abort before
-# boot on PCs without a recording device. SDL opens playback independently.
-# The original cabinet has one speaker. Mix guest channels to one host output.
-if ($AudioBridge) {
+$audioBackend = 'bridge'
     # COM1 is dedicated PCM transport. The database remains on COM3.
     # Reserve legacy slot 0, then create only the PCM UART with a high clock.
     # COM3 retains its normal 115200 baud base and original DB timing.
     $qemuArgs = $qemuArgs.Replace('-serial null -serial null -serial tcp:', '-serial none -serial null -serial tcp:')
     $qemuArgs += ' -chardev socket,id=pcm0,host=127.0.0.1,port=4765,nodelay=on -device isa-serial,index=0,chardev=pcm0,baudbase=8000000'
-} else {
-    $qemuArgs += " -audiodev $audioBackend,id=audio0,in.voices=0,out.channels=1 -device AC97,audiodev=audio0"
-}
 $qemuArgs = $qemuArgs.Replace('-accel whpx', "-accel $Acceleration").Replace('-smp 1 -m 2048', "-smp $GuestVcpus -m $GuestRamMiB").Replace('vgamem_mb=64', "vgamem_mb=$QxlVramMiB")
 if (-not $SwapDisplays) {
     $qemuArgs = $qemuArgs.Replace('qxl-vga,id=lower', 'qxl-vga,id=upper').Replace('qxl,id=upper', 'qxl,id=lower')
@@ -47,7 +39,7 @@ $launchPlan = [ordered]@{
     guest_ram_mib = $GuestRamMiB
     acceleration = $Acceleration
     qxl_vram_mib = $QxlVramMiB
-    audio_card = if ($AudioBridge) { 'none (PCM bridge)' } else { 'AC97' }
+    audio_card = 'none (PCM bridge)'
     audio_backend = $audioBackend
     audio_muted = [bool]$MuteAudio
     audio_bridge = [bool]$AudioBridge

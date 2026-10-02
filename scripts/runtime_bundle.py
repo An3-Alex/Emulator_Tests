@@ -25,19 +25,13 @@ SHELL_FILES = (
     "finalize_image_stage.sh",
     "check_image_stage.sh",
     "update_runtime_graphics.sh",
-    "stage_audio_image.sh",
-    "export_audio_diagnostics.sh",
     "image_partition.sh",
     "stage_audio_bridge.sh",
     "install_qxl_helper_shell.sh",
 )
 REQUIRED_PYTHON_FILES = (
-    "audio_driver_package.py",
-    "audio_diagnostics.py",
     "audio_legacy_driver.py",
     "image_partition.py",
-    "audio_image_stage.py",
-    "audio_setup_runner.py",
     "audio_bridge_image.py",
     "pcm_audio_bridge.py",
     "admission_card.py",
@@ -63,9 +57,6 @@ REQUIRED_PYTHON_FILES = (
     "serialloader_chip_emulator.py",
 )
 OWN_BINARIES = (
-    Path("build/audio-software.exe"),
-    Path("build/audio-installer.exe"),
-    Path("build/audio-verify.exe"),
     Path("build/Cgos.dll"),
     Path("build/display-bootstrap.exe"),
     Path("build/qxl-installer.exe"),
@@ -74,6 +65,11 @@ OWN_BINARIES = (
     Path("build/sram-compat/FBWFLIB.dll"),
     Path("build/irrklang-proxy/irrKlang.dll"),
 )
+
+RETIRED_PYTHON_FILES = frozenset({
+    "audio_driver_package.py", "audio_diagnostics.py",
+    "audio_image_stage.py", "audio_setup_runner.py",
+})
 
 
 def bundled_root() -> Path:
@@ -100,6 +96,7 @@ def runtime_payload(source: Path) -> list[tuple[Path, Path]]:
     files.extend(
         (path, Path("scripts") / path.name)
         for path in sorted((source / "scripts").glob("*.py"))
+        if path.name not in RETIRED_PYTHON_FILES
     )
     files.extend((source / "scripts" / name, Path("scripts") / name) for name in SHELL_FILES)
     files.extend((source / relative, relative) for relative in OWN_BINARIES)

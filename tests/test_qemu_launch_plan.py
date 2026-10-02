@@ -88,22 +88,20 @@ class QemuLaunchPlanTests(unittest.TestCase):
         self.assertIn("restrict=on", arguments)
         self.assertIn("tcp:127.0.0.1:4553,server=on,wait=off", arguments)
 
-    def test_audio_device_stays_present_even_when_host_output_is_muted(self) -> None:
+    def test_default_audio_is_bridge_even_when_host_output_is_muted(self) -> None:
         for script in (LAUNCHER, REAL_DATABASE_LAUNCHER, PROGRAM_AND_START_LAUNCHER):
             for mute in (False, True):
                 with self.subTest(script=script.name, mute=mute):
                     plan = self.script_plan(script, *(["-MuteAudio"] if mute else []))
                     visible = plan.get("visible_qemu") or plan.get("runtime", {}).get("visible_qemu") or plan
-                    self.assertEqual(visible["audio_backend"], "none" if mute else "sdl")
+                    self.assertEqual(visible["audio_backend"], "bridge")
                     self.assertEqual(visible["audio_muted"], mute)
                     self.assertFalse(visible["audio_recording"])
                     self.assertEqual(visible["audio_output_channels"], 1)
-                    self.assertIn(
-                        f'-audiodev {visible["audio_backend"]},id=audio0,in.voices=0,out.channels=1',
-                        visible["arguments"],
-                    )
+                    self.assertTrue(visible["audio_bridge"])
+                    self.assertNotIn('-audiodev ', visible["arguments"])
                     self.assertNotIn("dsound", visible["arguments"])
-                    self.assertIn("-device AC97,audiodev=audio0", visible["arguments"])
+                    self.assertNotIn("-device AC97", visible["arguments"])
 
     def test_cf_image_path_with_spaces_stays_quoted_for_qemu(self) -> None:
         image = r"D:\CF Images\m90img - Kopie (2).img"

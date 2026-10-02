@@ -1,9 +1,9 @@
 # Audio-Anbindung
 
-## Optionale PCM-Bridge
+## PCM-Bridge
 
-Die Einstellung `bridge` überspringt die AC’97-Installation und startet einen
-lokalen Audiohelfer vor QEMU. Die eigene irrKlang-Proxy-DLL lädt weiterhin die
+Der Starter verwendet ausschließlich die PCM-Bridge und startet einen
+Audiohelfer vor QEMU. Die eigene irrKlang-Proxy-DLL lädt weiterhin die
 unveränderte Originalbibliothek aus `WINDOWS/system32`; sechs gezielt ersetzte
 WinMM-Aufrufe übernehmen deren PCM-Puffer. Es werden keine Soundobjekte erfunden.
 Die XP-Kerneltreiber bleiben auf dem Image erhalten, sind aber **nicht** dieser
@@ -24,19 +24,24 @@ wartende Puffer frei. Verlorene Verbindung und übergroße Pakete sind Fehler,
 kein stiller Null-Treiber-Rückfall. Protokolle liegen im Laufzeitordner unter
 `logs/audio-bridge-*.jsonl` sowie im Gast unter `NVRAM/irrklang_proxy.log`.
 
-Der Starter setzt oder entfernt vor dem Boot ausschließlich den Marker
-`NVRAM/m90_audio_bridge.enabled` in der getrennten Arbeitskopie. Das Umschalten
-auf `ac97` führt wieder durch die vorhandene Audiovorbereitung. Eine bereits
+Der Starter setzt vor dem Boot den Marker `NVRAM/m90_audio_bridge.enabled`
+in der getrennten Arbeitskopie. Gespeicherte AC’97-Einstellungen werden auf
+Bridge umgestellt; ein zusätzlicher Audiotreiber wird nicht installiert.
+Die früheren Audiotreiber-Installationshelfer werden nicht mehr in der EXE
+mitgeliefert. Eine bereits
 mit SigmaTel eingerichtete Arbeitskopie ist dadurch nicht automatisch ein
 unveränderter Originaltreiber-Stand: Dateien können vorhanden sein, ohne dass
 ein zugehöriges Gerät oder ein laufender Treiberdienst existiert.
 
-Der XP-Gast konnte echte irrKlang-Soundobjekte und PCM-Ausgabe erzeugen. Auf
-diesem Laptop bleibt die COM1-Übertragung jedoch deutlich hinter Echtzeit
-zurück. Die Option ist vorläufig, AC’97 bleibt Standard; flüssige vollständige
-Spielansagen sind damit noch nicht zugesichert.
+Die Bridge verarbeitet echte irrKlang-Soundobjekte und PCM-Ausgabe.
+Flüssige Echtzeitwiedergabe über den seriellen Ausgabeweg ist noch nicht
+gewährleistet.
 
-## Bisheriger AC’97-Weg
+## Früherer AC’97-Weg (nicht mehr im Starter)
+
+Die folgenden Abschnitte dokumentieren die frühere Anbindung und ihre Fehler.
+Sie beschreiben nicht den aktuellen Einrichtungsablauf. Alte Hilfsprogramme
+bleiben als Quellcode erhalten, sind aber nicht Teil des EXE-Pakets.
 
 Der Spiel-PC erhält eine AC’97-Soundkarte (`PCI\VEN_8086&DEV_2415`). Der
 Starter lädt den passenden SigmaTel-XP-Treiber 5.10.7144 vom
@@ -88,9 +93,9 @@ und keinen stillen Rückfall auf den ungeeigneten Null-Treiber.
 
 QEMU leitet den Ton über SDL an den Host weiter, mit `in.voices=0` ohne
 Aufnahme. SDL gehört zur Windows-QEMU-Installation; die GTK-Anzeige bleibt
-unverändert. DirectSound wird nicht mehr verwendet: der lokale QEMU-Build
-initialisiert auch das Aufnahmegerät und brach auf diesem PC mit
-`Could not initialize DirectSoundCapture` ab, obwohl nur Wiedergabe nötig ist.
+unverändert. DirectSound wird nicht mehr verwendet: dessen Aufnahmegeräte-
+Initialisierung kann mit `Could not initialize DirectSoundCapture` abbrechen,
+obwohl nur Wiedergabe nötig ist.
 Nur `in.voices=0` im DirectSound-Pfad umgeht dessen Initialisierung nicht.
 Der Originalautomat hat laut Besitzer einen Lautsprecher. Der Laufzeitstarter
 mischt deshalb mit `out.channels=1` auf einen Mono-Hostausgang; die virtuelle

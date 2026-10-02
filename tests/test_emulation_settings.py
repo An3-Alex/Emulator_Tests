@@ -19,6 +19,22 @@ import m68k_database_bridge as bridge
 
 
 class EmulationSettingsTests(unittest.TestCase):
+    def test_setting_descriptions_are_machine_neutral(self):
+        for field in EMULATION_FIELDS:
+            with self.subTest(setting=field[0]):
+                description = " ".join((field[1], field[2], field[5])).casefold()
+                self.assertNotIn("laptop", description)
+                self.assertNotIn("auf diesem pc", description)
+                self.assertNotIn("c:\\users\\", description)
+
+    def test_runtime_sources_do_not_embed_personal_profile_paths(self):
+        profile = str(Path.home()).replace("\\", "/").casefold()
+        sources = list((ROOT / "scripts").glob("*.py")) + list(ROOT.glob("*.ps1"))
+        for source in sources:
+            with self.subTest(source=source.name):
+                content = source.read_text(encoding="utf-8").replace("\\", "/").casefold()
+                self.assertNotIn(profile, content)
+
     def test_old_settings_gain_defaults_and_unknown_fields_are_ignored(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
@@ -27,7 +43,7 @@ class EmulationSettingsTests(unittest.TestCase):
             self.assertEqual(value.guest_ram_mib, 2048)
             self.assertEqual(value.db_icount_shift, 6)
             self.assertEqual(value.db_timer_interval, 0.01)
-            self.assertEqual(value.audio_output, "ac97")
+            self.assertEqual(value.audio_output, "bridge")
             self.assertTrue(value.safe_tb)
             self.assertTrue(value.swap_displays)
             self.assertEqual(value.image, "owner.img")
@@ -54,10 +70,10 @@ class EmulationSettingsTests(unittest.TestCase):
         self.assertIn("-smp 2 -m 1024", visible["arguments"])
         self.assertEqual(visible["arguments"].count("vgamem_mb=128"), 2)
         self.assertIn("-device usb-tablet", visible["arguments"])
-        self.assertEqual(visible["audio_card"], "AC97")
-        self.assertEqual(visible["audio_backend"], "none")
+        self.assertEqual(visible["audio_card"], "none (PCM bridge)")
+        self.assertEqual(visible["audio_backend"], "bridge")
         self.assertTrue(visible["audio_muted"])
-        self.assertIn("-device AC97,audiodev=audio0", visible["arguments"])
+        self.assertNotIn("-device AC97", visible["arguments"])
         self.assertTrue(visible["swap_displays"])
         runtime = plan["runtime"]["database_bridge"]
         self.assertEqual(runtime["m68k_tcg_mode"], "translation-block fast mode")
@@ -106,6 +122,18 @@ class EmulationSettingsTests(unittest.TestCase):
         self.assertTrue(visible["audio_bridge"])
         self.assertNotIn("-device AC97", visible["arguments"])
         self.assertIn("restrict=on", visible["arguments"])
+
+    def test_retired_audio_setting_migrates_without_changing_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({"image": "owner.img", "audio_output": "ac97"}))
+            value = Selection.from_json(path)
+            self.assertEqual(value.image, "owner.img")
+            self.assertEqual(value.audio_output, "bridge")
+            value.save(path)
+            self.assertEqual(json.loads(path.read_text())["audio_output"], "bridge")
+        self.assertNotIn("audio_output", {field[0] for field in EMULATION_FIELDS})
+        self.assertTrue(validate_emulation(Selection(audio_output="ac97")))
 
     def test_selected_time_used_in_both_initvideo_paths(self):
         frame = bytes.fromhex("01 02 22 00 7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C "
