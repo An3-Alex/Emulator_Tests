@@ -45,6 +45,32 @@ class Com3Disconnected(ConnectionError):
     """The x86 guest closed its serial peer; the bridge must stop cleanly."""
 
 
+def stop_database_process(process: subprocess.Popen, trigger: str) -> None:
+    """Distinguish an emulator exit from the bridge's own cleanup termination."""
+    exit_before_cleanup = process.poll()
+    stopped_by_bridge = exit_before_cleanup is None
+    if stopped_by_bridge:
+        print(f"DB_M68K_QEMU_STOP_REQUEST reason=bridge-cleanup trigger={trigger}", flush=True)
+        process.terminate()
+    try:
+        _, qemu_stderr = process.communicate(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        _, qemu_stderr = process.communicate(timeout=5.0)
+    if qemu_stderr:
+        print(
+            "DB_M68K_QEMU_STDERR "
+            + qemu_stderr[-16384:].decode("utf-8", errors="replace")
+            .strip().replace("\r", " ").replace("\n", " | "),
+            flush=True,
+        )
+    print(
+        f"DB_M68K_QEMU_EXIT code={process.returncode} "
+        f"stopped_by_bridge={stopped_by_bridge} exit_before_cleanup={exit_before_cleanup}",
+        flush=True,
+    )
+
+
 REG_A0 = 8
 REG_A7 = 15
 REG_A3 = 11
@@ -611,6 +637,28 @@ class VirtualCoinValidator:
         if current is not None:
             rsp.write_memory(BOARD_SCC_DATA_B, bytes([current]))
         rsp.write_memory(BOARD_SCC_CONTROL_B, bytes([self.status()]))
+
+
+def consume_coin_validator_byte(
+    device: VirtualCoinValidator, rsp: RspClient,
+) -> tuple[int | None, int | None]:
+    """A DUART data-register read must also refresh an empty FIFO's status.
+
+    SRB and CSRB share address 0x800193. The flat RAM backing may retain a
+    firmware write (e.g. baud selector BB) instead of the read-side status.
+    The original drain loop at 1C21A..1C222 then spins on RX-ready even
+    though our receive queue is empty. Never leave that stale flag behind
+    on an empty read, and never discard bytes that really are queued.
+    """
+    stale_status = None
+    if not device.pending_count():
+        status = rsp.read_memory(BOARD_SCC_CONTROL_B, 1)[0]
+        if status & BOARD_SCC_RX_READY:
+            stale_status = status
+    received = device.consume_rx()
+    device.publish(rsp)
+    return received, stale_status
+
 # The timer ISR deliberately executes ``move.w #$2000,sr`` at 0x74E36 before
 # running deferred work.  That re-enables board interrupts while the outer ISR
 # is still active. Deferred routines wait at 0x60442 for the 10 ms queue and
@@ -717,7 +765,7 @@ RTC_PORT_REGISTER = 0x00FFF907
 RTC_CONTROL_WATCH_LENGTH = 1
 # During heavy firmware phases Windows can defer a GDB stop reply well beyond
 # five seconds even though the CPU has already been interrupted. This is only
-# the control-reply deadline after a 50 ms run slice; it neither lengthens the
+# the control-reply deadline after a run slice; it neither lengthens the
 # slice nor relaxes the icount cap. Keep enough headroom to avoid killing a
 # healthy bridge while QEMU unwinds a watchpoint-heavy board scan.
 RSP_INTERRUPT_REPLY_TIMEOUT = 30.0
@@ -973,7 +1021,7 @@ def expired_timer_queue_slot(pc: int, sr: int, a0: int) -> int | None:
     """Return the exact original delay slot that may expire after a run slice.
 
     0x6042A stores a delay in one of six queue longs and spins at 0x60442
-    until 0x73450 decrements it. The bridge has already allowed one 50 ms
+    until 0x73450 decrements it. The bridge has already allowed one bounded
     icount-bounded run slice here. Expiring only that validated slot avoids
     replaying many slow GDB-mediated board scans for a 100 ms firmware delay.
     """
@@ -1989,6 +2037,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 f"return={board_interrupt_stack[-1][1]:08X} "
                                 f"scc_a_command={scc_a_command:02X} "
                                 f"scc_a_status={scc_a_status:02X} "
+                                f"scc_b_status={rsp.read_memory(BOARD_SCC_CONTROL_B, 1)[0]:02X} "
+                                f"scc_b_pending={coin_validator.pending_count()} "
                                 f"board_status={board_status:02X}",
                                 flush=True,
                             )
@@ -2089,7 +2139,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                                     f"queue={','.join(f'{value:08X}' for value in queue_values)}",
                                     flush=True,
                                 )
-                        # The short nested slices share one 50 ms run budget.
+                        # The short nested slices share one selected run budget.
                         continue
                     active_d0 = rsp.read_register_u32(REG_D0)
                     if active_pc in DEVICE_DISCOVERY_TIMER_WAIT_PCS:
@@ -3021,14 +3071,23 @@ def run_bridge(args: argparse.Namespace) -> int:
                             f" receive_buffer={rsp.read_memory(0x001E223C, 4).hex(' ').upper()}"
                             f" timer_irqs={timer_injections}"
                         )
-                    received = coin_validator.consume_rx()
+                    received, stale_status = consume_coin_validator_byte(
+                        coin_validator, rsp
+                    )
                     if received is not None:
-                        coin_validator.publish(rsp)
                         print(
                             "DB_VIRTUAL_MP_RX "
                             f"value={received:02X} "
                             f"remaining={coin_validator.pending_count()}"
                             + pairing_rx_detail,
+                            flush=True,
+                        )
+                    elif stale_status is not None:
+                        print(
+                            "DB_DUART_B_EMPTY_RX_STATUS_CLEARED "
+                            f"pc={rsp.read_register_u32(REG_PC):08X} "
+                            f"before={stale_status:02X} "
+                            f"after={coin_validator.status():02X} pending=0",
                             flush=True,
                         )
                     continue
@@ -3142,27 +3201,15 @@ def run_bridge(args: argparse.Namespace) -> int:
                     f"unexpected UART watchpoint kind={kind} address={address:08X}"
                 )
     finally:
+        failure_type = sys.exc_info()[0]
+        cleanup_trigger = failure_type.__name__ if failure_type else "bridge-return"
         controls.close()
         receiver_stop.set()
         if receiver_thread is not None:
             receiver_thread.join(timeout=1.0)
         if com3 is not None:
             com3.close()
-        if process.poll() is None:
-            process.terminate()
-        try:
-            _, qemu_stderr = process.communicate(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            _, qemu_stderr = process.communicate(timeout=5.0)
-        if qemu_stderr:
-            print(
-                "DB_M68K_QEMU_STDERR "
-                + qemu_stderr[-16384:].decode("utf-8", errors="replace")
-                .strip().replace("\r", " ").replace("\n", " | "),
-                flush=True,
-            )
-        print(f"DB_M68K_QEMU_EXIT code={process.returncode}", flush=True)
+        stop_database_process(process, cleanup_trigger)
 
 
 def parse_int(value: str) -> int:
@@ -3206,7 +3253,7 @@ def main() -> int:
     parser.add_argument("--connect-timeout", type=float, default=120.0)
     parser.add_argument("--rtc-date", type=dt.datetime.fromisoformat, default=RTC_DEFAULT_TIME,
                         help="initial RTC calendar; default 2012-02-01T22:14:00")
-    parser.add_argument("--timer-interval", type=float, default=0.05)
+    parser.add_argument("--timer-interval", type=float, default=0.01)
     parser.add_argument("--duart-x1-hz", type=int, default=DEFAULT_X1_HZ,
                         help="DUART crystal/input Hz, independent of MC68331 clock (default: 3686400)")
     parser.add_argument(

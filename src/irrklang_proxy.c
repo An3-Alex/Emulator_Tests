@@ -1,4 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <mmsystem.h>
 
@@ -19,6 +20,8 @@ typedef irrklang::ISoundEngine *(__cdecl *PFN_CREATE_IRRKLANG_DEVICE)(
     irrklang::E_SOUND_OUTPUT_DRIVER, int, const char *, const char *);
 
 static PFN_CREATE_IRRKLANG_DEVICE real_create;
+static BOOL bridge_enabled;
+static BOOL bridge_installed;
 
 static void log_line(const char *text)
 {
@@ -51,6 +54,8 @@ static void log_hex(const char *label, DWORD value)
     log_line(line);
 }
 
+#include "pcm_wave_bridge.h"
+
 static PFN_CREATE_IRRKLANG_DEVICE resolve_create(void)
 {
     HMODULE module;
@@ -71,6 +76,8 @@ static PFN_CREATE_IRRKLANG_DEVICE resolve_create(void)
         module,
         "?createIrrKlangDevice@irrklang@@YAPAVISoundEngine@1@W4E_SOUND_OUTPUT_DRIVER@1@HPBD1@Z");
     if (!real_create) log_line("GetProcAddress(createIrrKlangDevice) failed\r\n");
+    bridge_enabled = GetFileAttributesA("C:\\NVRAM\\m90_audio_bridge.enabled") != INVALID_FILE_ATTRIBUTES;
+    if (bridge_enabled && real_create) bridge_installed = pcm_install(module);
     return real_create;
 }
 
@@ -83,6 +90,15 @@ __declspec(dllexport) ISoundEngine *__cdecl createIrrKlangDevice(
     ISoundEngine *engine;
     (void)requested_driver;
     if (!create) return 0;
+    if (bridge_enabled) {
+        if (!bridge_installed) {
+            log_line("AUDIO_BRIDGE_INIT_FAILED: unsupported irrKlang imports; no silent fallback\r\n");
+            return 0;
+        }
+        engine = create(ESOD_WIN_MM, options, device_id, sdk_version);
+        log_hex("AUDIO_BRIDGE_ENGINE=", (DWORD)(ULONG_PTR)engine);
+        return engine;
+    }
     // irrKlang 1.1.3's NULL driver returns no ISound even for tracked
     // playback. The original game treats that as fatal (sound 237 / exit).
     // QEMU now supplies AC97, supported by the owner's installed XP driver.

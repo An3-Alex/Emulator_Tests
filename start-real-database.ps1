@@ -24,8 +24,9 @@ param(
     [switch]$UsbTablet,
     [switch]$SwapDisplays,
     [switch]$MuteAudio,
+    [switch]$AudioBridge,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
-    [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.05,
+    [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.01,
     [ValidateRange(1, 10000000)][int]$DuartX1Hz = 3686400,
     [ValidateRange(10, 600)][double]$DbConnectTimeout = 120,
     [switch]$TraceDiagnostics,
@@ -44,6 +45,7 @@ $visibleOptions = @{
     GuestRamMiB = $GuestRamMiB; GuestVcpus = $GuestVcpus
     Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
     MuteAudio = $MuteAudio
+    AudioBridge = $AudioBridge; Python = $Python
 }
 if (($null -eq $D3) -eq [string]::IsNullOrWhiteSpace($RuntimeDump)) {
     throw 'Specify exactly one of -D3 or -RuntimeDump. The raw flash files alone do not contain the boot-ROM D3 value.'
@@ -134,6 +136,40 @@ foreach ($item in @(
     }
 }
 
+$audioReceiver = $null
+$audioReceiverStarted = $false
+try {
+if ($AudioBridge) {
+    $pythonPath = (Get-Command $Python -ErrorAction Stop).Source
+    $audioLogDirectory = Join-Path $PSScriptRoot 'logs'
+    New-Item -ItemType Directory -Path $audioLogDirectory -Force | Out-Null
+    $stamp = [guid]::NewGuid().ToString('N')
+    $readyFile = Join-Path $audioLogDirectory "audio-bridge-$stamp.ready"
+    $audioLog = Join-Path $audioLogDirectory "audio-bridge-$stamp.jsonl"
+    $audioScript = Join-Path $PSScriptRoot 'scripts\pcm_audio_bridge.py'
+    $sdl = Join-Path (Split-Path $Qemu -Parent) 'SDL2.dll'
+    if (-not $MuteAudio -and -not (Test-Path -LiteralPath $sdl -PathType Leaf)) {
+        throw "SDL2.dll neben QEMU fehlt: $sdl"
+    }
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $pythonPath
+    $info.Arguments = ('-u "{0}" --sdl "{1}" --log "{2}" --ready-file "{3}"' -f $audioScript, $sdl, $audioLog, $readyFile)
+    if ($MuteAudio) { $info.Arguments += ' --muted' }
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $audioReceiver = New-Object Diagnostics.Process
+    $audioReceiver.StartInfo = $info
+    if (-not $audioReceiver.Start()) { throw 'Audio-Bridge konnte nicht starten' }
+    $audioReceiverStarted = $true
+    $deadline = [datetime]::UtcNow.AddSeconds(15)
+    while (-not (Test-Path -LiteralPath $readyFile -PathType Leaf)) {
+        if ($audioReceiver.HasExited) { throw "Audio-Bridge beendet (Code $($audioReceiver.ExitCode)); siehe $audioLog" }
+        if ([datetime]::UtcNow -gt $deadline) { throw 'Audio-Bridge meldet keine Bereitschaft' }
+        Start-Sleep -Milliseconds 100
+    }
+    Write-Output "AUDIO_BRIDGE_PID=$($audioReceiver.Id) log=$audioLog"
+}
 $qemuLaunchOutput = @(& $visibleLauncher -Qemu $Qemu -Image $Image @visibleOptions -UsbTablet:$UsbTablet -SwapDisplays:$SwapDisplays)
 $qemuLaunchOutput | Write-Output
 $qemuPidLine = $qemuLaunchOutput | Where-Object { $_ -match '^QEMU_PID=\d+$' } | Select-Object -First 1
@@ -185,6 +221,15 @@ finally {
     }
     if ($null -ne $controlPanel -and -not $controlPanel.HasExited) {
         Stop-Process -Id $controlPanel.Id
+    }
+}
+} finally {
+    if ($null -ne $audioReceiver) {
+        if ($audioReceiverStarted -and -not $audioReceiver.HasExited) {
+            $audioReceiver.StandardInput.Close()
+            if (-not $audioReceiver.WaitForExit(6000)) { $audioReceiver.Kill(); $audioReceiver.WaitForExit() }
+        }
+        $audioReceiver.Dispose()
     }
 }
 exit $bridgeExitCode

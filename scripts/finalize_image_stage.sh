@@ -35,7 +35,8 @@ loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
 verifier_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
-[[ "$verifier_hash" == 7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145 ||
+[[ "$verifier_hash" == 81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349 ||
+   "$verifier_hash" == 7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145 ||
    "$verifier_hash" == aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789 ]] || {
   echo 'unexpected active display verifier' >&2; exit 3;
 }

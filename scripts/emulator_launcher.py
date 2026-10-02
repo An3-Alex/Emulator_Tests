@@ -12,17 +12,20 @@ import json
 import ctypes
 from pathlib import Path
 import queue
+import re
 import shutil
 import subprocess
 import sys
 import threading
+from emulator_processes import EmulatorProcesses
+from image_setup import refresh_qxl_installer_command
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from image_setup import (
     COMPONENTS, check_file, check_preparation, finalize_command, guest_setup_command,
-    graphics_update_command, audio_setup_command,
+    graphics_update_command, audio_setup_command, audio_bridge_setup_command,
     retry_qxl_command, stage_display_verify_command,
     stage_check_command, stage_command,
 )
@@ -125,6 +128,9 @@ class Launcher(tk.Tk):
         self.minsize(850, 680)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.running: subprocess.Popen[str] | None = None
+        self.process_group: EmulatorProcesses | None = None
+        self.stopping = False
+        self.close_after_stop = False
         self.checking = False
         self.preparing = False
         self.prepare_started_at: float | None = None
@@ -226,9 +232,13 @@ class Launcher(tk.Tk):
         self.check_button.pack(side="left", padx=(8, 0))
         self.start_button = ttk.Button(controls, text="Emulator starten", command=self._start)
         self.start_button.pack(side="left", padx=8)
-        self.install_button = ttk.Button(controls, text="QEMU installieren", command=self._install_qemu)
+        self.stop_button = ttk.Button(controls, text="Alles beenden", command=self._stop_all, state="disabled")
+        self.stop_button.pack(side="left", padx=(0, 8))
+        install_controls = ttk.Frame(outer)
+        install_controls.pack(fill="x", pady=(0, 4))
+        self.install_button = ttk.Button(install_controls, text="QEMU installieren", command=self._install_qemu)
         self.install_button.pack(side="left")
-        self.python_button = ttk.Button(controls, text="Python installieren", command=self._install_python)
+        self.python_button = ttk.Button(install_controls, text="Python installieren", command=self._install_python)
         self.python_button.pack(side="left", padx=(8, 0))
         ttk.Label(outer, textvariable=self.status, wraplength=870).pack(anchor="w", pady=(2, 0))
         ttk.Label(outer, textvariable=self.prepare_timer).pack(anchor="w", pady=(3, 0))
@@ -380,7 +390,7 @@ class Launcher(tk.Tk):
         threading.Thread(target=self._check_worker, args=(selection, False), daemon=True).start()
 
     def _start(self) -> None:
-        if self.checking or (self.running and self.running.poll() is None):
+        if self.stopping or self.preparing or self.checking or (self.running and self.running.poll() is None):
             return
         if not self.prepared_copy.get():
             messagebox.showerror(
@@ -475,6 +485,9 @@ class Launcher(tk.Tk):
             if stage == "new":
                 self._run_step(stage_command(selection, PROJECT), "Arbeitskopie wird eingerichtet")
             if stage in ("new", "qxl-pnp"):
+                if stage == "qxl-pnp":
+                    self._run_step(refresh_qxl_installer_command(Path(selection.image), PROJECT),
+                                   "QXL-Einrichtungshelfer wird aktualisiert")
                 self._run_step(guest_setup_command(selection, PROJECT), "QXL-Gastinstallation läuft")
                 self._run_step(stage_display_verify_command(Path(selection.image), PROJECT),
                                "QXL-Anzeigeprüfung wird vorbereitet")
@@ -539,10 +552,13 @@ class Launcher(tk.Tk):
         )
         if probe.returncode != 0 or probe.stdout.strip() != "0":
             raise RuntimeError("Vor dem Laufzeit-Update alle QEMU-Instanzen schließen")
-        self._run_step(audio_setup_command(selection, PROJECT),
-                       "XP-Audiotreiber und Wiedergabeausgang werden eingerichtet")
+        if selection.audio_output == "ac97":
+            self._run_step(audio_setup_command(selection, PROJECT),
+                           "XP-Audiotreiber und Wiedergabeausgang werden eingerichtet")
         self._run_step(graphics_update_command(selection, PROJECT),
                        "Grafik- und Audiodateien der Arbeitskopie werden aktualisiert")
+        self._run_step(audio_bridge_setup_command(selection, PROJECT),
+                       "Audio-Ausgabe der Arbeitskopie wird eingestellt")
 
     def _install_qemu(self) -> None:
         self._install_package("qemu", "QEMU", "SoftwareFreedomConservancy.QEMU")
@@ -655,25 +671,58 @@ class Launcher(tk.Tk):
     def _launch(self, selection: Selection) -> None:
         command = launch_command(selection, PROJECT)
         try:
-            self.running = subprocess.Popen(
+            self.process_group = EmulatorProcesses.launch(
                 command, cwd=PROJECT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, errors="replace", bufsize=1,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            self.running = self.process_group.process
         except OSError as exc:
             self.status.set("Start fehlgeschlagen")
             self._write(f"Start fehlgeschlagen: {exc}\n")
             self.start_button.configure(state="normal")
             return
-        self.status.set("Emulator läuft; zum Beenden QEMU-Fenster schließen.")
+        self.stop_button.configure(state="normal")
+        self.status.set("Emulator läuft; „Alles beenden“ beendet diesen Lauf samt Bridges.")
         self._write(f"Startprozess: PID {self.running.pid}\n")
-        threading.Thread(target=self._read_launcher, args=(self.running,), daemon=True).start()
+        threading.Thread(target=self._read_launcher, args=(self.process_group,), daemon=True).start()
 
-    def _read_launcher(self, process: subprocess.Popen[str]) -> None:
+    def _read_launcher(self, group: EmulatorProcesses) -> None:
+        process = group.process
+        # A failed launcher can leave descendants holding stdout open. Watch
+        # its exit independently so those children cannot stall cleanup.
+        def reap():
+            process.wait()
+            group.close()
+        threading.Thread(target=reap, daemon=True).start()
         assert process.stdout is not None
         for line in process.stdout:
+            match = re.search(r"QEMU_PID=(\d+)", line)
+            if match:
+                group.qemu_pid = int(match[1])
             self.events.put(("line", line))
-        self.events.put(("ended", process.wait()))
+        result = process.wait()
+        group.close()
+        self.events.put(("ended", (group, result)))
+
+    def _stop_all(self) -> None:
+        if self.stopping or self.process_group is None:
+            return
+        self.stopping = True
+        self.start_button.configure(state="disabled")
+        self.stop_button.configure(state="disabled")
+        self.status.set("Emulator wird beendet; XP erhält zuerst eine Abschaltanforderung…")
+        group = self.process_group
+        def worker():
+            try:
+                graceful = group.stop()
+                self.events.put(("line", "Alle Prozesse dieses Emulatorlaufs beendet.\n" if graceful else
+                                 "Emulatorlauf samt Bridges beendet (XP-Abschaltung nicht bestätigt).\n"))
+            except Exception as exc:
+                self.events.put(("line", f"Beenden: {exc}\n"))
+            finally:
+                self.events.put(("stopped", group))
+        threading.Thread(target=worker, daemon=True).start()
 
     def _drain_events(self) -> None:
         try:
@@ -696,7 +745,7 @@ class Launcher(tk.Tk):
                     self.checking = False
                     self.prepared_copy.set(True)
                     self.prepare_button.configure(state="normal")
-                    self.start_button.configure(state="normal")
+                    self.start_button.configure(state="disabled" if self.stopping else "normal")
                     self.check_button.configure(state="normal")
                     self.status.set("Arbeitskopie vorbereitet; Emulator kann gestartet werden.")
                     self._write(f"Arbeitskopie fertig: {payload}\n")
@@ -738,9 +787,27 @@ class Launcher(tk.Tk):
                     if not self.running or self.running.poll() is not None:
                         self.start_button.configure(state="normal")
                 elif kind == "ended":
+                    group, result = payload
+                    if group is not self.process_group:
+                        continue
                     self.running = None
-                    self.status.set(f"Startprozess beendet (Code {payload}).")
+                    self.status.set(f"Emulatorlauf beendet (Code {result}); Unterprozesse aufgeräumt.")
+                    self.start_button.configure(state="disabled" if self.stopping else "normal")
+                    self.stop_button.configure(state="disabled")
+                    if not self.stopping:
+                        self.process_group = None
+                elif kind == "stopped":
+                    if payload is not self.process_group:
+                        continue
+                    self.process_group = None
+                    self.running = None
+                    self.stopping = False
+                    self.status.set("Emulator und alle zugehörigen Unterprozesse beendet.")
                     self.start_button.configure(state="normal")
+                    self.stop_button.configure(state="disabled")
+                    if self.close_after_stop:
+                        self.destroy()
+                        return
                 elif kind == "installed":
                     key, label, result = payload
                     self.checking = False
@@ -792,12 +859,14 @@ class Launcher(tk.Tk):
                 "Ein Abbruch während des Kopierens oder der Gastinstallation wäre unsicher.",
             )
             return
-        if self.running and self.running.poll() is None:
+        if self.process_group is not None:
             if not messagebox.askyesno(
-                "Emulator läuft", "Der Emulator läuft weiter, wenn dieses Fenster geschlossen wird.\n"
-                "Zum Beenden bitte das QEMU-Fenster schließen. Startfenster trotzdem schließen?",
+                "Emulator beenden", "Emulator samt Bridges beenden und das Startfenster schließen?",
             ):
                 return
+            self.close_after_stop = True
+            self._stop_all()
+            return
         self.destroy()
 
 

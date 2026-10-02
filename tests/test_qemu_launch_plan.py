@@ -112,6 +112,21 @@ class QemuLaunchPlanTests(unittest.TestCase):
         self.assertIn('file="D:/CF Images/m90img - Kopie (2).img",format=raw',
                       plan["arguments"])
 
+    def test_pcm_bridge_mode_has_no_ac97_and_only_explicit_forwarding(self):
+        for script in (LAUNCHER, REAL_DATABASE_LAUNCHER, PROGRAM_AND_START_LAUNCHER):
+            plan = self.script_plan(script, "-AudioBridge", "-Python", "D:/Python Tools/python.exe")
+            visible = plan.get("visible_qemu") or plan.get("runtime", {}).get("visible_qemu") or plan
+            self.assertTrue(visible["audio_bridge"])
+            self.assertEqual(visible["audio_backend"], "bridge")
+            self.assertNotIn('-device AC97', visible['arguments'])
+            self.assertNotIn('-audiodev ', visible['arguments'])
+            self.assertIn('restrict=on', visible['arguments'])
+            self.assertIn('-serial none -serial null -serial tcp:127.0.0.1:4553', visible['arguments'])
+            self.assertIn('isa-serial,index=0,chardev=pcm0,baudbase=8000000', visible['arguments'])
+            self.assertIn('socket,id=pcm0,host=127.0.0.1,port=4765,nodelay=on', visible['arguments'])
+            self.assertNotIn('-global isa-serial', visible['arguments'])
+            self.assertNotIn('guestfwd=', visible['arguments'])
+
     def test_usb_tablet_requires_explicit_experiment_flag(self) -> None:
         plan = self.script_plan(LAUNCHER, "-UsbTablet")
         self.assertIn("-usb -device usb-tablet", plan["arguments"])
@@ -122,7 +137,7 @@ class QemuLaunchPlanTests(unittest.TestCase):
     def test_integrated_database_plan_caps_only_emulated_database(self) -> None:
         plan = self.script_plan(REAL_DATABASE_LAUNCHER)
         bridge = plan["database_bridge"]
-        self.assertEqual(bridge["timer_run_seconds"], 0.05)
+        self.assertEqual(bridge["timer_run_seconds"], 0.01)
         self.assertEqual(bridge["host_pause_seconds"], 0.0)
         self.assertEqual(bridge["emulated_db_icount_shift"], 6)
         self.assertEqual(

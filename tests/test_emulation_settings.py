@@ -26,6 +26,8 @@ class EmulationSettingsTests(unittest.TestCase):
             value = Selection.from_json(path)
             self.assertEqual(value.guest_ram_mib, 2048)
             self.assertEqual(value.db_icount_shift, 6)
+            self.assertEqual(value.db_timer_interval, 0.01)
+            self.assertEqual(value.audio_output, "ac97")
             self.assertTrue(value.safe_tb)
             self.assertTrue(value.swap_displays)
             self.assertEqual(value.image, "owner.img")
@@ -75,7 +77,7 @@ class EmulationSettingsTests(unittest.TestCase):
 
     def test_invalid_options_rejected_before_launch_or_save(self):
         for key, bad in (("guest_ram_mib", 100), ("guest_vcpus", 0), ("acceleration", "other"),
-                ("qxl_vram_mib", 65), ("safe_tb", "false"), ("db_icount_shift", 0),
+                ("qxl_vram_mib", 65), ("audio_output", "other"), ("safe_tb", "false"), ("db_icount_shift", 0),
                 ("duart_x1_hz", 0), ("db_timer_interval", float("nan")),
                 ("db_connect_timeout", float("inf")), ("database_date", "2012-02-31T00:00:00"),
                 ("database_date", "2012-02-01T22:14:00+01:00"), ("guest_ram_mib", 10**500)):
@@ -89,8 +91,21 @@ class EmulationSettingsTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         selection.save(path)
                     self.assertFalse(path.exists())
-        self.assertTrue(validate_emulation(replace(Selection(), duart_x1_hz=10000000)))
+        self.assertTrue(validate_emulation(replace(Selection(), duart_x1_hz=10000000, db_timer_interval=0.05)))
         self.assertEqual(validate_emulation(replace(Selection(), duart_x1_hz=10000000, db_timer_interval=0.005)), [])
+
+    def test_bridge_setting_persists_and_reaches_qemu(self):
+        selection = Selection(audio_output="bridge")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            selection.save(path)
+            self.assertEqual(Selection.from_json(path).audio_output, "bridge")
+        result = subprocess.run([*launch_command(selection, ROOT), "-DryRun"],
+                                capture_output=True, text=True, check=True)
+        visible = json.loads(result.stdout)["runtime"]["visible_qemu"]
+        self.assertTrue(visible["audio_bridge"])
+        self.assertNotIn("-device AC97", visible["arguments"])
+        self.assertIn("restrict=on", visible["arguments"])
 
     def test_selected_time_used_in_both_initvideo_paths(self):
         frame = bytes.fromhex("01 02 22 00 7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C "

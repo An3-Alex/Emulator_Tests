@@ -1,5 +1,43 @@
 # Audio-Anbindung
 
+## Optionale PCM-Bridge
+
+Die Einstellung `bridge` überspringt die AC’97-Installation und startet einen
+lokalen Audiohelfer vor QEMU. Die eigene irrKlang-Proxy-DLL lädt weiterhin die
+unveränderte Originalbibliothek aus `WINDOWS/system32`; sechs gezielt ersetzte
+WinMM-Aufrufe übernehmen deren PCM-Puffer. Es werden keine Soundobjekte erfunden.
+Die XP-Kerneltreiber bleiben auf dem Image erhalten, sind aber **nicht** dieser
+Ausgabeweg. Insbesondere wird der originale HDA-Treiber nicht auf AC’97 umgebogen.
+
+COM1 transportiert ausschließlich den Ton über QEMUs Loopback-Verbindung
+`127.0.0.1:4765`; die Datenbank verwendet unverändert COM3. Es gibt keinen
+zusätzlichen Gast-Netzwerktreiber oder Internetzugriff. SDL aus der ausgewählten
+QEMU-Installation gibt den Ton in Mono aus, ohne Aufnahmegerät. Bis zu 32
+Originalpuffer können vorausgeschickt werden; bei Ton folgt `WHDR_DONE` erst
+auf die Wiedergabebestätigung. Vollständig stumme Puffer laufen mit ihrer
+ursprünglichen Dauer lokal ab: keine PCM-Übertragung und kein Öffnen des
+Tonkanals bis zum ersten nichtstummen Puffer. Stereo wird bereits im Gast
+auf Mono gemischt. Nur der Audio-UART COM1 bekommt eine Baudbasis von
+8.000.000; die Datenbank-UARTs behalten ihre bisherigen Takte.
+Schließen/Reset beenden die Audiositzung und geben
+wartende Puffer frei. Verlorene Verbindung und übergroße Pakete sind Fehler,
+kein stiller Null-Treiber-Rückfall. Protokolle liegen im Laufzeitordner unter
+`logs/audio-bridge-*.jsonl` sowie im Gast unter `NVRAM/irrklang_proxy.log`.
+
+Der Starter setzt oder entfernt vor dem Boot ausschließlich den Marker
+`NVRAM/m90_audio_bridge.enabled` in der getrennten Arbeitskopie. Das Umschalten
+auf `ac97` führt wieder durch die vorhandene Audiovorbereitung. Eine bereits
+mit SigmaTel eingerichtete Arbeitskopie ist dadurch nicht automatisch ein
+unveränderter Originaltreiber-Stand: Dateien können vorhanden sein, ohne dass
+ein zugehöriges Gerät oder ein laufender Treiberdienst existiert.
+
+Der XP-Gast konnte echte irrKlang-Soundobjekte und PCM-Ausgabe erzeugen. Auf
+diesem Laptop bleibt die COM1-Übertragung jedoch deutlich hinter Echtzeit
+zurück. Die Option ist vorläufig, AC’97 bleibt Standard; flüssige vollständige
+Spielansagen sind damit noch nicht zugesichert.
+
+## Bisheriger AC’97-Weg
+
 Der Spiel-PC erhält eine AC’97-Soundkarte (`PCI\VEN_8086&DEV_2415`). Der
 Starter lädt den passenden SigmaTel-XP-Treiber 5.10.7144 vom
 [originalen Dell-Paket](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=r38271).

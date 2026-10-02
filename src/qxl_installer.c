@@ -27,7 +27,7 @@
 #define INSTALLER_FAILED_SIGNAL "M90-QXL-SETUP-FAILED\n"
 #endif
 #ifndef INSTALLER_REBOOT
-#define INSTALLER_REBOOT 1
+#define INSTALLER_REBOOT 0
 #endif
 
 typedef BOOL (WINAPI *PFN_SETUP_COPY_OEM_INF_A)(PCSTR, PCSTR, DWORD, DWORD, PSTR, DWORD, PDWORD, PSTR *);
@@ -113,19 +113,12 @@ static void write_hex(DWORD value) {
     write_text(buffer);
 }
 
+#include "guest_setup_status.h"
 static void signal_host(BOOL success) {
     static const char ok[] = INSTALLER_OK_SIGNAL;
     static const char failed[] = INSTALLER_FAILED_SIGNAL;
     const char *message = success ? ok : failed;
-    HANDLE serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL,
-        OPEN_EXISTING, 0, NULL);
-    DWORD written;
-    if (serial == INVALID_HANDLE_VALUE) {
-        write_text("COM1 status signal unavailable: "); write_hex(GetLastError());
-        return;
-    }
-    WriteFile(serial, message, text_length(message), &written, NULL);
-    CloseHandle(serial);
+    m90_setup_status(message, write_text, write_hex);
 }
 
 static BOOL has_continue_label(const char *text) {

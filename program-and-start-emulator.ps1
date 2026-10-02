@@ -24,14 +24,19 @@ param(
     [switch]$NoEventWindow,
     [switch]$SwapDisplays,
     [switch]$MuteAudio,
+    [switch]$AudioBridge,
     [ValidateSet(5, 6)][int]$DbIcountShift = 6,
-    [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.05,
+    [ValidateRange(0.005, 0.05)][double]$DbTimerInterval = 0.01,
     [ValidateRange(1, 10000000)][int]$DuartX1Hz = 3686400,
     [ValidateRange(10, 600)][double]$DbConnectTimeout = 120,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$WaitForHostStart
 )
 
 $ErrorActionPreference = 'Stop'
+if ($WaitForHostStart -and [Console]::ReadLine() -ne 'M90-START') {
+    throw 'Starter hat den Prozessverbund nicht freigegeben.'
+}
 if ($DatabaseDate.Year -lt 2000 -or $DatabaseDate.Year -gt 2099) {
     throw 'RTC calendar requires year 2000..2099.'
 }
@@ -42,6 +47,7 @@ $runtimeOptions = @{
     GuestRamMiB = $GuestRamMiB; GuestVcpus = $GuestVcpus
     Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
     MuteAudio = $MuteAudio
+    AudioBridge = $AudioBridge
     DbTimerInterval = $DbTimerInterval; DuartX1Hz = $DuartX1Hz
     DbConnectTimeout = $DbConnectTimeout; FastTb = $FastTb
     DatabaseDate = $DatabaseDate

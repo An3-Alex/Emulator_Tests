@@ -22,7 +22,7 @@ trap cleanup EXIT
   echo 'working image missing' >&2; exit 3;
 }
 [[ -f "$verifier" && $(sha256sum "$verifier" | cut -d' ' -f1) == \
-  7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145 ]] || {
+  81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349 ]] || {
   echo 'display verifier missing or unrecognized' >&2; exit 3;
 }
 loop_device=$(image_loop_device "$image" ro)
@@ -37,10 +37,11 @@ else
   [[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-pnp' ]] || {
     echo 'image is not in QXL installation stage' >&2; exit 3;
   }
-  expected_shell=0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296
+  expected_shell=96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a
 fi
 shell_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
 [[ "$shell_hash" == "$expected_shell" ||
+   ( "$repair_ready" == '' && "$shell_hash" == 0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ) ||
    ( "$repair_ready" == '--repair-ready' && "$shell_hash" == ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6 ) ]] || {
   echo 'unexpected active XP shell' >&2; exit 3;
 }

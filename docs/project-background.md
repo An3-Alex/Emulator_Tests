@@ -196,7 +196,7 @@ cycle-accurate MC68331 timing. The default still uses faster translation
 blocks; `start-real-database.ps1 -SafeTb` selects the older single-instruction
 fallback for diagnostics. The combined `program-and-start-emulator.ps1` launcher
 also accepts `-SafeTb` and `-DbIcountShift 5|6` and forwards them to the bridge.
-The debugger run slice is 50 ms and values below
+The debugger run slice defaults to 10 ms and values below
 5 ms are rejected. The control panel captures the lower cabinet display every
 2 seconds to avoid spending startup time on repeated full-screen QMP dumps.
 Logging-only watchpoints are off by default; pass

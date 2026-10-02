@@ -15,11 +15,11 @@ COMPONENTS = {
     "audio_verify": ("build/audio-verify.exe", "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"),
     "shim": ("build/Cgos.dll", "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"),
     "bootstrap": ("build/display-bootstrap.exe", "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"),
-    "qxl_installer": ("build/qxl-installer.exe", "0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296"),
-    "display_verify": ("build/display-verify.exe", "7a9de0b1e050b512f2cba1f5672e92cc8ef59a6ad4a72761e8469282a1d8e145"),
+    "qxl_installer": ("build/qxl-installer.exe", "96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a"),
+    "display_verify": ("build/display-verify.exe", "81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349"),
     "d3d9": ("build/d3d9-proxy/d3d9.dll", "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737"),
     "fbwf": ("build/sram-compat/FBWFLIB.dll", "4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94"),
-    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "8efc687d626c56fa995e084fa462a187446d238f871abab6c622b13a9bbbd7c8"),
+    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7"),
 }
 QXL_HASHES = {
     "qxl.inf": "2c2ce985936c87406313d68ba54b1c36f42aec97ee357d894e3238aecda776fa",
@@ -141,6 +141,12 @@ def wsl_path(path: Path) -> str:
     return converted
 
 
+def refresh_qxl_installer_command(image: Path, project: Path) -> list[str]:
+    return ["wsl.exe", "--user", "root", "--exec", "bash",
+            wsl_path(project / "scripts/install_qxl_helper_shell.sh"),
+            wsl_path(image), wsl_path(project / COMPONENTS["qxl_installer"][0])]
+
+
 def stage_command(selection: Selection, project: Path) -> list[str]:
     paths = [
         project / "scripts/prepare_image_stage.sh",
@@ -177,6 +183,17 @@ def audio_setup_command(selection: Selection, project: Path) -> list[str]:
     return [selection.python, str(project / "scripts/audio_setup_runner.py"),
             "--original", selection.original_image, "--image", selection.image,
             "--qemu", selection.qemu_x86, "--project", str(project)]
+
+
+def audio_bridge_setup_command(selection: Selection, project: Path) -> list[str]:
+    if not selection.original_image or not Path(selection.original_image).is_file():
+        raise ValueError("Original-CF-Image für die sichere Audio-Umschaltung auswählen")
+    original, image = Path(selection.original_image), Path(selection.image)
+    if original.resolve() == image.resolve() or (image.exists() and original.samefile(image)):
+        raise ValueError("Original und Arbeitskopie müssen verschieden sein")
+    return ["wsl.exe", "--user", "root", "--exec", "bash",
+            wsl_path(project / "scripts/stage_audio_bridge.sh"),
+            wsl_path(original), wsl_path(image), selection.audio_output]
 
 
 def finalize_command(image: Path, project: Path) -> list[str]:

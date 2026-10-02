@@ -28,6 +28,8 @@ SHELL_FILES = (
     "stage_audio_image.sh",
     "export_audio_diagnostics.sh",
     "image_partition.sh",
+    "stage_audio_bridge.sh",
+    "install_qxl_helper_shell.sh",
 )
 REQUIRED_PYTHON_FILES = (
     "audio_driver_package.py",
@@ -36,10 +38,13 @@ REQUIRED_PYTHON_FILES = (
     "image_partition.py",
     "audio_image_stage.py",
     "audio_setup_runner.py",
+    "audio_bridge_image.py",
+    "pcm_audio_bridge.py",
     "admission_card.py",
     "cabinet_control_panel.py",
     "cabinet_controls.py",
     "emulator_launcher.py",
+    "emulator_processes.py",
     "duart_timer.py",
     "graphics_update.py",
     "event_log_viewer.py",

@@ -46,17 +46,10 @@ static void write_hex(DWORD value) {
 }
 
 #ifdef DISPLAY_VERIFY
+#include "guest_setup_status.h"
 static void signal_host(BOOL success) {
     const char *message = success ? "M90-QXL-VERIFY-OK\n" : "M90-QXL-VERIFY-FAILED\n";
-    HANDLE serial = CreateFileA("\\\\.\\COM1", GENERIC_WRITE, 0, NULL,
-        OPEN_EXISTING, 0, NULL);
-    DWORD written;
-    if (serial == INVALID_HANDLE_VALUE) {
-        write_text("COM1 verification signal unavailable: "); write_hex(GetLastError());
-        return;
-    }
-    WriteFile(serial, message, text_length(message), &written, NULL);
-    CloseHandle(serial);
+    m90_setup_status(message, write_text, write_hex);
 }
 
 static BOOL is_qxl(const char *description) {

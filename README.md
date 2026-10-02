@@ -13,6 +13,10 @@ richtet den QXL-Grafiktreiber ein und startet danach den Spiel-PC zusammen mit
 der emulierten Datenbank. Touch, die fünf Spieltasten, Auszahlungs- und
 Service-Taste sowie der Türschalter sind im Bedienfenster erreichbar. Das
 Ereignisprotokoll lässt sich beim Start optional öffnen.
+„Alles beenden“ fährt den Spiel-PC herunter und beendet die Prozesse dieses
+Emulatorlaufs einschließlich Datenbank, Bridges, Bedienfenster und Protokoll.
+Falls XP nicht reagiert, wird nur dieser Prozessverbund beendet. Beim Schließen
+des Starters werden zugehörige Prozesse ebenfalls aufgeräumt.
 
 Der Spielstart kann mehrere Minuten dauern. Eine Spielgeld-Gutschrift ist
 derzeit nicht verfügbar; Auszahlungsgeräte und der obere Bildschirm sind
@@ -20,9 +24,26 @@ noch nicht vollständig nachgebildet.
 Ton wird über eine virtuelle AC’97-Soundkarte und einen passenden SigmaTel-
 XP-Treiber angebunden. Wie beim einzelnen Lautsprecher im Original wird der
 Hostausgang in Mono betrieben. Im Starter lässt sich die Ausgabe stummschalten.
+Unter „Emulationseinstellungen → Audio-Ausgabe“ steht außerdem `bridge` zur
+Verfügung: Die originale irrKlang-Bibliothek liefert PCM über einen eigenen
+COM1-Kanal an einen lokalen Windows-Audiohelfer. Dieser Weg benötigt keine
+virtuelle Soundkarte; COM3 bleibt der Datenbank vorbehalten. Die vorhandenen
+XP-Kerneltreiber werden dabei nicht zur Wiedergabe verwendet. Der Helfer startet
+vor QEMU. Stille wird zeitlich korrekt lokal abgearbeitet, ohne Leerdaten zu
+übertragen; der Tonkanal öffnet erst beim ersten hörbaren Puffer. Mono-Mischung
+im Gast und ein schnellerer Audio-UART reduzieren den Übertragungsaufwand.
+Der Helfer beendet sich mit dem Datenbank-Lauf. Der bisherige AC’97-Weg bleibt
+Standard. Auf diesem Laptop ist der serielle Tonweg noch zu langsam für eine
+flüssige laufende Wiedergabe; `bridge` ist deshalb vorläufig.
 
 ## Änderungen
 
+- Lokal, noch nicht veröffentlicht: optionale PCM-Bridge mit Monowiedergabe,
+  begrenzten Puffern und eigener Prozessverwaltung. Der Datenbank-Laufabschnitt
+  ist standardmäßig 0,01 Sekunden; vorhandene Einstellungen bleiben erhalten.
+  Leere DUART-Empfangspuffer melden wieder den korrekten Status.
+  QXL-Abschlussmeldungen warten auf den verfügbaren Gast-Port. Unterbrochene
+  Einrichtungen erhalten beim Fortsetzen den aktualisierten Helfer.
 - 0.1.12: XP-Audiobasis wird ohne virtuelle Soundkarte eingerichtet. Danach
   folgen die getrennte SigmaTel-Installation und Ausgabeprüfung. Die alten
   Realtek-Treiberdateien werden aus den aktiven Pfaden genommen und mit

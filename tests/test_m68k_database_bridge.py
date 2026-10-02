@@ -1,7 +1,11 @@
 import importlib.util
+from contextlib import redirect_stdout
+import io
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -13,6 +17,73 @@ spec.loader.exec_module(bridge)
 
 
 class DatabaseBridgeTests(unittest.TestCase):
+    def test_cli_defaults_to_ten_ms_without_changing_instruction_clock(self):
+        argv = [str(SCRIPT), '--loader', 'loader.bin', '--expected-loader-sha256', 'x',
+                '--database', 'database.bin', '--expected-database-sha256', 'y',
+                '--config', 'config.bin', '--expected-config-sha256', 'z', '--d3', '1']
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(bridge, 'run_bridge', return_value=0) as run:
+            self.assertEqual(bridge.main(), 0)
+        args = run.call_args.args[0]
+        self.assertEqual(args.timer_interval, 0.01)
+        self.assertEqual(args.icount_shift, 6)
+
+    def test_empty_duart_read_clears_stale_shared_baud_status(self):
+        device = bridge.VirtualCoinValidator()
+        rsp = mock.Mock()
+        rsp.read_memory.return_value = b"\xBB"
+        self.assertEqual(bridge.consume_coin_validator_byte(device, rsp), (None, 0xBB))
+        rsp.write_memory.assert_called_once_with(bridge.BOARD_SCC_CONTROL_B, b"\x04")
+        self.assertEqual(device.pending_count(), 0)
+
+    def test_duart_read_publishes_next_byte_without_dropping_fifo(self):
+        device = bridge.VirtualCoinValidator()
+        for value, remaining in ((0x7F, 3), (0, 2), (0x7F, 1)):
+            reply = device.observe_tx(value, remaining)
+        rsp = mock.Mock()
+        self.assertEqual(bridge.consume_coin_validator_byte(device, rsp), (reply[0], None))
+        self.assertEqual(device.pending_count(), len(reply) - 1)
+        self.assertEqual(device.data(), reply[1])
+        rsp.read_memory.assert_not_called()
+        rsp.write_memory.assert_any_call(bridge.BOARD_SCC_DATA_B, bytes([reply[1]]))
+        rsp.write_memory.assert_any_call(bridge.BOARD_SCC_CONTROL_B, bytes([device.status()]))
+
+    def test_empty_duart_read_also_publishes_consistent_idle_status(self):
+        device = bridge.VirtualCoinValidator()
+        rsp = mock.Mock()
+        rsp.read_memory.return_value = b"\x04"
+        self.assertEqual(bridge.consume_coin_validator_byte(device, rsp), (None, None))
+        rsp.write_memory.assert_called_once_with(bridge.BOARD_SCC_CONTROL_B, b"\x04")
+
+    def test_cleanup_exit_is_not_reported_as_spontaneous_emulator_exit(self):
+        process = mock.Mock(returncode=1)
+        process.poll.return_value = None
+        process.communicate.return_value = (b"", b"")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            bridge.stop_database_process(process, "Com3Disconnected")
+        process.terminate.assert_called_once_with()
+        self.assertIn("trigger=Com3Disconnected", output.getvalue())
+        self.assertIn("stopped_by_bridge=True exit_before_cleanup=None", output.getvalue())
+
+    def test_spontaneous_emulator_exit_preserves_its_code_and_stderr(self):
+        process = mock.Mock(returncode=7)
+        process.poll.return_value = 7
+        process.communicate.return_value = (b"", b"emulator fault\ncontext")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            bridge.stop_database_process(process, "EOFError")
+        process.terminate.assert_not_called()
+        self.assertIn("code=7 stopped_by_bridge=False exit_before_cleanup=7", output.getvalue())
+        self.assertIn("emulator fault | context", output.getvalue())
+
+    def test_cleanup_timeout_kills_only_the_owned_database_process(self):
+        process = mock.Mock(returncode=1)
+        process.poll.return_value = None
+        process.communicate.side_effect = [subprocess.TimeoutExpired("qemu", 5), (b"", b"")]
+        with redirect_stdout(io.StringIO()):
+            bridge.stop_database_process(process, "TimeoutError")
+        process.kill.assert_called_once_with()
+
     def test_direct_log_file_is_live_and_restores_streams(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.log"

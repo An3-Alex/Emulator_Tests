@@ -26,10 +26,11 @@ EMULATION_FIELDS = (
     ("qxl_vram_mib", "Spiel-PC", "QXL-Grafikspeicher je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; gilt für beide QXL-Geräte."),
     ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
     ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
-    ("sound_enabled", "Spiel-PC", "Ton auf dem PC ausgeben", bool, (), "AC97/WinMM über SDL, ohne Mikrofonaufnahme; aus schaltet nur die Host-Ausgabe stumm. Die virtuelle Soundkarte bleibt aktiv."),
+    ("sound_enabled", "Spiel-PC", "Ton auf dem PC ausgeben", bool, (), "Windows-Ausgabe ohne Mikrofonaufnahme; aus schaltet nur die Host-Ausgabe stumm. Der gewählte Audio-Weg bleibt aktiv."),
+    ("audio_output", "Spiel-PC", "Audio-Ausgabe", str, ("ac97", "bridge"), "ac97: bisheriger Treiberweg. bridge (vorläufig): direkte PCM-Ausgabe über COM1 nach Windows, ohne virtuelle Soundkarte. Auf diesem Laptop ist der Tonkanal noch zu langsam; die Datenbank bleibt auf COM3."),
     ("db_icount_shift", "Datenbank", "Instruktionstakt (icount shift)", int, (6, 5), "6: max. 15,625 Mio./s; 5: 31,25 Mio./s, bekannte Absturzgefahr. Nicht zyklengenau."),
     ("safe_tb", "Datenbank", "Stabiler Einzelinstruktionsmodus", bool, (), "Empfohlen: an. Aus nutzt größere TCG-Blöcke; bekannte Interrupt-Abstürze möglich."),
-    ("db_timer_interval", "Datenbank", "CPU-Laufabschnitt (Sekunden)", float, (0.005, 0.05), "Standard: 0.05; kleinere Abschnitte erhöhen den Debugger-Aufwand. Kein Hardware-Timer-Preset."),
+    ("db_timer_interval", "Datenbank", "CPU-Laufabschnitt (Sekunden)", float, (0.005, 0.05), "Standard: 0.01; häufigere Geräte-/Eingabebedienung. Kein Hardware-Timer-Preset und keine Änderung des Instruktionstakts."),
     ("duart_x1_hz", "Datenbank", "DUART-Eingangstakt (Hz)", int, (1, 10000000), "Standard: 3686400 (angenommen); nicht der 16-MHz-CPU-Takt. Änderung beeinflusst Timer."),
     ("db_connect_timeout", "Datenbank", "Verbindungs-Wartezeit (Sekunden)", float, (10, 600), "Standard: 120; Zeitlimit für die Verbindung zum Spiel-PC."),
     ("database_date", "Datenbank", "Startdatum/Uhrzeit (Programmer und RTC)", str, (), "Format: 2012-02-01T22:14:00; M90 erwartet normalerweise Jahr 2012. RTC läuft danach weiter."),
@@ -84,6 +85,7 @@ class Selection:
     show_live_log: bool = False
     swap_displays: bool = False
     sound_enabled: bool = True
+    audio_output: str = "ac97"
     guest_ram_mib: int = 2048
     guest_vcpus: int = 1
     acceleration: str = "whpx"
@@ -91,7 +93,7 @@ class Selection:
     usb_tablet: bool = False
     db_icount_shift: int = 6
     safe_tb: bool = True
-    db_timer_interval: float = 0.05
+    db_timer_interval: float = 0.01
     duart_x1_hz: int = 3686400
     db_connect_timeout: float = 120.0
     database_date: str = "2012-02-01T22:14:00"
@@ -240,6 +242,8 @@ def launch_command(selection: Selection, project: Path) -> list[str]:
         command.append("-NoControlWindow")
     if not selection.sound_enabled:
         command.append("-MuteAudio")
+    if selection.audio_output == "bridge":
+        command.append("-AudioBridge")
     if not selection.show_live_log:
         command.append("-NoEventWindow")
     if selection.swap_displays:
