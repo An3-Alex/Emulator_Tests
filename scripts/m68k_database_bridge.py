@@ -311,12 +311,13 @@ def pairing_gap_log_transition(
 
 
 class VirtualCoinValidator:
-    """Minimal SCC-B SDLC peer for the original MP startup probes.
+    """Virtual validator on the firmware's DUART-B multidrop channel.
 
     Firmware at 0x1C2A6 sends 78/78, then 7F/00/7F and accepts an
     additive-checksum reply whose first three data bytes are NRI or WHM
     (0x1C35A..0x1C3D6). RR1 bit 5 marks the checksum byte as end-of-frame.
-    No credit or payout events are synthesized.
+    Coin telegrams enter the original receive/authentication/booking path;
+    the peer never writes a credit balance or initiates a physical payout.
     """
 
     IDENTITY_PROBE = bytes.fromhex("7F 00 7F")
@@ -336,6 +337,9 @@ class VirtualCoinValidator:
         bytes.fromhex("7F 02 01 FF 81"),
     )
     VALIDATOR_SESSION_COMMAND = 0x7B
+    COIN_CHANNEL_MAP = 0x001F16CE
+    COIN_QUEUE_LIMIT = 16
+    COIN_REQUEST_TIMEOUT = 30.0
     PAIRING_COMPARE_PC = 0x0000B730
     PAIRING_READ_PC = 0x0000B6E0
     PAIRING_FAILURE_PC = 0x0000B74A
@@ -371,8 +375,112 @@ class VirtualCoinValidator:
         self.last_pairing_count_lag = False
         self.type_pending = False
         self._hopper_ready_phase = 0
+        self.coin_window = False
+        self._coin_routes = bytes(8)
+        self._coins: deque[tuple[int, float]] = deque()
+        self._coin_sequence = 0
+        self._coin_inflight: tuple[int, float, int, int] | None = None
+
+    def queue_coin(self, cents: int, now: float) -> int:
+        if type(cents) is not int or cents != 100:
+            raise ValueError("only a virtual 1-euro coin is supported")
+        if len(self._coins) >= self.COIN_QUEUE_LIMIT:
+            raise ValueError("virtual coin queue is full")
+        self._coin_sequence += 1
+        self._coins.append((self._coin_sequence, now))
+        return self._coin_sequence
+
+    def expire_coins(self, now: float) -> list[str]:
+        events = []
+        while self._coins and now - self._coins[0][1] >= self.COIN_REQUEST_TIMEOUT:
+            sequence, _ = self._coins.popleft()
+            events.append(f"DB_VIRTUAL_MP_COIN_EXPIRED id={sequence} cents=100 reason=acceptance_unavailable")
+        return events
+
+    def prepare_coin_reply(self, rsp: RspClient, now: float) -> tuple[bytes | None, list[str]]:
+        """Replace only an unpublished status reply, or answer a 7B coin window.
+
+        CC4 19E2C accepts 8n/route/auth-hi/auth-lo/checksum, B838 checks
+        AEA6's transform, and 1B1DC books the mapped value (10 = 1 euro).
+        All firmware access here is read-only. No register override is used.
+        """
+        if not self.coin_window:
+            return None, []
+        self.coin_window = False
+        events = self.expire_coins(now)
+        if not self._coins and self._coin_inflight is None:
+            return None, events
+        balances = rsp.read_memory(0x001F1280, 4)
+        balance = int.from_bytes(balances[:2], "big") + int.from_bytes(balances[2:], "big")
+        failures = rsp.read_memory(0x001F787C, 1)[0]
+        if self._coin_inflight is not None:
+            sequence, sent_at, previous, previous_failures = self._coin_inflight
+            if failures != previous_failures:
+                outcome = "REJECTED"
+            elif balance - previous >= 10:
+                outcome = "CREDITED"
+            elif now - sent_at >= self.COIN_REQUEST_TIMEOUT:
+                outcome = "UNCONFIRMED"
+            else:
+                return None, events
+            events.append(f"DB_VIRTUAL_MP_COIN_{outcome} id={sequence} cents=100")
+            self._coin_inflight = None
+        if not self._coins or self.challenge_pending or self.type_pending:
+            return None, events
+        # Mirror the original money-frame acceptance gate and its debounce.
+        if (rsp.read_memory(0x001E2300, 1)[0] not in (0, 1)
+                or any(rsp.read_memory(0x001E2CE8, 1))
+                or any(rsp.read_memory(0x001F80FC, 1))
+                or not (any(rsp.read_memory(0x001E26B6, 2))
+                        or any(rsp.read_memory(0x001E26BA, 1)))
+                or any(rsp.read_memory(0x001E2B7D, 1))
+                or any(rsp.read_memory(0x001F787A, 1))
+                or rsp.read_memory(0x001E22B6, 1)[0] != 0):
+            return None, events
+        if (rsp.read_memory(0x001F777D, 1)[0] != 1
+                and not any(rsp.read_memory(0x001E2A02, 1))
+                and not any(rsp.read_memory(0x001E26CE, 1))):
+            return None, events
+        channels = rsp.read_memory(self.COIN_CHANNEL_MAP, 16)
+        channel_route = None
+        for channel, value in enumerate(channels):
+            # Do not guess a channel number: use the live denomination map
+            # and the latest 7E/00 routing/inhibit command sent to the MP.
+            routes = (self._coin_routes[channel // 2] >> (4 if channel % 2 == 0 else 0)) & 0xF
+            if value & 0x7F == 10 and routes:
+                route = next(bit for bit in (8, 4, 2, 1) if routes & bit)
+                channel_route = channel, route
+                break
+        if channel_route is None:
+            return None, events
+        channel, route = channel_route
+        code = 0x80 | channel
+        expected = 0
+        if rsp.read_memory(0x001F8221, 1)[0] and not rsp.read_memory(0x001EACE0, 1)[0]:
+            seed = (bytes([code]) + rsp.read_memory(self.PAIRING_HISTORY, 5)
+                    + rsp.read_memory(self.PAIRING_COUNTER, 2)
+                    + rsp.read_memory(self.PAIRING_SESSION, 4))
+            expected = self.pairing_expected_word(seed, self._pairing_table(rsp))
+        data = bytes((code, route)) + expected.to_bytes(2, "big")
+        reply = data + bytes([sum(data) & 0xFF])
+        self._rx.clear()
+        self._rx.extend(reply)
+        sequence, _ = self._coins.popleft()
+        self._coin_inflight = sequence, now, balance, failures
+        events.append(f"DB_VIRTUAL_MP_COIN_SENT id={sequence} cents=100 channel={channel} route={route} wire={reply.hex(' ').upper()}")
+        return reply, events
+
+    def _pairing_table(self, rsp: RspClient) -> bytes:
+        if any(rsp.read_memory(self.PAIRING_DYNAMIC_TABLE_FLAG, 2)):
+            address = self.PAIRING_DYNAMIC_TABLE
+        elif any(rsp.read_memory(self.PAIRING_TABLE_SELECTOR, 2)):
+            address = self.PAIRING_STATIC_TABLE_A
+        else:
+            address = self.PAIRING_STATIC_TABLE_B
+        return rsp.read_memory(address, 256)
 
     def observe_tx(self, value: int, remaining: int) -> bytes | None:
+        self.coin_window = False
         if (
             remaining == 0
             and self._next_remaining == 1
@@ -443,6 +551,9 @@ class VirtualCoinValidator:
         self._next_remaining = 0
         if self._rx:
             return None
+        if len(frame) == 11 and frame[:2] == b"\x7E\x00" and frame[-1] == sum(frame[:-1]) & 0xFF:
+            self._coin_routes = frame[2:10]
+            return None
         if frame in (self.IDENTITY_PROBE, self.SECONDARY_IDENTITY_PROBE):
             data = self.IDENTITY_DATA
         elif frame in (self.HOPPER_READY_PROBE, self.HOPPER_READY_FOLLOWUP):
@@ -502,6 +613,7 @@ class VirtualCoinValidator:
             # validator watchdog advances. At 0x1A204 a valid SCC reply
             # resets that watchdog; no coin or payout event is generated.
             data = b"\x00"
+            self.coin_window = True
         elif (
             len(frame) == 7
             and frame[0] == self.VALIDATOR_SESSION_COMMAND
@@ -510,6 +622,7 @@ class VirtualCoinValidator:
             # 0xB142..0xB19A sends a one-way session update and returns
             # without waiting for, or comparing, a reply. Do not inject a
             # fabricated 00/00 response into the asynchronous RX path.
+            self.coin_window = True
             return None
         else:
             return None
@@ -1803,6 +1916,14 @@ def run_bridge(args: argparse.Namespace) -> int:
                             f"DB_TOUCH_REQUEST x={x} y={y} down={down}",
                             flush=True,
                         )
+                    elif event_type == "coin":
+                        try:
+                            sequence = coin_validator.queue_coin(control_event["cents"], time.monotonic())
+                            print(f"DB_VIRTUAL_MP_COIN_QUEUED id={sequence} cents=100", flush=True)
+                        except ValueError as exc:
+                            print(f"DB_VIRTUAL_MP_COIN_REJECTED cents=100 reason={exc}", flush=True)
+                for coin_event in coin_validator.expire_coins(time.monotonic()):
+                    print(coin_event, flush=True)
                 if timer_enabled:
                     touch_state = rsp.read_memory(
                         TOUCH_TRANSACTION_STATE, 1
@@ -3033,6 +3154,12 @@ def run_bridge(args: argparse.Namespace) -> int:
                             f"{frame.hex(' ').upper()}",
                             flush=True,
                         )
+                    if coin_validator.coin_window:
+                        coin_response, coin_events = coin_validator.prepare_coin_reply(rsp, time.monotonic())
+                        for coin_event in coin_events:
+                            print(coin_event, flush=True)
+                        if coin_response is not None:
+                            response = coin_response
                     if response is not None:
                         if coin_validator.challenge_pending:
                             expected, response = coin_validator.prepare_pairing_reply(rsp)

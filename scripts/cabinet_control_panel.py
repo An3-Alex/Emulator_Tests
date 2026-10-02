@@ -153,6 +153,9 @@ class ControlPanel:
             button.bind("<ButtonPress-1>", lambda _e, key=name: self._button(key, True))
             button.bind("<ButtonRelease-1>", lambda _e, key=name: self._button(key, False))
 
+        ttk.Button(frame, text="+1 € (MP)", width=15,
+                   command=self._coin).grid(row=3, column=2, padx=2, pady=3)
+
         ttk.Checkbutton(frame, text="Tür offen", variable=self.door_open,
                         command=self._door).grid(row=4, column=0, columnspan=2,
                                                   sticky="w", pady=(8, 2))
@@ -172,7 +175,11 @@ class ControlPanel:
     def _send(self, command: dict) -> None:
         try:
             send_command(command, self.port)
-            self.status.set("Datenbank verbunden – Eingabe gesendet")
+            self.status.set(
+                "1 € beim virtuellen MP vorgemerkt – Ergebnis im Live-Protokoll"
+                if command["type"] == "coin" else
+                "Datenbank verbunden – Eingabe gesendet"
+            )
         except (OSError, ValueError, RuntimeError) as exc:
             self.status.set(f"Eingabe nicht gesendet: {exc}")
 
@@ -187,6 +194,10 @@ class ControlPanel:
 
     def _door(self) -> None:
         self._send({"type": "door", "open": self.door_open.get()})
+
+    def _coin(self) -> None:
+        # A coin is a single event, not a held cabinet switch.
+        self._send({"type": "coin", "cents": 100})
 
     def _pad_point(self, event: tk.Event) -> tuple[int, int]:
         display_w, display_h = self.display_size

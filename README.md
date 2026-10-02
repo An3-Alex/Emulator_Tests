@@ -12,7 +12,7 @@ CF-Images, Datenbankdateien und fremde Software werden nicht mitgeliefert.
 - Automatische Einrichtung einer getrennten Arbeitskopie des CF-Images,
   einschließlich QXL-Grafiktreiber und PCM-Audio-Bridge.
 - Bedienfenster für Touch, Menü, Autostart, Einsatz, Maximaleinsatz, Start,
-  Auszahlung, Service-Taste und Türschalter.
+  Auszahlung, Service-Taste, Türschalter und „+1 € (MP)“ für Spielgeld.
 - Optionales Live-Protokoll der Datenbankkommunikation.
 - Gespeicherte Dateipfade und Einstellungen für Spiel-PC und Datenbank.
 - „Alles beenden“ fährt den Spiel-PC herunter und beendet die zu diesem Lauf
@@ -42,7 +42,14 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 ## Bekannte Einschränkungen
 
 - Der Spielstart kann mehrere Minuten dauern.
-- Eine Spielgeld-Gutschrift ist derzeit nicht verfügbar.
+- Bei frischen CF-Images kann der Start nach dem ersten XP-Neustart bei
+  INITVIDEO stehen bleiben. Bis zur abgeschlossenen Initialisierung ist die
+  Münzannahme nicht verfügbar.
+- „+1 € (MP)“ benötigt abgeschlossene Initialisierung und freigegebene
+  Münzannahme. Der virtuelle Prüfer sendet ein Münztelegramm; die Datenbank
+  prüft und bucht es selbst. Das Live-Protokoll unterscheidet vorgemerkte,
+  gesendete und gebuchte Einwürfe. Nicht gesendete Einwürfe verfallen nach
+  30 Sekunden; bereits gesendete werden nicht automatisch wiederholt.
 - Auszahlungsgeräte und der obere Bildschirm sind noch nicht vollständig
   nachgebildet.
 - Andere Spielepakete können ausgewählt werden, benötigen aber kompatible
@@ -51,6 +58,10 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Änderungen
 
+- 0.1.14: Bedienfeld um „+1 € (MP)“ erweitert. Ein-Euro-Spielgeldeinwurf
+  über den virtuellen Münzprüfer,
+  mit aktiver Kanalzuordnung, Annahmesperre, Münzauthentifizierung und
+  getrennten Protokolleinträgen für Übertragung und Buchung.
 - 0.1.13: ausschließliche
   PCM-Bridge mit Monowiedergabe, lokal abgearbeiteter Stille, schnellerem
   Audio-UART, begrenzten Puffern und eigener Prozessverwaltung. Der zusätzliche
@@ -119,8 +130,8 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Einrichtung und Start
 
-Die [M90-Emulator.exe aus Release 0.1.13 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.13/M90-Emulator.exe)
-oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.13).
+Die [M90-Emulator.exe aus Release 0.1.14 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.14/M90-Emulator.exe)
+oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.14).
 Änderungen aus dem Entwicklungsstand `main` sind erst nach einem neuen Build
 in der EXE enthalten.
 

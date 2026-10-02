@@ -46,6 +46,10 @@ def validate_command(value: Any) -> dict[str, Any]:
         if value["name"] not in KEY_IDS or type(value["down"]) is not bool:
             raise ValueError("invalid button command")
         return {"type": "button", "name": value["name"], "down": value["down"]}
+    if kind == "coin" and set(value) == {"type", "cents"}:
+        if type(value["cents"]) is not int or value["cents"] != 100:
+            raise ValueError("only a virtual 1-euro coin is supported")
+        return {"type": "coin", "cents": 100}
     if kind == "touch" and set(value) == {"type", "x", "y", "down"}:
         x, y, down = value["x"], value["y"], value["down"]
         if (type(x) is not int or type(y) is not int or type(down) is not bool

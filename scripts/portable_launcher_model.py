@@ -36,7 +36,7 @@ EMULATION_FIELDS = (
     ("door_open", "Datenbank", "Tür beim Start offen", bool, (), "Standard: geschlossen; kann den Servicebetrieb auslösen."),
     ("trace_diagnostics", "Protokoll und Bedienung", "Zusätzliche Diagnose-Watchpoints", bool, (), "Standard: aus; kann die Datenbank deutlich verlangsamen."),
     ("show_live_log", "Protokoll und Bedienung", "Live-Protokoll öffnen", bool, (), "Die Logdatei wird auch ohne sichtbares Fenster geschrieben."),
-    ("show_control_window", "Protokoll und Bedienung", "Bedienfenster öffnen", bool, (), "Automatentasten, Tür und Touch-Vorschau anzeigen."),
+    ("show_control_window", "Protokoll und Bedienung", "Bedienfenster öffnen", bool, (), "Automatentasten, +1 € über MP, Tür und Touch-Vorschau anzeigen."),
 )
 
 

@@ -187,6 +187,20 @@ class BridgeLogParser:
             events.append(Event("DB → Prüfer", name, line))
             return events
 
+        if line.startswith("DB_VIRTUAL_MP_COIN_"):
+            labels = {
+                "QUEUED": "1 € beim virtuellen MP vorgemerkt",
+                "SENT": "Virtueller MP sendet einen 1-Euro-Münzeinwurf",
+                "CREDITED": "Datenbank hat 1 € gebucht",
+                "REJECTED": "1-Euro-Münzeinwurf abgelehnt",
+                "EXPIRED": "1-Euro-Einwurf nicht gesendet: Annahme nicht verfügbar",
+                "UNCONFIRMED": "1-Euro-Einwurf gesendet, Buchung nicht bestätigt",
+            }
+            outcome = line.split()[0].removeprefix("DB_VIRTUAL_MP_COIN_")
+            events.append(Event("Prüfer → DB", labels.get(outcome, "Virtueller Münzeinwurf"), line,
+                                "warning" if outcome in ("REJECTED", "EXPIRED", "UNCONFIRMED") else "normal"))
+            return events
+
         match = MP_REPLY.fullmatch(line)
         if match:
             data = bytes.fromhex(match.group(1))
