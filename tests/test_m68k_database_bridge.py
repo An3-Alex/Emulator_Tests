@@ -17,6 +17,45 @@ spec.loader.exec_module(bridge)
 
 
 class DatabaseBridgeTests(unittest.TestCase):
+    def test_rtc_fault_snapshot_only_reads_native_calendar_and_check_state(self):
+        rsp = mock.Mock()
+        registers = [0] * 18
+        registers[0:2] = [0x72948690, 0x72948690]
+        registers[13] = 0x1F9000
+        registers[bridge.REG_A7] = 0x1FFF70
+        rsp.read_registers_u32.return_value = registers
+        memory = {
+            (0x1FFF70, 4): bytes.fromhex("00 07 A1 90"),
+            (0x1F9000, 7): bytes.fromhex("16 0E 00 01 02 0D 00"),
+            (0x1E2EB8, 4): bytes.fromhex("72 94 86 90"),
+            (0x1EFFFE, 1): b"\x01",
+            (0x1F8110, 7): bytes.fromhex("16 0E 00 01 02 0D 00"),
+            (0x108C, 2): b"07",
+        }
+        rsp.read_memory.side_effect = lambda address, length: memory[(address, length)]
+        snapshot = bridge.read_rtc_fault_snapshot(
+            rsp, bridge.dt.datetime(2013, 2, 1, 22, 14))
+        self.assertIn("rtc=2013-02-01T22:14:00", snapshot)
+        self.assertIn("source_return=0007A190", snapshot)
+        self.assertIn("calendar=160E0001020D00", snapshot)
+        self.assertIn("timestamp=72948690 invalid_flag=01", snapshot)
+        self.assertIn("header_year=3037", snapshot)
+        self.assertEqual(len(rsp.read_memory.call_args_list), 6)
+        self.assertTrue(all(call[0] in {"read_memory", "read_registers_u32"}
+                            for call in rsp.mock_calls))
+
+    def test_rtc_fault_snapshot_does_not_read_invalid_stack_or_calendar_pointer(self):
+        rsp = mock.Mock()
+        registers = [0] * 18
+        registers[13] = 0xFFFFFFF0
+        registers[bridge.REG_A7] = 0x1FFFFF
+        rsp.read_registers_u32.return_value = registers
+        rsp.read_memory.side_effect = lambda address, length: bytes(length)
+        snapshot = bridge.read_rtc_fault_snapshot(rsp, bridge.RTC_DEFAULT_TIME)
+        self.assertIn("source_return=unavailable", snapshot)
+        self.assertIn("calendar=unavailable", snapshot)
+        self.assertEqual(len(rsp.read_memory.call_args_list), 4)
+
     def test_native_factory_is_executed_not_replaced_by_flag_writes(self):
         rsp = mock.Mock()
         rsp.read_register_u32.return_value = 0x408
@@ -1390,6 +1429,29 @@ class DatabaseBridgeTests(unittest.TestCase):
         frame[8] ^= 1
         with self.assertRaisesRegex(ValueError, "identity/content"):
             bridge.complete_initvideo_board_profile(bytes(frame), bridge.RTC_DEFAULT_TIME)
+
+    def test_first_initvideo_ignores_embedded_eot_calendar_and_device_bytes(self):
+        frame = bytearray(bytes.fromhex(
+            "01 02 22 00 7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C "
+            "01 00 00 00 00 05 E8 07 04 04 04 04 13 11 00 00 04 04 04 04 04"
+        ))
+        for length in range(len(frame)):
+            self.assertFalse(bridge.initvideo_frame_complete(frame[:length]))
+        self.assertTrue(bridge.initvideo_frame_complete(frame))
+        completed = bridge.complete_initvideo_board_profile(frame, bridge.RTC_DEFAULT_TIME)
+        self.assertEqual(len(completed), 39)
+        self.assertEqual(completed[24:30], bytes.fromhex("DC 07 02 01 16 0E"))
+
+    def test_first_initvideo_still_rejects_bad_prefix_length_and_final_eot(self):
+        with self.assertRaisesRegex(ValueError, "prefix"):
+            bridge.initvideo_frame_complete(bytes.fromhex("01 02 4F 00"))
+        with self.assertRaisesRegex(ValueError, "fixed length"):
+            bridge.initvideo_frame_complete(bridge.INITVIDEO_PREFIX + bytes(36))
+        frame = (bridge.INITVIDEO_PREFIX + bridge.INITVIDEO_OWNER_FIELDS
+                 + bytes(15))
+        self.assertTrue(bridge.initvideo_frame_complete(frame))
+        with self.assertRaisesRegex(ValueError, "layout"):
+            bridge.complete_initvideo_clock(frame, bridge.RTC_DEFAULT_TIME)
 
     def test_format_zero_interrupt_frame(self) -> None:
         self.assertEqual(

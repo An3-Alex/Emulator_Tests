@@ -266,6 +266,8 @@ class BridgeLogParser:
             events.append(Event("Board", "R4543-Kalender wurde gelesen", line))
         elif line.startswith("DB_RTC4543_WRITE"):
             events.append(Event("Board", "R4543-Kalender wurde gestellt", line))
+        elif line.startswith("DB_RTC_FAULT_SNAPSHOT"):
+            events.append(Event("Fehler", "F_UHR: Kalender und Firmware-Prüfwerte erfasst", line, "warning"))
         elif line.startswith("DB_CONFIG_RAM_PROGRAMMED"):
             events.append(Event("Board", "Las-Vegas-Config im 2-MB-RAM eingerichtet", line))
         elif line.startswith("DB_AUX_TRANSACTION_START"):

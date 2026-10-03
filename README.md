@@ -60,6 +60,10 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Änderungen
 
+- 0.1.16: INITVIDEO wird anhand seiner festen Länge erkannt;
+  ein `04` innerhalb der Kalender- oder Gerätedaten beendet das Paket nicht mehr.
+  Bei `F_UHR` erscheinen Kalenderwerte und Firmware-Prüfwerte im Live-Protokoll.
+  RTC-Leseereignisse zeigen den zu Beginn der Übertragung erfassten Kalender.
 - 0.1.15: Start ohne zusätzliche Arbeitskopie-Checkbox. Der
   Vorbereitungsstatus des gewählten Images wird weiterhin automatisch geprüft.
   INITVIDEO verwendet die eingestellte Datenbank-Uhrzeit auch
@@ -164,8 +168,8 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Einrichtung und Start
 
-Die [M90-Emulator.exe aus Release 0.1.15 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.15/M90-Emulator.exe)
-oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.15).
+Die [M90-Emulator.exe aus Release 0.1.16 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.16/M90-Emulator.exe)
+oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.16).
 Änderungen aus dem Entwicklungsstand `main` sind erst nach einem neuen Build
 in der EXE enthalten.
 

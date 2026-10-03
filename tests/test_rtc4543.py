@@ -53,6 +53,21 @@ class Rtc4543Tests(unittest.TestCase):
         rtc.port_write(0)
         self.assertEqual(rtc.now(), target + dt.timedelta(seconds=2))
 
+    def test_2013_read_matches_firmware_falling_edge_sampling(self):
+        when = dt.datetime(2013, 2, 1, 22, 14, 59)
+        tick = [0.0]
+        rtc = Rtc4543(when, monotonic=lambda: tick[0])
+        rtc.port_write(CE)
+        sampled = []
+        for index in range(BITS):
+            rising = rtc.port_write(CE | CLK)
+            # The original routine preserves DATA when lowering CLK, then reads.
+            falling = rtc.port_write(rising & ~CLK)
+            sampled.append(int(bool(falling & DATA)))
+            tick[0] += 0.1
+        self.assertEqual(tuple(sampled), calendar_bits(when))
+        self.assertEqual(rtc.completed_read, bytes.fromhex("59 14 22 06 01 02 13"))
+        self.assertGreater(rtc.now().minute, when.minute)
 
 if __name__ == "__main__":
     unittest.main()

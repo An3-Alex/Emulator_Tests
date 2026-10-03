@@ -971,6 +971,7 @@ GUEST_MAX_INSTRUCTIONS_PER_SECOND = 1_000_000_000 // GUEST_ICOUNT_NS_PER_INSTRUC
 # $609A6 in the unmodified runtime.
 RTC_CONTROL_REGISTER = 0x00FFF906
 RTC_PORT_REGISTER = 0x00FFF907
+RTC_FAULT_ENTRY = 0x00079AA4
 RTC_CONTROL_WATCH_LENGTH = 1
 # During heavy firmware phases Windows can defer a GDB stop reply well beyond
 # five seconds even though the CPU has already been interrupted. This is only
@@ -1586,6 +1587,15 @@ def initvideo_time_text(frame: bytes) -> str:
     return dt.datetime(year, month, day, hour, minute).isoformat(timespec="minutes")
 
 
+def initvideo_frame_complete(frame: bytes | bytearray) -> bool:
+    """INITVIDEO is fixed-size; an embedded EOT is ordinary payload data."""
+    if len(frame) > INITVIDEO_FRAME_LENGTH:
+        raise ValueError("INITVIDEO frame exceeds fixed length")
+    if not INITVIDEO_PREFIX.startswith(frame[:len(INITVIDEO_PREFIX)]):
+        raise ValueError("unexpected first INITVIDEO prefix")
+    return len(frame) == INITVIDEO_FRAME_LENGTH
+
+
 class InitvideoClockForwarder:
     """Hold only INITVIDEO frames to complete their selected RTC date."""
 
@@ -1905,6 +1915,26 @@ def read_register_snapshot(rsp: RspClient) -> str:
     return " ".join(f"{name}={value:08X}" for name, value in zip(names, values))
 
 
+def read_rtc_fault_snapshot(rsp: RspClient, when: dt.datetime) -> str:
+    """Read the native F_UHR call context, never change calendar or error flags."""
+    registers = rsp.read_registers_u32()
+    stack = registers[REG_A7]
+    calendar_pointer = registers[13]  # A5: calendar pointer in FUN_00079f42
+    source = (rsp.read_memory(stack, 4).hex().upper()
+              if 0 <= stack <= 0x200000 - 4 else "unavailable")
+    calendar = (rsp.read_memory(calendar_pointer, 7).hex().upper()
+                if 0x10000 <= calendar_pointer <= 0x200000 - 7 else "unavailable")
+    return (
+        f"rtc={when.isoformat()} source_return={source} "
+        f"calendar_ptr={calendar_pointer:08X} calendar={calendar} "
+        f"d0={registers[0]:08X} d1={registers[1]:08X} "
+        f"timestamp={rsp.read_memory(0x001E2EB8, 4).hex().upper()} "
+        f"invalid_flag={rsp.read_memory(0x001EFFFE, 1).hex().upper()} "
+        f"cached_calendar={rsp.read_memory(0x001F8110, 7).hex().upper()} "
+        f"header_year={rsp.read_memory(0x108C, 2).hex().upper()}"
+    )
+
+
 def run_bridge(args: argparse.Namespace) -> int:
     validate_timer_interval(args.timer_interval)
     admission_eeprom = None
@@ -2031,6 +2061,9 @@ def run_bridge(args: argparse.Namespace) -> int:
                 length=RTC_CONTROL_WATCH_LENGTH,
             )
             set_watchpoint(rsp, 2, RTC_PORT_REGISTER, True)
+            # Executes only on F_UHR, not on every normal clock read. Capture
+            # its native reason once, then let the error handler run unchanged.
+            set_watchpoint(rsp, 0, RTC_FAULT_ENTRY, True)
             for address in BOARD_PORT_STROBES:
                 set_watchpoint(rsp, 2, address, True)     # write / set-clear alias
             set_watchpoint(rsp, 0, RUNTIME_IO_INIT_RETURN_PC, True)
@@ -2710,6 +2743,10 @@ def run_bridge(args: argparse.Namespace) -> int:
                     continue
                 if kind is None:
                     pc = rsp.read_register_u32(REG_PC)
+                    if pc == RTC_FAULT_ENTRY:
+                        print("DB_RTC_FAULT_SNAPSHOT " + read_rtc_fault_snapshot(rsp, rtc.now()), flush=True)
+                        set_watchpoint(rsp, 0, RTC_FAULT_ENTRY, False)
+                        continue
                     if coin_entry_watch and pc == COIN_ENTRY_READ_PC:
                         # This instruction reads the AY input after selecting
                         # port A. Restore the selector after the native read;
@@ -3197,11 +3234,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                         if first_frame_started_at is not None:
                             forward_immediately = False
                             first_frame.extend(value)
-                            if len(first_frame) > 4096:
-                                raise RuntimeError(
-                                    "first database UART frame exceeds 4096 bytes"
-                                )
-                            if value == b"\x04":
+                            if initvideo_frame_complete(first_frame):
                                 generation_ms = (
                                     time.monotonic() - first_frame_started_at
                                 ) * 1000.0

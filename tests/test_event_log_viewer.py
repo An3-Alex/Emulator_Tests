@@ -6,6 +6,15 @@ from scripts import event_log_viewer as viewer
 
 
 class EventLogViewerTests(unittest.TestCase):
+    def test_rtc_fault_snapshot_is_visible_and_retains_native_values(self) -> None:
+        line = ("DB_RTC_FAULT_SNAPSHOT rtc=2013-02-01T22:14:00 "
+                "source_return=0007A190 calendar=160E0001020D00 invalid_flag=01")
+        event = viewer.BridgeLogParser().feed(line)[0]
+        self.assertEqual(event.direction, "Fehler")
+        self.assertEqual(event.level, "warning")
+        self.assertIn("F_UHR", event.title)
+        self.assertEqual(event.details, line)
+
     def test_log_encoding_detects_windows_powershell_utf16(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "events.log"

@@ -55,6 +55,7 @@ class Rtc4543:
         self._base_tick = monotonic()
         self._previous_port = 0
         self._bits: tuple[int, ...] = ()
+        self._read_calendar = b""
         self._received: list[int] = []
         self._index = 0
         self.completed_read: bytes | None = None
@@ -99,7 +100,9 @@ class Rtc4543:
         writing = bool(port & WR)
         if enabled and not was_enabled:
             self._index = 0
-            self._bits = calendar_bits(self.now())
+            when = self.now()
+            self._read_calendar = calendar_bytes(when)
+            self._bits = calendar_bits(when)
             self._received = []
             self.completed_read = None
             self.completed_write = None
@@ -111,7 +114,7 @@ class Rtc4543:
                 port = (port & ~DATA) | (DATA if self._bits[self._index] else 0)
                 self._index += 1
                 if self._index == BITS:
-                    self.completed_read = calendar_bytes(self.now())
+                    self.completed_read = self._read_calendar
         if was_enabled and not enabled and bool(previous & WR):
             self._accept_write()
         self._previous_port = port
