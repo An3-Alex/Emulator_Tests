@@ -60,6 +60,12 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Änderungen
 
+- 0.1.17: Die virtuelle Touch-Einheit unterstützt die Zwei-Punkt-
+  Kalibrierung im Service-Menü mit Bestätigung beim Loslassen. Die Kalibrierung
+  wird je Arbeitsimage in `<Image>.touch.json` gespeichert; ein normaler Reset
+  behält sie bei. Die Touch-Pakete berücksichtigen den nativen 800-/960-Pixel-
+  Modus einschließlich des 80-Pixel-Versatzes. Kalibrierung und Bildschirmmodus
+  erscheinen im Live-Protokoll.
 - 0.1.16: INITVIDEO wird anhand seiner festen Länge erkannt;
   ein `04` innerhalb der Kalender- oder Gerätedaten beendet das Paket nicht mehr.
   Bei `F_UHR` erscheinen Kalenderwerte und Firmware-Prüfwerte im Live-Protokoll.
@@ -168,8 +174,8 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Einrichtung und Start
 
-Die [M90-Emulator.exe aus Release 0.1.16 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.16/M90-Emulator.exe)
-oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.16).
+Die [M90-Emulator.exe aus Release 0.1.17 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.17/M90-Emulator.exe)
+oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.17).
 Änderungen aus dem Entwicklungsstand `main` sind erst nach einem neuen Build
 in der EXE enthalten.
 

@@ -53,6 +53,7 @@ REQUIRED_PYTHON_FILES = (
     "qmp_capture.py",
     "qxl_setup_runner.py",
     "rtc4543.py",
+    "virtual_touch.py",
     "runtime_bundle.py",
     "serialloader_chip_emulator.py",
 )

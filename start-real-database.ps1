@@ -84,6 +84,9 @@ $arguments = @(
     '--qemu', $QemuM68k
 )
 if (-not $SafeTb) { $arguments += '--fast-tb' }
+if (-not [string]::IsNullOrWhiteSpace($Image)) {
+    $arguments += @('--touch-state', ($Image + '.touch.json'))
+}
 if (-not [string]::IsNullOrWhiteSpace($FactoryReset)) {
     $arguments += @('--factory', $FactoryReset, '--expected-factory-sha256', (Get-SelectedInputHash $FactoryReset))
 }

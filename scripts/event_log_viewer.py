@@ -324,6 +324,23 @@ class BridgeLogParser:
             events.append(Event("Board", "Board-Timer aktiv / CPU-Instruktionsgrenze eingeschaltet", line))
         elif line.startswith("DB_TIMER_CLOCK"):
             events.append(Event("Status", "Timer-Zeitbasis aktiv; Interrupt-Pakete begrenzt", line))
+        elif line.startswith("DB_TOUCH_CALIBRATION_STORAGE_WARNING"):
+            events.append(Event("Touch", "Touch-Kalibrierung konnte nicht geladen/gespeichert werden", line, "warning"))
+        elif line.startswith("DB_TOUCH_CALIBRATION_REJECTED"):
+            events.append(Event("Touch", "Kalibrierpunkt ungültig; bisherige Werte bleiben erhalten", line, "warning"))
+        elif line.startswith("DB_TOUCH_CALIBRATION"):
+            titles = {
+                "DB_TOUCH_CALIBRATION_STARTED": "Touch-Kalibrierung gestartet: unten links, dann oben rechts",
+                "DB_TOUCH_CALIBRATION_POINT": "Kalibrierpunkt beim Loslassen bestätigt",
+                "DB_TOUCH_CALIBRATION_COMPLETED": "Touch-Kalibrierung abgeschlossen",
+                "DB_TOUCH_CALIBRATION_CANCELLED": "Touch-Kalibrierung abgebrochen",
+                "DB_TOUCH_CALIBRATION_LOADED": "Gespeicherte Touch-Kalibrierung geladen",
+                "DB_TOUCH_CALIBRATION_SAVED": "Touch-Kalibrierung gespeichert",
+                "DB_TOUCH_CALIBRATION_INPUT": "Eingabe für Touch-Kalibrierung übernommen",
+            }
+            events.append(Event("Touch", titles.get(line.split()[0], "Touch-Kalibrierung"), line))
+        elif line.startswith("DB_TOUCH_GEOMETRY"):
+            events.append(Event("Touch", "Touch-Umrechnung an nativen Bildschirmmodus angepasst", line))
         elif line.startswith("DB_TOUCH_RESPONSE"):
             events.append(Event("Board", "Touch-Controller hat geantwortet", line))
         elif line.startswith("DB_TOUCH_REQUEST"):

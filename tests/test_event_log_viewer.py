@@ -6,6 +6,21 @@ from scripts import event_log_viewer as viewer
 
 
 class EventLogViewerTests(unittest.TestCase):
+    def test_touch_calibration_events_and_geometry_keep_raw_details(self) -> None:
+        parser = viewer.BridgeLogParser()
+        for line, title, level in (
+            ("DB_TOUCH_CALIBRATION_STARTED", "gestartet", "normal"),
+            ("DB_TOUCH_CALIBRATION_POINT index=1 x=100 y=525", "Loslassen", "normal"),
+            ("DB_TOUCH_CALIBRATION_COMPLETED", "abgeschlossen", "normal"),
+            ("DB_TOUCH_CALIBRATION_REJECTED", "ungültig", "warning"),
+            ("DB_TOUCH_CALIBRATION_STORAGE_WARNING reason=denied", "gespeichert", "warning"),
+            ("DB_TOUCH_GEOMETRY width=960 crop=80", "Bildschirmmodus", "normal"),
+        ):
+            event = parser.feed(line)[0]
+            self.assertIn(title, event.title)
+            self.assertEqual(event.details, line)
+            self.assertEqual(event.level, level)
+
     def test_rtc_fault_snapshot_is_visible_and_retains_native_values(self) -> None:
         line = ("DB_RTC_FAULT_SNAPSHOT rtc=2013-02-01T22:14:00 "
                 "source_return=0007A190 calendar=160E0001020D00 invalid_flag=01")

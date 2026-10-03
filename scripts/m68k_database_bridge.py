@@ -39,6 +39,7 @@ from owner_config_runtime import CONFIG_CLEAR_START, prepare_config_writes, prep
 from owner_database_runtime import prepare_runtime
 from rtc4543 import DATA as RTC_DATA, DEFAULT_TIME as RTC_DEFAULT_TIME, Rtc4543
 from admission_card import inspect_eeprom
+from virtual_touch import VirtualTouchController
 from duart_timer import DEFAULT_X1_HZ, MAX_BATCH_TICKS, DuartTimerConfig, DuartWallTimer, CpuRunBudget
 from duart_timer import MAX_WALL_TIMER_BATCH_TICKS, MAX_WALL_TIMER_PENDING_TICKS
 
@@ -931,6 +932,11 @@ TOUCH_WAITING_FOR_REPLY = 7
 TOUCH_IDENTITY = b"A30000"
 TOUCH_CLICK_MENUE_PREFIX = bytes.fromhex("01 02 41 00 3F 2C")
 TOUCH_CLICK_FRAME_LENGTH = 11
+TOUCH_WIDE_MODE_ADDRESS = 0x001F01E4
+# Return from native direct CX transmission (FUN_7F8C8), before state 6
+# consumes its acknowledgment. Calibration does not use TOUCH_TRANSACTION_STATE.
+TOUCH_CALIBRATION_CX_RETURN_PC = 0x0008114C
+TOUCH_CALIBRATION_FINISH_PC = 0x00081340
 TIMER_VECTOR = 134
 TIMER_HANDLER = 0x000C6BD0
 UART_TIMER_RTE_PC = 0x000C6C0A
@@ -1518,30 +1524,24 @@ def can_nest_scc_a_tx(
 
 def touch_controller_response(request: bytes) -> bytes | None:
     """Return the response of the 3M controller identified in the firmware."""
-    if request == b"\x01OI\x0D":
-        # The firmware explicitly accepts controller prefixes A3 and Q1.
-        return b"\x01" + TOUCH_IDENTITY + b"\x0D"
-    if request in {
-        b"\x01Z\x0D",
-        b"\x01R\x0D",
-        b"\x01AD\x0D",
-        b"\x01PN814\x0D",
-        b"\x01FT\x0D",
-        b"\x01MS\x0D",
-        b"\x01PL\x0D",
-        b"\x01CX\x0D",
-    }:
-        return b"\x010\x0D"
-    return None
+    return VirtualTouchController.initial_response(request)
 
 
 def inject_touch_controller_response(rsp: RspClient, response: bytes) -> bool:
     """Put one controller reply into the original firmware RX ring."""
     if not response or len(response) > TOUCH_UART_RX_BUFFER_SIZE:
         raise ValueError("invalid touch-controller response length")
-    if rsp.read_memory(TOUCH_UART_RX_COUNT, 1)[0] != 0:
+    status = rsp.read_memory(TOUCH_UART_RX_COUNT, 2)
+    if status[0] != 0:
         return False
-    read_index = rsp.read_memory(TOUCH_UART_RX_INDEX, 1)[0]
+    publish_touch_controller_response(rsp, response, status[1])
+    return True
+
+
+def publish_touch_controller_response(rsp: RspClient, response: bytes, read_index: int) -> None:
+    """Publish to an already-checked empty RX ring while the CPU is halted."""
+    if not response or len(response) > TOUCH_UART_RX_BUFFER_SIZE:
+        raise ValueError("invalid touch-controller response length")
     if read_index >= TOUCH_UART_RX_BUFFER_SIZE:
         raise RuntimeError(
             f"touch-controller RX index outside ring: {read_index}"
@@ -1554,7 +1554,51 @@ def inject_touch_controller_response(rsp: RspClient, response: bytes) -> bool:
         rsp.write_memory(TOUCH_UART_RX_BUFFER, response[first:])
     # Publish the count last so the emulated CPU never sees partial data.
     rsp.write_memory(TOUCH_UART_RX_COUNT, bytes([len(response)]))
-    return True
+
+
+def log_touch_controller_events(controller: VirtualTouchController) -> None:
+    for event in controller.events:
+        print(event, flush=True)
+    controller.events.clear()
+
+
+def service_touch_command(rsp: RspClient, controller: VirtualTouchController,
+                          request: bytes) -> tuple[bool, bytes | None]:
+    """Reply exactly once; busy RX must not start/reset calibration early."""
+    status = rsp.read_memory(TOUCH_UART_RX_COUNT, 2)
+    if status[0]:
+        return False, None
+    if status[1] >= TOUCH_UART_RX_BUFFER_SIZE:
+        raise RuntimeError("touch-controller RX index outside ring")
+    response = controller.command(request)
+    if response is not None:
+        publish_touch_controller_response(rsp, response, status[1])
+    return True, response
+
+
+def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
+                         stream: "TouchPacketStream") -> tuple | None:
+    """Consume one input only at an empty native RX ring; never replay a point."""
+    if not stream.packets:
+        return None
+    if controller.calibration_session and not controller.calibrating:
+        # After point 2/failure, wait for native calibration teardown. It
+        # reinitializes the receiver; do not leak tablet packets into its ACKs.
+        return None
+    status = rsp.read_memory(TOUCH_UART_RX_COUNT, 2)
+    if status[0] != 0:
+        return None
+    if status[1] >= TOUCH_UART_RX_BUFFER_SIZE:
+        raise RuntimeError("touch-controller RX index outside ring")
+    x, y, down, _queued_packet = stream.packets[0]
+    wide = rsp.read_memory(TOUCH_WIDE_MODE_ADDRESS, 1)[0] == 1
+    calibration_input = controller.calibrating
+    response = controller.touch(x, y, down, wide=wide)
+    if response is not None:
+        publish_touch_controller_response(rsp, response, status[1])
+    stream.packets.popleft()
+    point = None if calibration_input else controller.screen_point(x, y)
+    return x, y, down, response, point, calibration_input
 
 
 def complete_initvideo_board_profile(frame: bytes, when: dt.datetime) -> bytes:
@@ -2064,6 +2108,8 @@ def run_bridge(args: argparse.Namespace) -> int:
             # Executes only on F_UHR, not on every normal clock read. Capture
             # its native reason once, then let the error handler run unchanged.
             set_watchpoint(rsp, 0, RTC_FAULT_ENTRY, True)
+            set_watchpoint(rsp, 0, TOUCH_CALIBRATION_CX_RETURN_PC, True)
+            set_watchpoint(rsp, 0, TOUCH_CALIBRATION_FINISH_PC, True)
             for address in BOARD_PORT_STROBES:
                 set_watchpoint(rsp, 2, address, True)     # write / set-clear alias
             set_watchpoint(rsp, 0, RUNTIME_IO_INIT_RETURN_PC, True)
@@ -2082,6 +2128,8 @@ def run_bridge(args: argparse.Namespace) -> int:
             rtc = Rtc4543(getattr(args, "rtc_date", RTC_DEFAULT_TIME))
             initvideo_clock_forwarder = InitvideoClockForwarder(rtc.now)
             touch_click_forwarder = TouchClickForwarder()
+            touch_controller = VirtualTouchController(getattr(args, "touch_state", None))
+            log_touch_controller_events(touch_controller)
             last_touch_point: tuple[int, int] | None = None
             last_wire_tx_at = 0.0
             initial_retry_frame = None
@@ -2198,15 +2246,15 @@ def run_bridge(args: argparse.Namespace) -> int:
                     )[0]
                     if touch_state != TOUCH_WAITING_FOR_REPLY:
                         touch_response_latch = None
-                    else:
+                    elif not touch_controller.calibrating:
                         request_bytes = rsp.read_memory(
                             TOUCH_TRANSACTION_REQUEST,
                             TOUCH_TRANSACTION_REQUEST_SIZE,
                         )
                         request = request_bytes.split(b"\x00", 1)[0]
                         if request and request != touch_response_latch:
-                            response = touch_controller_response(request)
-                            if response is None:
+                            handled, response = service_touch_command(rsp, touch_controller, request)
+                            if handled and response is None:
                                 if request not in reported_unknown_touch_commands:
                                     print(
                                         "DB_TOUCH_UNKNOWN_COMMAND "
@@ -2215,7 +2263,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                                     )
                                     reported_unknown_touch_commands.add(request)
                                 touch_response_latch = request
-                            elif inject_touch_controller_response(rsp, response):
+                            elif handled:
                                 print(
                                     "DB_TOUCH_RESPONSE "
                                     f"command={request.hex(' ').upper()} "
@@ -2223,19 +2271,21 @@ def run_bridge(args: argparse.Namespace) -> int:
                                     flush=True,
                                 )
                                 touch_response_latch = request
-                    if (touch_state != TOUCH_WAITING_FOR_REPLY
+                    if ((touch_state != TOUCH_WAITING_FOR_REPLY or touch_controller.calibrating)
                             and touch_packets.packets):
-                        x, y, down, packet = touch_packets.packets[0]
-                        if inject_touch_controller_response(rsp, packet):
-                            touch_packets.packets.popleft()
-                            if down:
-                                last_touch_point = (x, y)
+                        delivered = deliver_touch_packet(rsp, touch_controller, touch_packets)
+                        if delivered is not None:
+                            x, y, down, packet, point, calibration_input = delivered
+                            if down and point is not None:
+                                last_touch_point = point
+                            prefix = "DB_TOUCH_CALIBRATION_INPUT" if calibration_input else "DB_TOUCH_INPUT"
                             print(
-                                "DB_TOUCH_INPUT "
+                                f"{prefix} "
                                 f"x={x} y={y} down={down} "
-                                f"tablet={packet.hex(' ').upper()}",
+                                f"tablet={packet.hex(' ').upper() if packet else 'none'}",
                                 flush=True,
                             )
+                    log_touch_controller_events(touch_controller)
                 retry_now = time.monotonic()
                 if wire_frame and (
                     pending or retry_now - last_wire_tx_at >= 1.0
@@ -2743,6 +2793,28 @@ def run_bridge(args: argparse.Namespace) -> int:
                     continue
                 if kind is None:
                     pc = rsp.read_register_u32(REG_PC)
+                    if pc == TOUCH_CALIBRATION_CX_RETURN_PC:
+                        # CX is sent synchronously, not through the normal
+                        # transaction object. The transmitter has drained RX;
+                        # deliver the initial ACK before its state-6 receiver.
+                        handled, response = service_touch_command(rsp, touch_controller, b"\x01CX\r")
+                        if not handled:
+                            raise RuntimeError("calibration start RX ring is not empty")
+                        touch_packets.packets.clear()
+                        touch_packets.active_point = None
+                        last_touch_point = None
+                        log_touch_controller_events(touch_controller)
+                        step_past_breakpoint(rsp, pc)
+                        continue
+                    if pc == TOUCH_CALIBRATION_FINISH_PC:
+                        if touch_controller.calibration_session:
+                            touch_controller.finish()
+                            touch_packets.packets.clear()
+                            touch_packets.active_point = None
+                            last_touch_point = None
+                            log_touch_controller_events(touch_controller)
+                        step_past_breakpoint(rsp, pc)
+                        continue
                     if pc == RTC_FAULT_ENTRY:
                         print("DB_RTC_FAULT_SNAPSHOT " + read_rtc_fault_snapshot(rsp, rtc.now()), flush=True)
                         set_watchpoint(rsp, 0, RTC_FAULT_ENTRY, False)
@@ -3673,6 +3745,8 @@ def main() -> int:
     parser.add_argument("--com3-host", default="127.0.0.1")
     parser.add_argument("--com3-port", type=int, default=4553)
     parser.add_argument("--control-port", type=int, default=4554)
+    parser.add_argument("--touch-state", type=Path,
+                        help="virtual touch-controller calibration sidecar for this working image")
     parser.add_argument("--connect-timeout", type=float, default=120.0)
     parser.add_argument("--rtc-date", type=dt.datetime.fromisoformat, default=RTC_DEFAULT_TIME,
                         help="initial RTC calendar; default 2012-02-01T22:14:00")

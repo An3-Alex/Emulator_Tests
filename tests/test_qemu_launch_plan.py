@@ -155,6 +155,14 @@ class QemuLaunchPlanTests(unittest.TestCase):
         self.assertTrue(plan["event_window"]["visible"])
         self.assertEqual(plan["event_window"]["viewer"], "scripts/event_log_viewer.py")
 
+    def test_touch_calibration_sidecar_follows_selected_working_image(self) -> None:
+        image = r"D:\CF Images\work image.img"
+        for launcher in (REAL_DATABASE_LAUNCHER, PROGRAM_AND_START_LAUNCHER):
+            plan = self.script_plan(launcher, "-Image", image)
+            runtime = plan.get("runtime", plan)
+            arguments = runtime["database_bridge"]["arguments"]
+            self.assertEqual(arguments[arguments.index("--touch-state") + 1], image + ".touch.json")
+
     def test_database_timing_can_be_compared_at_half_rate(self) -> None:
         plan = self.script_plan(
             REAL_DATABASE_LAUNCHER, "-SafeTb", "-DbIcountShift", "6"
