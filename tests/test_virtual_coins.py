@@ -44,10 +44,43 @@ def packet(data):
 def enabled_device():
     device = VirtualCoinValidator()
     transmit(device, packet(bytes.fromhex("7E 00 88 88 88 88 88 88 88 88")))
+    for _ in range(2):
+        device.consume_rx()
+    transmit(device, packet(bytes.fromhex("7C FF FF 00 00")))
+    for _ in range(2):
+        device.consume_rx()
     return device
 
 
 class VirtualCoinTests(unittest.TestCase):
+    def test_entry_sensor_has_four_active_samples_then_release(self):
+        device, firmware = enabled_device(), ReadOnlyFirmware()
+        firmware.put(0x001F777D, b'\0')
+        device.queue_coin(100, 0)
+        self.assertTrue(device.stage_entry_sensor(firmware))
+        self.assertEqual([device.sample_entry_sensor(0x0E) for _ in range(6)],
+                         [0x4E, 0x4E, 0x4E, 0x4E, 0x0E, 0x0E])
+        self.assertFalse(device.stage_entry_sensor(firmware))
+        self.assertEqual(firmware.read_memory(0x001E26CE, 2), bytes(2))
+        self.assertEqual(firmware.read_memory(0x001F1280, 4), bytes(4))
+
+    def test_entry_sensor_does_not_bypass_disabled_channels_or_native_fault(self):
+        for address, value in ((0x001F80FC, b'\1'), (0x001E2CE8, b'\1'),
+                               (0x001E26B6, bytes(2)), (0x001F16CE, bytes(16)),
+                               (0x001F777D, b'\1'), (0x001E2A02, b'\1'),
+                               (0x001E26CE, b'\0\1')):
+            with self.subTest(address=address):
+                device, firmware = enabled_device(), ReadOnlyFirmware()
+                firmware.put(0x001F777D, b'\0')
+                firmware.put(address, value)
+                device.queue_coin(100, 0)
+                self.assertFalse(device.stage_entry_sensor(firmware))
+        device, firmware = enabled_device(), ReadOnlyFirmware()
+        firmware.put(0x001F777D, b'\0')
+        device.queue_coin(100, 0)
+        device._coin_enabled_mask = 0
+        self.assertFalse(device.stage_entry_sensor(firmware))
+
     def test_button_sends_exactly_one_euro_event_per_activation(self):
         panel = ControlPanel.__new__(ControlPanel)
         panel._send = Mock()
@@ -75,32 +108,40 @@ class VirtualCoinTests(unittest.TestCase):
         neutral = transmit(device, packet(bytes.fromhex("7F 26 AD DE")))
         self.assertEqual(neutral, b"\0\0")
         reply, events = device.prepare_coin_reply(firmware, 1)
-        expected = device.pairing_expected_word(bytes.fromhex("82 32 1E BD EC 3E AD DE BA DC FE 01"), bytes(range(256)))
-        self.assertEqual(reply, packet(b"\x82\x08" + expected.to_bytes(2, "big")))
+        expected = device.pairing_expected_word(bytes.fromhex("83 32 1E BD EC 3E AD DE BA DC FE 01"), bytes(range(256)))
+        self.assertEqual(reply, packet(b"\x83\x08" + expected.to_bytes(2, "big")))
         self.assertIn("COIN_SENT", events[0])
         self.assertNotIn("CREDITED", events[0])
         self.assertEqual([device.consume_rx() for _ in range(5)], list(reply))
-        firmware.put(0x001F1280, b"\x00\x0A")
+        firmware.put(0x001F1280, b"\x00\x14")
         transmit(device, packet(bytes.fromhex("7B 01 02 03 04 05")))
         response, events = device.prepare_coin_reply(firmware, 2)
         self.assertIsNone(response)
         self.assertIn("COIN_CREDITED", events[0])
 
-    def test_one_way_session_has_no_idle_reply_but_can_carry_one_coin(self):
+    def test_session_ack_completes_transaction_or_carries_one_coin(self):
         device, firmware = enabled_device(), ReadOnlyFirmware()
         session = packet(bytes.fromhex("7B 01 02 03 04 05"))
-        self.assertIsNone(transmit(device, session))
+        self.assertEqual(transmit(device, session), b"\0\0")
         self.assertEqual(device.prepare_coin_reply(firmware, 0), (None, []))
-        self.assertEqual(device.pending_count(), 0)
+        self.assertEqual([device.consume_rx() for _ in range(2)], [0, 0])
         device.queue_coin(100, 0)
-        self.assertIsNone(transmit(device, session))
+        self.assertEqual(transmit(device, session), b"\0\0")
         reply, events = device.prepare_coin_reply(firmware, 1)
-        self.assertEqual(reply[0:2], b"\x82\x08")
+        self.assertEqual(reply[0:2], b"\x83\x08")
         self.assertEqual(len(events), 1)
+
+    def test_native_alternate_acceptance_is_a_big_endian_word(self):
+        device, firmware = enabled_device(), ReadOnlyFirmware()
+        firmware.put(0x001F777D, b"\0")
+        firmware.put(0x001E26CE, b"\0\1")
+        device.queue_coin(100, 0)
+        transmit(device, packet(bytes.fromhex("7F 26 00 00")))
+        self.assertIsNotNone(device.prepare_coin_reply(firmware, 1)[0])
 
     def test_no_coin_when_inhibited_busy_unmapped_or_checksum_invalid(self):
         for address, value in ((0x001E26B6, b"\0\0"), (0x001E2CE8, b"\1"),
-                               (0x001F80FC, b"\1"), (0x001E2300, b"\2"),
+                               (0x001F80FC, b"\1"), (0x001E2300, b"\0\6"),
                                (0x001E2B7D, b"\1"), (0x001F787A, b"\1"),
                                (0x001E22B6, b"\x0A"), (0x001F777D, b"\0"),
                                (0x001F16CE, bytes(16))):
@@ -109,7 +150,9 @@ class VirtualCoinTests(unittest.TestCase):
                 firmware.put(address, value)
                 device.queue_coin(100, 0)
                 transmit(device, packet(bytes.fromhex("7F 26 00 00")))
-                self.assertEqual(device.prepare_coin_reply(firmware, 1), (None, []))
+                reply, events = device.prepare_coin_reply(firmware, 1)
+                self.assertIsNone(reply)
+                self.assertIn("COIN_WAITING", events[0])
                 self.assertEqual(device.pending_count(), 2)
         device = VirtualCoinValidator()
         device.queue_coin(100, 0)
@@ -119,6 +162,71 @@ class VirtualCoinTests(unittest.TestCase):
         device.queue_coin(100, 0)
         transmit(device, bytes.fromhex("7F 26 00 00 00"))
         self.assertFalse(device.coin_window)
+
+    def test_zero_route_is_valid_only_with_explicit_channel_enable(self):
+        device, firmware = enabled_device(), ReadOnlyFirmware()
+        self.assertEqual(transmit(device, packet(bytes.fromhex("7E 00 00 00 00 00 00 00 00 00"))), b"\0\0")
+        for _ in range(2):
+            device.consume_rx()
+        device.queue_coin(100, 0)
+        transmit(device, packet(bytes.fromhex("7B 01 02 03 04 05")))
+        reply, _ = device.prepare_coin_reply(firmware, 1)
+        self.assertEqual(reply[:2], b"\x83\0")
+
+    def test_7c_ack_enable_bit_order_disable_and_checksum(self):
+        device = enabled_device()
+        for mask in (0x0008, 0x0800, 0x0000):
+            data = b"\x7C" + mask.to_bytes(2, "big") + bytes(2)
+            self.assertEqual(transmit(device, packet(data)), b"\0\0")
+            self.assertEqual(device._coin_enabled_mask, mask)
+            for _ in range(2):
+                device.consume_rx()
+        # Invalid commands must not change the most recently accepted mask.
+        transmit(device, bytes.fromhex("7C FF FF 00 00 00"))
+        self.assertEqual(device._coin_enabled_mask, 0)
+        device.queue_coin(100, 0)
+        transmit(device, packet(bytes.fromhex("7B 01 02 03 04 05")))
+        self.assertIsNone(device.prepare_coin_reply(ReadOnlyFirmware(), 1)[0])
+
+    def test_16_bit_receive_phase_and_wait_log_rate_limit(self):
+        device, firmware = enabled_device(), ReadOnlyFirmware()
+        device.queue_coin(100, 0)
+        for phase, now in ((6, 1), (11, 2), (0x100, 6)):
+            firmware.put(0x001E2300, phase.to_bytes(2, "big"))
+            transmit(device, packet(bytes.fromhex("7B 01 02 03 04 05")))
+            reply, events = device.prepare_coin_reply(firmware, now)
+            self.assertIsNone(reply)
+            self.assertEqual(len(events), int(now != 2))
+            for _ in range(device.pending_count()):
+                device.consume_rx()
+        firmware.put(0x001E2300, b"\0\1")
+        transmit(device, packet(bytes.fromhex("7B 01 02 03 04 05")))
+        self.assertIsNotNone(device.prepare_coin_reply(firmware, 7)[0])
+
+    def test_wait_log_identifies_native_blocker_without_sending(self):
+        device, firmware = enabled_device(), ReadOnlyFirmware()
+        firmware.put(0x001E26B6, bytes(2))
+        device.queue_coin(100, 0)
+        transmit(device, packet(bytes.fromhex("7B 01 02 03 04 05")))
+        reply, events = device.prepare_coin_reply(firmware, 1)
+        self.assertIsNone(reply)
+        self.assertEqual(device.pending_count(), 2)
+        self.assertIn("acceptance=0000", events[0])
+        self.assertIn("alternate_acceptance=0000", events[0])
+        self.assertIn("enabled=FFFF", events[0])
+
+    def test_pairing_reports_authenticated_coin_values_for_all_channels(self):
+        firmware = ReadOnlyFirmware()
+        for index, value in enumerate(VirtualCoinValidator.COIN_CHANNEL_VALUES):
+            device = VirtualCoinValidator()
+            command = packet(bytes((0x7F, 0x27, index)) + bytes.fromhex("32 1E BD EC 3E"))
+            transmit(device, command)
+            expected, reply = device.prepare_pairing_reply(firmware)
+            self.assertEqual(reply[0], value)
+            seed = bytes([value]) + bytes.fromhex("32 1E BD EC 3E AD DE BA DC FE 01")
+            self.assertEqual(expected, device.pairing_expected_word(seed, bytes(range(256))))
+            self.assertEqual(reply[-1], sum(reply[:-1]) & 255)
+        self.assertEqual(VirtualCoinValidator.COIN_CHANNEL_VALUES[3], 20)
 
     def test_queue_bounded_expiring_and_never_retries_sent_coin(self):
         device, firmware = enabled_device(), ReadOnlyFirmware()
@@ -144,6 +252,13 @@ class VirtualCoinTests(unittest.TestCase):
         booked = parser.feed("DB_VIRTUAL_MP_COIN_CREDITED id=1 cents=100")
         self.assertIn("sendet", sent[0].title)
         self.assertIn("gebucht", booked[0].title)
+
+    def test_coin_entry_sensor_changes_are_visible_in_live_log(self):
+        parser = BridgeLogParser()
+        active = parser.feed("DB_VIRTUAL_MP_ENTRY_SENSOR_START id=1 samples=4")
+        idle = parser.feed("DB_VIRTUAL_MP_ENTRY_SENSOR_RELEASED id=1")
+        self.assertIn("aktiviert", active[0].title)
+        self.assertIn("freigegeben", idle[0].title)
 
 
 if __name__ == "__main__":

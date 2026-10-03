@@ -178,7 +178,7 @@ class ControlPanel:
             self.status.set(
                 "1 € beim virtuellen MP vorgemerkt – Ergebnis im Live-Protokoll"
                 if command["type"] == "coin" else
-                "Datenbank verbunden – Eingabe gesendet"
+                "Datenbank verbunden – Eingabe vorgemerkt"
             )
         except (OSError, ValueError, RuntimeError) as exc:
             self.status.set(f"Eingabe nicht gesendet: {exc}")

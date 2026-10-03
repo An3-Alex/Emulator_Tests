@@ -17,6 +17,29 @@ spec.loader.exec_module(bridge)
 
 
 class DatabaseBridgeTests(unittest.TestCase):
+    def test_native_factory_is_executed_not_replaced_by_flag_writes(self):
+        rsp = mock.Mock()
+        rsp.read_register_u32.return_value = 0x408
+        rsp.read_memory.side_effect = [b"INIT", bytes(4)]
+        rsp.command.return_value = "OK"
+        with redirect_stdout(io.StringIO()):
+            bridge.run_original_factory_reset(rsp, b"factory-code", 0x1500)
+        rsp.write_memory.assert_called_once_with(0x1000, b"factory-code")
+        rsp.write_register_u32.assert_any_call(bridge.REG_PC, 0x1500)
+        self.assertIn(mock.call("c"), rsp.command.call_args_list)
+        rsp.command.assert_any_call("z0,408,1")
+        rsp.set_timeout.assert_called_with(60.0)
+
+    def test_wrong_factory_result_blocks_programming_and_removes_breakpoint(self):
+        rsp = mock.Mock()
+        rsp.read_register_u32.return_value = 0x408
+        rsp.read_memory.side_effect = [bytes(4), bytes(4)]
+        rsp.command.return_value = "OK"
+        with self.assertRaisesRegex(RuntimeError, "native initialization"):
+            bridge.run_original_factory_reset(rsp, b"wrong-module", 0x1500)
+        rsp.command.assert_any_call("z0,408,1")
+        rsp.set_timeout.assert_called_with(60.0)
+
     def test_cli_defaults_to_ten_ms_without_changing_instruction_clock(self):
         argv = [str(SCRIPT), '--loader', 'loader.bin', '--expected-loader-sha256', 'x',
                 '--database', 'database.bin', '--expected-database-sha256', 'y',
@@ -308,12 +331,12 @@ class DatabaseBridgeTests(unittest.TestCase):
 
         self.assertEqual(
             device.prepare_pairing_reply(PairingRsp()),
-            (0xFFFA, bytes.fromhex("00 FF FA F9")),
+            (0xFFFA, bytes.fromhex("02 FF FA FB")),
         )
         self.assertEqual(device.status(), bridge.BOARD_SCC_IDLE_STATUS | 1)
-        self.assertEqual([device.consume_rx() for _ in range(3)], [0, 0xFF, 0xFA])
+        self.assertEqual([device.consume_rx() for _ in range(3)], [2, 0xFF, 0xFA])
         self.assertEqual(device.status(), bridge.BOARD_SCC_IDLE_STATUS | 1 | 0x20)
-        self.assertEqual(device.consume_rx(), 0xF9)
+        self.assertEqual(device.consume_rx(), 0xFB)
         self.assertEqual(device.status(), bridge.BOARD_SCC_IDLE_STATUS)
 
         class FakeRsp:
@@ -560,13 +583,14 @@ class DatabaseBridgeTests(unittest.TestCase):
         for remaining, value in zip(range(len(broken), 0, -1), broken):
             self.assertIsNone(device.observe_tx(value, remaining))
 
-    def test_virtual_coin_validator_session_update_is_one_way(self) -> None:
+    def test_virtual_coin_validator_session_update_acknowledges_rx_wait(self) -> None:
         device = bridge.VirtualCoinValidator()
         frame = bytes.fromhex("7B 99 9D 5E 2E CB 08")
         for remaining, value in zip(range(len(frame), 1, -1), frame[:-1]):
             self.assertIsNone(device.observe_tx(value, remaining))
-        self.assertIsNone(device.observe_tx(frame[-1], 1))
-        self.assertIsNone(device.consume_rx())
+        self.assertEqual(device.observe_tx(frame[-1], 1), b"\0\0")
+        self.assertEqual(device.consume_rx(), 0)
+        self.assertEqual(device.consume_rx(), 0)
         self.assertEqual(device.status(), bridge.BOARD_SCC_IDLE_STATUS)
 
         broken = frame[:-1] + b"\x00"
@@ -1219,21 +1243,21 @@ class DatabaseBridgeTests(unittest.TestCase):
             "02 FF 04"
         )
         self.assertEqual(
-            bridge.complete_initvideo_board_profile(firmware_frame), expected
+            bridge.complete_initvideo_board_profile(firmware_frame, bridge.RTC_DEFAULT_TIME), expected
         )
 
-    def test_later_initvideo_clock_is_2012_without_changing_device_fields(self) -> None:
+    def test_later_initvideo_uses_explicit_time_without_changing_device_fields(self) -> None:
         firmware_frame = bytes.fromhex(
             "01 02 22 00 7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C "
             "01 00 00 00 00 05 75 08 19 2D 2D 55 13 11 00 00 00 00 "
             "01 58 04"
         )
-        completed = bridge.complete_initvideo_clock(firmware_frame)
+        completed = bridge.complete_initvideo_clock(firmware_frame, bridge.RTC_DEFAULT_TIME)
         self.assertEqual(completed[24:30], bytes.fromhex("DC 07 02 01 16 0E"))
         self.assertEqual(completed[:24], firmware_frame[:24])
         self.assertEqual(completed[30:], firmware_frame[30:])
 
-        forwarder = bridge.InitvideoClockForwarder()
+        forwarder = bridge.InitvideoClockForwarder(lambda: bridge.RTC_DEFAULT_TIME)
         delivered = bytearray()
         completed_count = 0
         for value in firmware_frame:
@@ -1249,13 +1273,13 @@ class DatabaseBridgeTests(unittest.TestCase):
             "01 00 00 00 00 05 DC 07 02 01 16 0E 13 00 03 5F 00 00 "
             "01 58 04"
         )
-        completed = bridge.complete_initvideo_board_profile(firmware_frame)
+        completed = bridge.complete_initvideo_board_profile(firmware_frame, bridge.RTC_DEFAULT_TIME)
         self.assertEqual(completed[30:34], bytes.fromhex("13 00 03 5F"))
-        self.assertEqual(completed[24:30], bridge.INITVIDEO_SELECTED_TIME)
+        self.assertEqual(completed[24:30], bytes.fromhex("DC 07 02 01 16 0E"))
         self.assertEqual(completed[34:38], bridge.INITVIDEO_DEVICE_FIELDS)
 
     def test_non_initvideo_stream_is_forwarded_without_changes(self) -> None:
-        forwarder = bridge.InitvideoClockForwarder()
+        forwarder = bridge.InitvideoClockForwarder(lambda: bridge.RTC_DEFAULT_TIME)
         frame = bytes.fromhex("01 02 4F 00 09 00 04")
         delivered = bytearray()
         for value in frame:
@@ -1365,7 +1389,7 @@ class DatabaseBridgeTests(unittest.TestCase):
         )
         frame[8] ^= 1
         with self.assertRaisesRegex(ValueError, "identity/content"):
-            bridge.complete_initvideo_board_profile(bytes(frame))
+            bridge.complete_initvideo_board_profile(bytes(frame), bridge.RTC_DEFAULT_TIME)
 
     def test_format_zero_interrupt_frame(self) -> None:
         self.assertEqual(

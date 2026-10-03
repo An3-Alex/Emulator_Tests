@@ -138,10 +138,21 @@ class EventLogViewerTests(unittest.TestCase):
         ack = parser.feed("DB_WAITING_FOR_COM3", now=2.1)
         self.assertEqual(ack[0].title, "INITVIDEO 2: vom PC bestätigt (ACK)")
 
-    def test_2012_clock_completion_is_visible(self) -> None:
+    def test_clock_completion_displays_reported_year(self) -> None:
         parser = viewer.BridgeLogParser()
         events = parser.feed("DB_INITVIDEO_CLOCK_COMPLETED year=2012 data=01 02")
-        self.assertEqual(events[0].title, "INITVIDEO-Uhr auf 2012 ergänzt")
+        self.assertEqual(events[0].title, "INITVIDEO-Uhr ergänzt: 2012")
+
+    def test_clock_events_use_selected_date_not_hardcoded_2012(self) -> None:
+        parser = viewer.BridgeLogParser()
+        for marker, field in (("DB_INITVIDEO_CLOCK_COMPLETED", "time"),
+                              ("DB_RTC4543_ENABLED", "initial")):
+            with self.subTest(marker=marker):
+                events = parser.feed(f"{marker} {field}=2026-10-03T12:34:00")
+                self.assertIn("2026-10-03T12:34:00", events[0].title)
+                self.assertNotIn("2012", events[0].title)
+                events = parser.feed(marker)
+                self.assertNotIn("2012", events[0].title)
 
     def test_r4543_events_are_visible(self) -> None:
         parser = viewer.BridgeLogParser()
@@ -203,6 +214,14 @@ class EventLogViewerTests(unittest.TestCase):
             "DB_ACTIVE_BOARD_ISR_SNAPSHOT pc=0007075C return=000751BA"
         )
         self.assertEqual(snapshot[0].title, "SCC-A-Interrupt aktiv (Diagnose)")
+
+    def test_bounded_timer_clock_is_visible_as_status(self) -> None:
+        parser = viewer.BridgeLogParser()
+        line = "DB_TIMER_CLOCK source=monotonic-wall batch=4 pending=4 coalesced=100 foreground_ms=1.007"
+        events = parser.feed(line)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].title, "Timer-Zeitbasis aktiv; Interrupt-Pakete begrenzt")
+        self.assertEqual(events[0].details, line)
 
     def test_failed_pairing_is_not_labeled_register_override(self) -> None:
         parser = viewer.BridgeLogParser()

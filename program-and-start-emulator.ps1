@@ -45,6 +45,7 @@ if ([math]::Ceiling($DbTimerInterval * $DuartX1Hz / (32 * 58)) -gt 128) {
     throw 'DUART clock and run slice exceed the 128-interrupt budget. Reduce DbTimerInterval.'
 }
 $runtimeOptions = @{
+    FactoryReset = $FactoryReset
     GuestRamMiB = $GuestRamMiB; GuestVcpus = $GuestVcpus
     Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
     MuteAudio = $MuteAudio

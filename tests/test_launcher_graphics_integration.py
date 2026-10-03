@@ -13,6 +13,17 @@ from portable_launcher_model import Selection
 
 
 class LauncherGraphicsTests(unittest.TestCase):
+    def test_invalid_original_path_blocks_all_image_updates(self):
+        target = SimpleNamespace(events=queue.Queue(), _update_graphics=mock.Mock())
+        selection = Selection(image="original.img", original_image="original.img")
+        with mock.patch.object(launcher, "check_runtime", return_value=[
+                "CF-Image: Original darf nicht als Arbeitskopie gestartet werden"]), \
+             mock.patch.object(launcher.subprocess, "run") as run:
+            launcher.Launcher._check_worker(target, selection, True)
+        run.assert_not_called()
+        target._update_graphics.assert_not_called()
+        self.assertTrue(target.events.get()[1][2])
+
     def test_only_start_updates_ready_working_copy(self):
         for start in (False, True):
             with self.subTest(start=start):

@@ -56,6 +56,27 @@ class MemoryRsp:
 
 
 class CabinetControlTests(unittest.TestCase):
+    def test_batched_scan_preserves_unrelated_bytes_and_limits_debugger_trips(self) -> None:
+        rsp = MemoryRsp()
+        for base in (KEY_CURRENT_BASE, KEY_EVENT_BASE):
+            rsp.write_memory(base, bytes([0xA5]) * 128)
+        before = dict(rsp.data)
+        cache = {}
+        publish_cabinet_buttons(rsp, {"service"}, {"service"}, mapping_cache=cache)
+        controlled = set()
+        for name, mapping in cache[0].items():
+            current, event, mask = key_location(mapping)
+            controlled.update((current, event))
+            self.assertEqual(rsp.data[current] & ~mask, before[current] & ~mask)
+            self.assertEqual(rsp.data[event] & ~mask, before[event] & ~mask)
+        for address in before.keys() - controlled:
+            self.assertEqual(rsp.data[address], before[address])
+        with patch.object(rsp, "read_memory", wraps=rsp.read_memory) as read, \
+                patch.object(rsp, "write_memory", wraps=rsp.write_memory) as write:
+            publish_cabinet_buttons(rsp, {"service"}, set(), mapping_cache=cache)
+        self.assertEqual(read.call_count, 3)  # profile and two input banks
+        self.assertLessEqual(write.call_count, 2)
+
     def test_preview_touch_deduplicates_press_and_recovers_missed_release(self) -> None:
         panel = ControlPanel.__new__(ControlPanel)
         panel.pad_touch = None

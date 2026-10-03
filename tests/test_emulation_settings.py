@@ -52,7 +52,7 @@ class EmulationSettingsTests(unittest.TestCase):
         selection = Selection(image="owner.img", guest_ram_mib=1024, guest_vcpus=2,
             acceleration="tcg", qxl_vram_mib=128, usb_tablet=True, swap_displays=True,
             db_icount_shift=5, safe_tb=False, db_timer_interval=0.01, duart_x1_hz=4000000,
-            db_connect_timeout=240.0, database_date="2012-06-03T11:12:13", door_open=True,
+            db_connect_timeout=240.0, database_date="2026-10-03T11:12:13", door_open=True,
             trace_diagnostics=True, show_live_log=True, show_control_window=False, sound_enabled=False)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
@@ -79,7 +79,7 @@ class EmulationSettingsTests(unittest.TestCase):
         self.assertEqual(runtime["m68k_tcg_mode"], "translation-block fast mode")
         for option, expected in (("--timer-interval", "0.01"), ("--icount-shift", "5"),
                 ("--duart-x1-hz", "4000000"), ("--connect-timeout", "240"),
-                ("--rtc-date", "2012-06-03T11:12:13")):
+                ("--rtc-date", "2026-10-03T11:12:13")):
             self.assertEqual(runtime["arguments"][runtime["arguments"].index(option) + 1], expected)
         self.assertIn("--door-open", runtime["arguments"])
         self.assertIn("--trace-diagnostics", runtime["arguments"])
@@ -138,14 +138,42 @@ class EmulationSettingsTests(unittest.TestCase):
     def test_selected_time_used_in_both_initvideo_paths(self):
         frame = bytes.fromhex("01 02 22 00 7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C "
                              "01 00 00 00 00 05 75 08 19 2D 2D 55 13 11 00 00 00 00 01 58 04")
-        when = dt.datetime(2012, 6, 3, 11, 12, 13)
-        expected = bytes.fromhex("DC 07 06 03 0B 0C")
+        when = dt.datetime(2026, 10, 3, 11, 12, 13)
+        expected = bytes.fromhex("EA 07 0A 03 0B 0C")
         self.assertEqual(bridge.complete_initvideo_board_profile(frame, when)[24:30], expected)
         forwarder = bridge.InitvideoClockForwarder(lambda: when)
         data = b"".join(forwarder.feed(bytes([value]))[0] for value in frame)
         self.assertEqual(data[24:30], expected)
         self.assertEqual(data[:24], frame[:24])
         self.assertEqual(data[30:], frame[30:])
+
+    def test_later_initvideo_and_retry_follow_running_selected_clock(self):
+        from rtc4543 import Rtc4543
+
+        frame = bytes.fromhex("01 02 22 00 7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C "
+                             "01 00 00 00 00 05 DC 07 02 01 16 0E 13 11 00 00 00 00 01 58 04")
+        tick = [0.0]
+        rtc = Rtc4543(dt.datetime(2026, 12, 31, 23, 59, 30), monotonic=lambda: tick[0])
+        first = bridge.complete_initvideo_board_profile(frame, rtc.now())
+        self.assertEqual(bridge.initvideo_time_text(first), "2026-12-31T23:59")
+        tick[0] = 90.0
+        retry = bridge.complete_initvideo_clock(first, rtc.now())
+        self.assertEqual(bridge.initvideo_time_text(retry), "2027-01-01T00:01")
+        self.assertEqual(retry[:24], first[:24])
+        self.assertEqual(retry[30:], first[30:])
+        forwarder = bridge.InitvideoClockForwarder(rtc.now)
+        for elapsed, expected in ((90.0, "2027-01-01T00:01"), (150.0, "2027-01-01T00:02")):
+            tick[0] = elapsed
+            later = b"".join(forwarder.feed(bytes([value]))[0] for value in frame)
+            self.assertEqual(bridge.initvideo_time_text(later), expected)
+
+    def test_initvideo_helpers_require_explicit_time(self):
+        with self.assertRaises(TypeError):
+            bridge.complete_initvideo_clock(b"")
+        with self.assertRaises(TypeError):
+            bridge.complete_initvideo_board_profile(b"")
+        with self.assertRaises(TypeError):
+            bridge.InitvideoClockForwarder()
 
 
 class SettingsWidgetTests(unittest.TestCase):
@@ -191,6 +219,29 @@ class SettingsWidgetTests(unittest.TestCase):
         error.assert_called_once()
         thread.assert_not_called()
         self.assertFalse(self.app.checking)
+
+    def test_prepared_image_checkbox_is_absent(self):
+        def widgets(root):
+            yield root
+            for child in root.winfo_children():
+                yield from widgets(child)
+        self.assertFalse(hasattr(self.app, "prepared_copy"))
+        labels = [str(item.cget("text")) for item in widgets(self.app)
+                  if isinstance(item, ttk.Checkbutton)]
+        self.assertFalse(any("vorbereitete Arbeitskopie" in label for label in labels))
+
+    def test_start_runs_automatic_preflight_without_manual_confirmation(self):
+        selection = Selection(image="working.img")
+        with patch.object(self.app, "_read_selection", return_value=selection), \
+             patch.object(self.app, "_save", return_value=True), \
+             patch.object(ui.threading, "Thread") as thread, \
+             patch.object(ui.messagebox, "showerror") as error:
+            self.app._start()
+        error.assert_not_called()
+        thread.assert_called_once_with(target=self.app._check_worker,
+                                       args=(selection, True), daemon=True)
+        thread.return_value.start.assert_called_once()
+        self.assertTrue(self.app.checking)
 
 
 if __name__ == "__main__":

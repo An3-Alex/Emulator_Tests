@@ -156,7 +156,6 @@ class Launcher(tk.Tk):
                   tk.StringVar(value=str(getattr(selection, key))))
             for key, _group, _label, kind, _limits, _help in EMULATION_FIELDS
         }
-        self.prepared_copy = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
         self.prepare_timer = tk.StringVar(value="Image-Einrichtung: noch nicht gestartet")
         self._build()
@@ -189,12 +188,6 @@ class Launcher(tk.Tk):
                  "Das Live-Protokoll ist optional.",
             wraplength=870, justify="left",
         ).pack(anchor="w")
-        ttk.Checkbutton(
-            content,
-            text="Ich habe eine bereits vorbereitete Arbeitskopie gewählt (nicht das Original).",
-            variable=self.prepared_copy,
-        ).pack(anchor="w", pady=(0, 8))
-
         picker = ttk.Frame(content)
         picker.pack(fill="both", expand=True, pady=(0, 5))
         picker_canvas = tk.Canvas(picker, highlightthickness=0, borderwidth=0)
@@ -392,13 +385,6 @@ class Launcher(tk.Tk):
     def _start(self) -> None:
         if self.stopping or self.preparing or self.checking or (self.running and self.running.poll() is None):
             return
-        if not self.prepared_copy.get():
-            messagebox.showerror(
-                "Image-Kopie erforderlich",
-                "Ein unverändertes oder einziges Original-Image darf hier noch nicht gestartet "
-                "werden. Bitte eine vorbereitete Kopie auswählen und den Hinweis bestätigen.",
-            )
-            return
         selection = self._read_selection()
         if selection is None:
             return
@@ -408,6 +394,9 @@ class Launcher(tk.Tk):
         self.check_button.configure(state="disabled")
         self.start_button.configure(state="disabled")
         self.status.set("Vorprüfung vor dem Start…")
+        # Actual checks replace the manual checkbox: _check_worker first rejects
+        # original-image paths through check_runtime, then requires ready/legacy-ready
+        # on disk before any image update or launch. Never trust a UI assertion.
         threading.Thread(target=self._check_worker, args=(selection, True), daemon=True).start()
 
     def _prepare(self) -> None:
@@ -740,7 +729,6 @@ class Launcher(tk.Tk):
                     self._finish_prepare_timer("Fertig")
                     self.preparing = False
                     self.checking = False
-                    self.prepared_copy.set(True)
                     self.prepare_button.configure(state="normal")
                     self.start_button.configure(state="disabled" if self.stopping else "normal")
                     self.check_button.configure(state="normal")

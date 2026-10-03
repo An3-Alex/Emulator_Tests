@@ -42,6 +42,8 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 ## Bekannte Einschränkungen
 
 - Der Spielstart kann mehrere Minuten dauern.
+- Bei hoher Hostlast kann die Board-Verarbeitung weiter hinter Echtzeit
+  zurückbleiben; begrenzte Timer-Pakete verhindern eine wachsende Aufholschlange.
 - Bei frischen CF-Images kann der Start nach dem ersten XP-Neustart bei
   INITVIDEO stehen bleiben. Bis zur abgeschlossenen Initialisierung ist die
   Münzannahme nicht verfügbar.
@@ -58,6 +60,38 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Änderungen
 
+- 0.1.15: Start ohne zusätzliche Arbeitskopie-Checkbox. Der
+  Vorbereitungsstatus des gewählten Images wird weiterhin automatisch geprüft.
+  INITVIDEO verwendet die eingestellte Datenbank-Uhrzeit auch
+  bei Wiederholungen. Das Live-Protokoll zeigt die tatsächlich gesendete Zeit
+  und das konfigurierte RTC-Startdatum statt einer festen 2012-Beschriftung.
+  Begrenzte Eingabewarteschlange mit reserviertem Loslassen.
+  Tastenklicks werden einzeln beim Board-Scan übergeben; schnelle Folgeklicks
+  überschreiben keine laufende Betätigung. Kurze Tastendrücke bleiben bis zu
+  einem vollständigen Hauptprogramm-Laufabschnitt aktiv und können nicht
+  innerhalb eines Interrupt-Bündels verschwinden. Überholte Touch-Bewegungen werden
+  zusammengefasst. Türzustände werden beim Board-Zugriff übernommen und im
+  Live-Protokoll getrennt als vorgemerkt und übergeben angezeigt.
+  Tastenstände werden pro Board-Scan gemeinsam übertragen, statt jeden
+  Kontakt einzeln über die Debug-Verbindung abzufragen.
+  Registeränderungen für Interrupts werden gemeinsam übertragen; auf einer
+  leeren seriellen Verbindung entfallen unnötige UART-Interrupts. Der Board-Timer
+  verwendet eine monotone Zeitbasis mit begrenztem Rückstand. Höchstens vier
+  Timer-Interrupts werden gebündelt, danach erhält das Hauptprogramm wieder
+  Rechenzeit für Tasten und Rückmeldungen. Lange Host-Unterbrechungen erzeugen
+  keine unbegrenzte Aufholwarteschlange. Firmware-Wartezähler werden nicht
+  vorzeitig auf null gesetzt. Die CPU-Instruktionsgrenze bleibt unverändert.
+  Die Datenbank-Zeitscheibe wird auch bei häufigen Hardwarezugriffen vollständig
+  abgearbeitet; serielle Verarbeitung lässt fällige Board-Ticks nicht dauerhaft
+  warten. Der virtuelle Münzprüfer meldet authentifizierte Euro-Kanalwerte,
+  bestätigt Routing- und Annahmebefehle und berücksichtigt die gesendeten
+  Kanalfreigaben. Bei wartenden Einwürfen zeigt das Log die einzelnen Sperrflags.
+  Geräteprofile mit Münzeingangssignal erhalten vor dem Münztelegramm einen
+  begrenzten Eingangspuls. Die originale Firmware öffnet das Annahmefenster;
+  Guthaben und Freigabevariablen werden nicht durch die Bridge gesetzt.
+  Aktivierung und Loslassen des Münzeingangs erscheinen im Live-Protokoll.
+  Der ausgewählte originale Factory-Code wird vor dem Programmieren des frischen
+  DB-RAMs ausgeführt, einschließlich seines nativen Initialisierungsmarkers.
 - 0.1.14: Bedienfeld um „+1 € (MP)“ erweitert. Ein-Euro-Spielgeldeinwurf
   über den virtuellen Münzprüfer,
   mit aktiver Kanalzuordnung, Annahmesperre, Münzauthentifizierung und
@@ -130,8 +164,8 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Einrichtung und Start
 
-Die [M90-Emulator.exe aus Release 0.1.14 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.14/M90-Emulator.exe)
-oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.14).
+Die [M90-Emulator.exe aus Release 0.1.15 herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/download/v0.1.15/M90-Emulator.exe)
+oder die [Release-Seite öffnen](https://github.com/An3-Alex/Emulator_Tests/releases/tag/v0.1.15).
 Änderungen aus dem Entwicklungsstand `main` sind erst nach einem neuen Build
 in der EXE enthalten.
 

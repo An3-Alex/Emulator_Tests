@@ -219,6 +219,13 @@ class QemuLaunchPlanTests(unittest.TestCase):
         self.assertEqual(bridge["emulated_db_icount_shift"], 6)
         self.assertNotIn("--fast-tb", bridge["arguments"])
 
+    def test_selected_factory_reaches_actual_database_cpu(self) -> None:
+        factory = r"D:\DB Files\FactoryReset.xc"
+        plan = self.script_plan(PROGRAM_AND_START_LAUNCHER, "-FactoryReset", factory)
+        arguments = plan["runtime"]["database_bridge"]["arguments"]
+        self.assertEqual(arguments[arguments.index("--factory") + 1], factory)
+        self.assertEqual(arguments[arguments.index("--expected-factory-sha256") + 1], "0" * 64)
+
 
 if __name__ == "__main__":
     unittest.main()

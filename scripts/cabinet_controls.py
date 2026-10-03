@@ -79,11 +79,82 @@ def key_location(mapping: int) -> tuple[int, int, int] | None:
     return KEY_CURRENT_BASE + offset, KEY_EVENT_BASE + offset, mask
 
 
+class CabinetEventQueue(queue.Queue):
+    """Bounded ingress with reserved releases and separate device consumers.
+
+    A successful press reserves room for its release. Movement coalescing never
+    crosses a contact edge; button and coin events are never silently replaced.
+    """
+
+    def __init__(self, maxsize: int = 256) -> None:
+        super().__init__(maxsize=maxsize)
+        self._held: set[str] = set()
+
+    def put_nowait(self, event: dict[str, Any]) -> None:
+        with self.not_full:
+            kind = event["type"]
+            contact = (event["name"] if kind == "button" else "touch") if kind in ("button", "touch") else None
+            held = contact in self._held if contact is not None else False
+            if kind == "button" and event["down"] == held:
+                return
+            if kind == "touch" and not event["down"] and not held:
+                return
+            if kind == "touch" and event["down"] and held:
+                # Preserve the initial down and the newest movement. Never
+                # merge across another event or a release/press boundary.
+                if (len(self.queue) >= 2
+                        and all(item["type"] == "touch" and item["down"] for item in list(self.queue)[-2:])):
+                    self.queue[-1] = event.copy()
+                    return
+            if kind == "door" and self.queue and self.queue[-1]["type"] == "door":
+                self.queue[-1] = event.copy()
+                return
+            release = contact is not None and held and not event["down"]
+            reserve = int(contact is not None and not held and event["down"])
+            if self.maxsize > 0 and self._qsize() + len(self._held) + 1 + reserve - int(release) > self.maxsize:
+                raise queue.Full("cabinet input queue is full; input not accepted")
+            self._put(event.copy())
+            if contact is not None:
+                if event["down"]:
+                    self._held.add(contact)
+                else:
+                    self._held.discard(contact)
+            self.unfinished_tasks += 1
+            self.not_empty.notify()
+
+    def pop_types(self, kinds: set[str]) -> dict[str, Any]:
+        """Pop a device's next event without draining the other device queues."""
+        with self.not_full:
+            for index, event in enumerate(self.queue):
+                if event["type"] in kinds:
+                    del self.queue[index]
+                    self.not_full.notify()
+                    return event
+            raise queue.Empty
+
+    def pop_button(self, blocked_presses: set[str], seen: set[str]) -> dict[str, Any]:
+        """At most one edge per key/scan, preserving order for each key."""
+        with self.not_full:
+            candidates = set(seen)
+            for index, event in enumerate(self.queue):
+                if event["type"] != "button" or event["name"] in candidates:
+                    continue
+                name = event["name"]
+                candidates.add(name)
+                if event["down"] and name in blocked_presses:
+                    continue
+                del self.queue[index]
+                self.not_full.notify()
+                seen.add(name)
+                return event
+            raise queue.Empty
+
+
 class CabinetControlServer:
     """Loopback-only JSON-line ingress; the bridge applies events on its CPU thread."""
 
     def __init__(self, port: int = CONTROL_PORT) -> None:
-        self.events: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=256)
+        self.events = CabinetEventQueue(maxsize=256)
         self._stop = threading.Event()
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -115,6 +186,12 @@ class CabinetControlServer:
                     event = validate_command(json.loads(data.split(b"\n", 1)[0]))
                     if event["type"] != "ping":
                         self.events.put_nowait(event)
+                        if event["type"] == "button":
+                            print(
+                                "DB_CABINET_BUTTON_QUEUED "
+                                f"name={event['name']} down={event['down']} "
+                                f"queued={self.events.qsize()}", flush=True,
+                            )
                     reply = {"ok": True}
                 except (ValueError, UnicodeDecodeError, json.JSONDecodeError, queue.Full, socket.timeout) as exc:
                     reply = {"ok": False, "error": str(exc)}

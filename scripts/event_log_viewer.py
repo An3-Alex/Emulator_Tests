@@ -180,11 +180,18 @@ class BridgeLogParser:
             elif packet.startswith((b"\x7F\x02", b"\x7F\x04")):
                 name = "Prüfer-Typabfrage"
             elif packet.startswith(b"\x7B"):
-                name = "Prüfer-Sessionpaket (7B, ohne erwartete Antwort)"
+                name = "Prüfer-Sessionpaket (7B, mit Empfangsbestätigung)"
             else:
                 name = f"Prüfer-Befehl {packet[:2].hex(' ').upper()}"
             self.last_mp_command = name
             events.append(Event("DB → Prüfer", name, line))
+            return events
+
+        if line.startswith("DB_VIRTUAL_MP_ENTRY_SENSOR_"):
+            title = ("Münzeingang an der Steuereinheit aktiviert"
+                     if line.startswith("DB_VIRTUAL_MP_ENTRY_SENSOR_START")
+                     else "Münzeingang wieder freigegeben")
+            events.append(Event("Münzeinheit → DB", title, line))
             return events
 
         if line.startswith("DB_VIRTUAL_MP_COIN_"):
@@ -195,6 +202,7 @@ class BridgeLogParser:
                 "REJECTED": "1-Euro-Münzeinwurf abgelehnt",
                 "EXPIRED": "1-Euro-Einwurf nicht gesendet: Annahme nicht verfügbar",
                 "UNCONFIRMED": "1-Euro-Einwurf gesendet, Buchung nicht bestätigt",
+                "WAITING": "1-Euro-Einwurf wartet auf Annahmefreigabe (Grund im Detail)",
             }
             outcome = line.split()[0].removeprefix("DB_VIRTUAL_MP_COIN_")
             events.append(Event("Prüfer → DB", labels.get(outcome, "Virtueller Münzeinwurf"), line,
@@ -247,9 +255,13 @@ class BridgeLogParser:
         elif line.startswith("DB_INITVIDEO_RETRY_DISARMED"):
             events.append(Event("Status", "INITVIDEO-Wiederholung nach PC-Daten beendet (ACK nicht sicher)", line))
         elif line.startswith("DB_INITVIDEO_CLOCK_COMPLETED"):
-            events.append(Event("DB → PC", "INITVIDEO-Uhr auf 2012 ergänzt", line))
+            calendar = re.search(r"\b(?:time|year)=(\S+)", line)
+            suffix = f": {calendar.group(1)}" if calendar else ""
+            events.append(Event("DB → PC", f"INITVIDEO-Uhr ergänzt{suffix}", line))
         elif line.startswith("DB_RTC4543_ENABLED"):
-            events.append(Event("Board", "R4543-Echtzeituhr aktiv (Startdatum 2012)", line))
+            calendar = re.search(r"\binitial=(\S+)", line)
+            suffix = f" (Startdatum {calendar.group(1)})" if calendar else ""
+            events.append(Event("Board", f"R4543-Echtzeituhr aktiv{suffix}", line))
         elif line.startswith("DB_RTC4543_READ"):
             events.append(Event("Board", "R4543-Kalender wurde gelesen", line))
         elif line.startswith("DB_RTC4543_WRITE"):
@@ -264,6 +276,10 @@ class BridgeLogParser:
             command = re.search(r"command=([0-9A-F]{2})", line)
             code = command.group(1) if command else "??"
             events.append(Event("Board → DB", f"Nebengeräte-Antwort {code}", line))
+        elif line.startswith("DB_CABINET_BUTTON_QUEUED"):
+            events.append(Event("Bedienfeld → DB", "Tasteneingabe vorgemerkt; wartet auf Board-Scan", line))
+        elif line.startswith("DB_CABINET_DOOR_QUEUED"):
+            events.append(Event("Bedienfeld → DB", "Türzustand vorgemerkt; Übergabe beim Board-Zugriff", line))
         elif line.startswith("DB_MP_STATE_WRITE"):
             events.append(Event("Status", "Münzprüfer-Zustand geändert", line))
         elif line.startswith("DB_DEVICE_DISCOVERY_TIMER_EXPIRED"):
@@ -303,7 +319,9 @@ class BridgeLogParser:
         elif line.startswith("DB_CABINET_BUTTON_MAP"):
             events.append(Event("Board", "Kabinettasten aus Firmwareprofil geladen", line))
         elif line.startswith("DB_TIMER_ENABLED"):
-            events.append(Event("Board", "Board-Timer aktiv / CPU-Drossel eingeschaltet", line))
+            events.append(Event("Board", "Board-Timer aktiv / CPU-Instruktionsgrenze eingeschaltet", line))
+        elif line.startswith("DB_TIMER_CLOCK"):
+            events.append(Event("Status", "Timer-Zeitbasis aktiv; Interrupt-Pakete begrenzt", line))
         elif line.startswith("DB_TOUCH_RESPONSE"):
             events.append(Event("Board", "Touch-Controller hat geantwortet", line))
         elif line.startswith("DB_TOUCH_REQUEST"):

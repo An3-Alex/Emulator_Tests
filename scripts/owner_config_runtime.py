@@ -27,6 +27,40 @@ CONFIG_COPY_SIZE = 0x200
 IDENTITY_COPY_START = RAM_SIZE - 0x80
 IDENTITY_COPY_SOURCE_OFFSET = 0x562
 IDENTITY_COPY_SIZE = 0x18
+FACTORY_ENTRY = 0x1500
+FACTORY_ENTRY_CODE = bytes.fromhex(
+    "20 7C 00 01 00 00 22 78 00 00 93 FC 00 00 00 10 "
+    "B1 C9 62 04 42 98 60 F8 42 B9 00 00 10 00 "
+    "23 FC 49 4E 49 54 00 FF FD 00 30 7C 04 08 4E 90 60 FE"
+)
+
+
+def prepare_factory_runtime(path: Path, expected_sha256: str, d3: int) -> tuple[bytes, int]:
+    """Validate the owner's native Factory entry, including its INIT write.
+
+    Executable upload modules use zero in header field 0x10, unlike the main
+    DB image's exclusive-end field. Do not apply the DB-image header rules.
+    """
+    raw = path.read_bytes()
+    if len(raw) != 0x500 + len(FACTORY_ENTRY_CODE):
+        raise ValueError("unsupported Factory module layout")
+    digest = hashlib.sha256(raw).hexdigest().upper()
+    if digest != expected_sha256.replace(" ", "").upper():
+        raise ValueError("factory SHA-256 mismatch")
+    decoded = transform_database(raw, d3)
+    checksum, end, inverse, module_id = struct.unpack_from(">IIII", decoded)
+    entry, entry_inverse = struct.unpack_from(">II", decoded, 0x4C)
+    if (
+        checksum != (sum(decoded[4:]) & 0xFFFFFFFF)
+        or end != 0x1000 + len(decoded) - 1
+        or inverse != (~end & 0xFFFFFFFF)
+        or module_id != CONFIG_MODULE_ID
+        or entry != FACTORY_ENTRY
+        or entry_inverse != (~entry & 0xFFFFFFFF)
+        or decoded[0x500:] != FACTORY_ENTRY_CODE
+    ):
+        raise ValueError("factory module does not match verified native reset code")
+    return decoded, entry
 
 
 def prepare_config_writes(

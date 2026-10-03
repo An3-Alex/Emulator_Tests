@@ -32,7 +32,7 @@ EMULATION_FIELDS = (
     ("db_timer_interval", "Datenbank", "CPU-Laufabschnitt (Sekunden)", float, (0.005, 0.05), "Standard: 0.01; häufigere Geräte-/Eingabebedienung. Kein Hardware-Timer-Preset und keine Änderung des Instruktionstakts."),
     ("duart_x1_hz", "Datenbank", "DUART-Eingangstakt (Hz)", int, (1, 10000000), "Standard: 3686400 (angenommen); nicht der 16-MHz-CPU-Takt. Änderung beeinflusst Timer."),
     ("db_connect_timeout", "Datenbank", "Verbindungs-Wartezeit (Sekunden)", float, (10, 600), "Standard: 120; Zeitlimit für die Verbindung zum Spiel-PC."),
-    ("database_date", "Datenbank", "Startdatum/Uhrzeit (Programmer und RTC)", str, (), "Format: 2012-02-01T22:14:00; M90 erwartet normalerweise Jahr 2012. RTC läuft danach weiter."),
+    ("database_date", "Datenbank", "Startdatum/Uhrzeit (Programmer und RTC)", str, (), "Format: JJJJ-MM-TTThh:mm:ss. Programmer, RTC und INITVIDEO verwenden diesen Wert; die RTC läuft danach weiter."),
     ("door_open", "Datenbank", "Tür beim Start offen", bool, (), "Standard: geschlossen; kann den Servicebetrieb auslösen."),
     ("trace_diagnostics", "Protokoll und Bedienung", "Zusätzliche Diagnose-Watchpoints", bool, (), "Standard: aus; kann die Datenbank deutlich verlangsamen."),
     ("show_live_log", "Protokoll und Bedienung", "Live-Protokoll öffnen", bool, (), "Die Logdatei wird auch ohne sichtbares Fenster geschrieben."),

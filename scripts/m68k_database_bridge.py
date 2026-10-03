@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import struct
 import hashlib
 import math
 import queue
@@ -29,16 +30,17 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from m68k_qemu_harness import DEFAULT_QEMU, REG_D3, REG_PC, RspClient, connect_rsp
+from m68k_qemu_harness import DEFAULT_QEMU, REG_D3, REG_PC, RspClient, M68kRegisterSnapshot, connect_rsp
 from cabinet_controls import (
     CabinetControlServer, KEY_IDS, KEY_TABLE_BASE, KEY_TABLE_PROFILES,
-    KEY_TABLE_STRIDE, format_tablet_packet, key_location,
+    KEY_TABLE_STRIDE, KEY_CURRENT_BASE, KEY_EVENT_BASE, format_tablet_packet, key_location,
 )
-from owner_config_runtime import CONFIG_CLEAR_START, prepare_config_writes
+from owner_config_runtime import CONFIG_CLEAR_START, prepare_config_writes, prepare_factory_runtime
 from owner_database_runtime import prepare_runtime
 from rtc4543 import DATA as RTC_DATA, DEFAULT_TIME as RTC_DEFAULT_TIME, Rtc4543
 from admission_card import inspect_eeprom
-from duart_timer import DEFAULT_X1_HZ, MAX_BATCH_TICKS, DuartTimerConfig, DuartTimerBudget
+from duart_timer import DEFAULT_X1_HZ, MAX_BATCH_TICKS, DuartTimerConfig, DuartWallTimer, CpuRunBudget
+from duart_timer import MAX_WALL_TIMER_BATCH_TICKS, MAX_WALL_TIMER_PENDING_TICKS
 
 
 class Com3Disconnected(ConnectionError):
@@ -136,6 +138,9 @@ AUX_TRANSACTION_LENGTH = 0x001E2B13
 AUX_RESPONSE_CHECK_PC = 0x0006D7DC
 AUX_PROFILE_RESPONSE_CHECK_PC = 0x0006D9BA
 AUX_VALUE_RESPONSE_CHECK_PC = 0x0006DB5A
+COIN_ENTRY_PORT = 0x00800141
+COIN_ENTRY_READ_PC = 0x0001678E
+COIN_ENTRY_MASK = 0x40
 
 # 0x6D5DE applies these two ten-byte ROM masks around 50 rounds of a
 # three-bit right rotation and the affine byte map 0xAD*x+0x9F.  The inverse
@@ -340,6 +345,10 @@ class VirtualCoinValidator:
     COIN_CHANNEL_MAP = 0x001F16CE
     COIN_QUEUE_LIMIT = 16
     COIN_REQUEST_TIMEOUT = 30.0
+    COIN_EURO_UNITS = 20  # CC4 euro denomination table: 5-cent accounting units.
+    # Virtual euro validator: 10c, 20c, 50c, 1 euro, 2 euro; unused channels 0.
+    # B1C8 copies each authenticated first reply byte into the native map.
+    COIN_CHANNEL_VALUES = bytes((2, 4, 10, 20, 40)) + bytes(11)
     PAIRING_COMPARE_PC = 0x0000B730
     PAIRING_READ_PC = 0x0000B6E0
     PAIRING_FAILURE_PC = 0x0000B74A
@@ -377,9 +386,56 @@ class VirtualCoinValidator:
         self._hopper_ready_phase = 0
         self.coin_window = False
         self._coin_routes = bytes(8)
+        self._coin_routes_known = False
+        self._coin_enabled_mask = 0
+        self._coin_wait_log_at = 0.0
         self._coins: deque[tuple[int, float]] = deque()
         self._coin_sequence = 0
         self._coin_inflight: tuple[int, float, int, int] | None = None
+        self._entry_sensor_sequence = 0
+        self._entry_sensor_samples = 0
+
+    def stage_entry_sensor(self, rsp: RspClient) -> bool:
+        """Model the physical entry input for cabinets with no permanent gate.
+
+        Original 16780 samples AY port A bit 6. Four asserted samples open
+        E26CE's receive window; 61 asserted samples signal a stuck input.
+        Drive only the device input, never that window or a credit variable.
+        """
+        if self._entry_sensor_samples:
+            return True
+        if (not self._coins or self._coin_inflight is not None
+                or self._coins[0][0] == self._entry_sensor_sequence
+                or not self._coin_routes_known or not self._coin_enabled_mask):
+            return False
+        if (rsp.read_memory(0x001F777D, 1)[0] == 1
+                or any(rsp.read_memory(0x001E2A02, 1))
+                or any(rsp.read_memory(0x001E26CE, 2))):
+            return False
+        if (any(rsp.read_memory(0x001E2CE8, 1))
+                or any(rsp.read_memory(0x001F80FC, 1))
+                or not (any(rsp.read_memory(0x001E26B6, 2))
+                        or any(rsp.read_memory(0x001E26BA, 1)))):
+            return False
+        channels = rsp.read_memory(self.COIN_CHANNEL_MAP, 16)
+        enabled_euro = any(
+            value & 0x7F == self.COIN_EURO_UNITS
+            and self._coin_enabled_mask & (1 << channel)
+            and ((self._coin_routes[channel // 2] >> (4 if channel % 2 == 0 else 0)) & 0xF) != 0xF
+            for channel, value in enumerate(channels)
+        )
+        if not enabled_euro:
+            return False
+        self._entry_sensor_sequence = self._coins[0][0]
+        self._entry_sensor_samples = 5  # four active samples, one explicit idle
+        return True
+
+    def sample_entry_sensor(self, port_value: int) -> int:
+        if not self._entry_sensor_samples:
+            return port_value & ~COIN_ENTRY_MASK
+        active = self._entry_sensor_samples > 1
+        self._entry_sensor_samples -= 1
+        return (port_value & ~COIN_ENTRY_MASK) | (COIN_ENTRY_MASK if active else 0)
 
     def queue_coin(self, cents: int, now: float) -> int:
         if type(cents) is not int or cents != 100:
@@ -401,7 +457,7 @@ class VirtualCoinValidator:
         """Replace only an unpublished status reply, or answer a 7B coin window.
 
         CC4 19E2C accepts 8n/route/auth-hi/auth-lo/checksum, B838 checks
-        AEA6's transform, and 1B1DC books the mapped value (10 = 1 euro).
+        AEA6's transform, and 1B1DC books the mapped value (20 = 1 euro).
         All firmware access here is read-only. No register override is used.
         """
         if not self.coin_window:
@@ -417,7 +473,7 @@ class VirtualCoinValidator:
             sequence, sent_at, previous, previous_failures = self._coin_inflight
             if failures != previous_failures:
                 outcome = "REJECTED"
-            elif balance - previous >= 10:
+            elif balance - previous >= self.COIN_EURO_UNITS:
                 outcome = "CREDITED"
             elif now - sent_at >= self.COIN_REQUEST_TIMEOUT:
                 outcome = "UNCONFIRMED"
@@ -428,31 +484,53 @@ class VirtualCoinValidator:
         if not self._coins or self.challenge_pending or self.type_pending:
             return None, events
         # Mirror the original money-frame acceptance gate and its debounce.
-        if (rsp.read_memory(0x001E2300, 1)[0] not in (0, 1)
-                or any(rsp.read_memory(0x001E2CE8, 1))
-                or any(rsp.read_memory(0x001F80FC, 1))
-                or not (any(rsp.read_memory(0x001E26B6, 2))
-                        or any(rsp.read_memory(0x001E26BA, 1)))
-                or any(rsp.read_memory(0x001E2B7D, 1))
-                or any(rsp.read_memory(0x001F787A, 1))
-                or rsp.read_memory(0x001E22B6, 1)[0] != 0):
-            return None, events
-        if (rsp.read_memory(0x001F777D, 1)[0] != 1
-                and not any(rsp.read_memory(0x001E2A02, 1))
-                and not any(rsp.read_memory(0x001E26CE, 1))):
-            return None, events
+        phase = int.from_bytes(rsp.read_memory(0x001E2300, 2), "big")
+        if phase not in (0, 1):
+            return self._coin_wait(now, events, f"mp_phase phase={phase:04X}")
+        # Keep the actual blockers visible, not just a generic 'not ready'.
+        # Only read state here; acceptance remains owned by the firmware.
+        gates = {
+            "inhibit": rsp.read_memory(0x001E2CE8, 1)[0],
+            "fault": rsp.read_memory(0x001F80FC, 1)[0],
+            "acceptance": int.from_bytes(rsp.read_memory(0x001E26B6, 2), "big"),
+            "alternate_acceptance": rsp.read_memory(0x001E26BA, 1)[0],
+            "debounce": rsp.read_memory(0x001E2B7D, 1)[0],
+            "authentication_pending": rsp.read_memory(0x001F787A, 1)[0],
+            "booking_pending": rsp.read_memory(0x001E22B6, 1)[0],
+        }
+        if (gates["inhibit"] or gates["fault"]
+                or not (gates["acceptance"] or gates["alternate_acceptance"])
+                or gates["debounce"] or gates["authentication_pending"]
+                or gates["booking_pending"]):
+            details = " ".join(f"{name}={value:04X}" for name, value in gates.items())
+            return self._coin_wait(now, events,
+                f"firmware_busy_or_inhibited {details} enabled={self._coin_enabled_mask:04X}")
+        permanent_gate = rsp.read_memory(0x001F777D, 1)[0]
+        service_gate = rsp.read_memory(0x001E2A02, 1)[0]
+        entry_window = int.from_bytes(rsp.read_memory(0x001E26CE, 2), "big")
+        if permanent_gate != 1 and not service_gate and not entry_window:
+            return self._coin_wait(now, events,
+                f"firmware_acceptance_disabled permanent={permanent_gate:02X} "
+                f"service={service_gate:02X} entry_window={entry_window:04X}")
         channels = rsp.read_memory(self.COIN_CHANNEL_MAP, 16)
         channel_route = None
         for channel, value in enumerate(channels):
             # Do not guess a channel number: use the live denomination map
-            # and the latest 7E/00 routing/inhibit command sent to the MP.
+            # and separate 7E routing / 7C enable masks sent to the MP.
             routes = (self._coin_routes[channel // 2] >> (4 if channel % 2 == 0 else 0)) & 0xF
-            if value & 0x7F == 10 and routes:
-                route = next(bit for bit in (8, 4, 2, 1) if routes & bit)
+            if (value & 0x7F == self.COIN_EURO_UNITS
+                    and self._coin_routes_known
+                    and self._coin_enabled_mask & (1 << channel)
+                    and routes != 0xF):
+                # Zero is an actual route, accepted by 19E2C and 1B1DC;
+                # it is not an acceptance mask. Never invent a routing bit.
+                route = next((bit for bit in (8, 4, 2, 1) if routes & bit), 0)
                 channel_route = channel, route
                 break
         if channel_route is None:
-            return None, events
+            return self._coin_wait(now, events,
+                f"channel_not_enabled enabled={self._coin_enabled_mask:04X} "
+                f"channels={channels.hex().upper()} routes={self._coin_routes.hex().upper()}")
         channel, route = channel_route
         code = 0x80 | channel
         expected = 0
@@ -469,6 +547,12 @@ class VirtualCoinValidator:
         self._coin_inflight = sequence, now, balance, failures
         events.append(f"DB_VIRTUAL_MP_COIN_SENT id={sequence} cents=100 channel={channel} route={route} wire={reply.hex(' ').upper()}")
         return reply, events
+
+    def _coin_wait(self, now: float, events: list[str], reason: str):
+        if now >= self._coin_wait_log_at:
+            events.append(f"DB_VIRTUAL_MP_COIN_WAITING id={self._coins[0][0]} cents=100 reason={reason}")
+            self._coin_wait_log_at = now + 5.0
+        return None, events
 
     def _pairing_table(self, rsp: RspClient) -> bytes:
         if any(rsp.read_memory(self.PAIRING_DYNAMIC_TABLE_FLAG, 2)):
@@ -553,8 +637,17 @@ class VirtualCoinValidator:
             return None
         if len(frame) == 11 and frame[:2] == b"\x7E\x00" and frame[-1] == sum(frame[:-1]) & 0xFF:
             self._coin_routes = frame[2:10]
-            return None
-        if frame in (self.IDENTITY_PROBE, self.SECONDARY_IDENTITY_PROBE):
+            self._coin_routes_known = True
+            # Native transmit enters RX-wait even for routing setup. The
+            # zero ACK also clears the pending route-update flag in 19E2C.
+            data = b"\x00"
+        elif len(frame) == 6 and frame[0] == 0x7C and frame[-1] == sum(frame[:-1]) & 0xFF:
+            # 1C8DE emits ~F163E/~F163F (one bit enables a channel),
+            # followed by F1640/F1641's additional inhibit bits. 19E2C
+            # accepts zero ACK in phases 4/5 (enable) and 6/7 (disable).
+            self._coin_enabled_mask = int.from_bytes(frame[1:3], "big") & ~int.from_bytes(frame[3:5], "big") & 0xFFFF
+            data = b"\x00"
+        elif frame in (self.IDENTITY_PROBE, self.SECONDARY_IDENTITY_PROBE):
             data = self.IDENTITY_DATA
         elif frame in (self.HOPPER_READY_PROBE, self.HOPPER_READY_FOLLOWUP):
             # 0xE22C2, 0xE22C6 and 0xE22D0 advance the boot state
@@ -619,11 +712,12 @@ class VirtualCoinValidator:
             and frame[0] == self.VALIDATOR_SESSION_COMMAND
             and frame[-1] == sum(frame[:-1]) & 0xFF
         ):
-            # 0xB142..0xB19A sends a one-way session update and returns
-            # without waiting for, or comparing, a reply. Do not inject a
-            # fabricated 00/00 response into the asynchronous RX path.
+            # B08E does not compare a payload, but its shared 1C184 sender
+            # still enters RX-wait. Leaving this unacknowledged holds the
+            # bus busy until 19E2C's 100-tick timeout and can starve 7C.
+            # A neutral status ACK completes the transaction without credit.
+            data = b"\x00"
             self.coin_window = True
-            return None
         else:
             return None
         reply = data + bytes([sum(data) & 0xFF])
@@ -671,9 +765,12 @@ class VirtualCoinValidator:
         """Answer the pending 7F/27 challenge with the actual expected word."""
         if not self.challenge_pending or len(self._rx) != 4:
             raise RuntimeError("no pending, unpublished pairing challenge")
+        if self.last_tx_frame is None or not 0 <= self.last_tx_frame[2] < 16:
+            raise RuntimeError("pairing challenge has no valid channel index")
+        denomination = self.COIN_CHANNEL_VALUES[self.last_tx_frame[2]]
         # 0xAEA6 reads the *old* history before it shifts that history itself.
         seed = (
-            b"\x00"
+            bytes([denomination])
             + rsp.read_memory(self.PAIRING_HISTORY, 5)
             + rsp.read_memory(self.PAIRING_COUNTER, 2)
             + rsp.read_memory(self.PAIRING_SESSION, 4)
@@ -689,7 +786,7 @@ class VirtualCoinValidator:
         expected = self.pairing_expected_word(
             seed, rsp.read_memory(table_address, 256)
         )
-        data = b"\x00" + expected.to_bytes(2, "big")
+        data = bytes([denomination]) + expected.to_bytes(2, "big")
         reply = data + bytes([sum(data) & 0xFF])
         self._rx.clear()
         self._rx.extend(reply)
@@ -851,7 +948,6 @@ INITVIDEO_PREFIX = bytes.fromhex("01 02 22 00")
 INITVIDEO_OWNER_FIELDS = bytes.fromhex(
     "7C 06 33 01 53 00 F8 30 2D 06 8F 13 3F 2C 01 00 00 00 00 05"
 )
-INITVIDEO_SELECTED_TIME = bytes.fromhex("DC 07 02 01 16 0E")
 INITVIDEO_DEVICE_FIELDS = bytes.fromhex("01 00 02 FF")
 MAX_LOADER_SIZE = 1024 * 1024
 MIN_TIMER_RUN_SLICE = 0.005
@@ -922,6 +1018,21 @@ def read_duart_timer_config(rsp: RspClient, x1_hz: int = DEFAULT_X1_HZ) -> Duart
 def qemu_tcg_accelerator(fast_tb: bool) -> str:
     """Use normal translation blocks unless precise single-insn fallback is requested."""
     return "tcg" if fast_tb else "tcg,one-insn-per-tb=on"
+
+
+def foreground_timer_quantum(run_slice: float, config: DuartTimerConfig) -> float:
+    """Give the main program a turn between small hardware IRQ batches.
+
+    The configured slice stays an upper bound, not a reason to replay 40
+    interrupts before the callback consumer or physical key reader runs.
+    QEMU's icount instruction cap is independent and remains unchanged.
+    """
+    return min(run_slice, config.period_seconds)
+
+
+def interrupts_unmasked(sr: int) -> bool:
+    """The host must not force an IRQ through an original critical section."""
+    return (sr & SR_INTERRUPT_MASK) == 0
 
 
 def nested_board_schedule(run_slice: float, ticks: int, elapsed: float) -> float:
@@ -1149,9 +1260,9 @@ def expired_timer_queue_slot(pc: int, sr: int, a0: int) -> int | None:
     )
 
 
-def may_fast_forward_timer_wait(board_isr_depth: int, scc_state: int) -> bool:
+def may_fast_forward_timer_wait(board_isr_depth: int, scc_state: int, *, cabinet_work_pending: bool = False) -> bool:
     """Keep original timer IRQs active while board or SCC work is pending."""
-    return board_isr_depth == 0 and not (
+    return not cabinet_work_pending and board_isr_depth == 0 and not (
         scc_state & (BOARD_SCC_TX_ACTIVE | BOARD_SCC_REPLY_WAITING)
     )
 
@@ -1249,28 +1360,37 @@ def publish_cabinet_buttons(
             for name, key_id in KEY_IDS.items()
         }
     mappings = mapping_cache[profile]
+    locations = {name: key_location(mapping) for name, mapping in mappings.items()}
+    for name in pressed:
+        if locations[name] is None:
+            raise RuntimeError(f"unsupported mapping for pressed {name}: {mappings[name]:04X}")
+    addresses = [location[0] for location in locations.values() if location is not None]
+    # Include the independently released return contact even if another
+    # cabinet profile maps its logical payout key elsewhere.
+    addresses.append(RETURN_BUTTON_CURRENT)
+    start, end = min(addresses), max(addresses) + 1
+    event_start = start + (KEY_EVENT_BASE - KEY_CURRENT_BASE)
+    current_before = rsp.read_memory(start, end - start)
+    event_before = rsp.read_memory(event_start, end - start)
+    current_bytes, event_bytes = bytearray(current_before), bytearray(event_before)
     if "auszahlung" not in pressed:
-        publish_released_return_button(rsp)
+        index = RETURN_BUTTON_CURRENT - start
+        current_bytes[index] |= RETURN_BUTTON_MASK
+        event_bytes[index] &= ~RETURN_BUTTON_MASK
     # machine=none returns the board's output byte as its input sample. Its
     # absent switches therefore appear continuously active-low. Publish the
     # idle level for every switch on every scan, not just GUI-touched keys.
     for name in KEY_IDS:
         if name == "auszahlung" and name not in pressed:
             continue  # already released above
-        mapping = mappings[name]
-        location = key_location(mapping)
+        location = locations[name]
         if location is None:
-            if name in pressed:
-                raise RuntimeError(
-                    f"unsupported mapping for pressed {name}: {mapping:04X}"
-                )
             continue
         current_address, event_address, mask = location
-        current = rsp.read_memory(current_address, 1)[0]
-        desired = current & ~mask if name in pressed else current | mask
-        if desired != current:
-            rsp.write_memory(current_address, bytes([desired]))
-        event = rsp.read_memory(event_address, 1)[0]
+        index = current_address - start
+        current = current_bytes[index]
+        current_bytes[index] = current & ~mask if name in pressed else current | mask
+        event = event_bytes[event_address - event_start]
         if name in pending_edges:
             desired_event = event | mask
             pending_edges.discard(name)
@@ -1280,26 +1400,78 @@ def publish_cabinet_buttons(
         else:
             # While held, the original accessor at 0x60186 consumes the edge.
             desired_event = event
-        if desired_event != event:
-            rsp.write_memory(event_address, bytes([desired_event]))
+        event_bytes[event_address - event_start] = desired_event
+    # QEMU is stopped throughout this publication. Two bank reads/writes
+    # preserve every unrelated byte and bit without per-key debugger trips.
+    if current_bytes != current_before:
+        rsp.write_memory(start, bytes(current_bytes))
+    if event_bytes != event_before:
+        rsp.write_memory(event_start, bytes(event_bytes))
     if released is not None:
         released.clear()
     return mappings
 
 
 BUTTON_PULSE_BOARD_SCANS = 20
+MAX_UART_SERVICE_BURST = 32
+TOUCH_STATUS_POLL_SECONDS = 0.01
+
+
+def should_drain_uart_before_board(work_pending: bool, board_ticks: int, burst: int) -> bool:
+    """A busy serial link must yield even when the current IRQ batch is empty."""
+    return work_pending and burst < MAX_UART_SERVICE_BURST
+
+
+def uart_work_pending(rsp: RspClient, receive_pending: bool, tx_ready_pending: bool = False) -> bool:
+    """Poll the original TX ring in one exchange; never run an idle UART IRQ."""
+    if receive_pending or tx_ready_pending:
+        return True
+    pointers = rsp.read_memory(0x001EBBB4, 8)
+    return pointers[:4] != pointers[4:]
+
+
+def consume_cabinet_button_events(
+    events, pressed: set[str], pending_edges: set[str], released: set[str],
+    release_after_scans: dict[str, int],
+) -> list[dict]:
+    """Stage one edge per key at the board scan, never collapse quick clicks."""
+    consumed = []
+    seen: set[str] = set()
+    for _ in range(len(KEY_IDS)):
+        try:
+            event = events.pop_button(pressed | released, seen)
+        except queue.Empty:
+            break
+        name = event["name"]
+        if event["down"]:
+            pending_edges.add(name)
+            pressed.add(name)
+        elif name in pressed:
+            release_after_scans[name] = BUTTON_PULSE_BOARD_SCANS
+        else:
+            released.add(name)
+        consumed.append(event)
+    return consumed
 
 
 def advance_button_pulses(
     pressed: set[str], pending_edges: set[str], released: set[str],
     release_after_scans: dict[str, int],
+    *, foreground_pending: set[str] | None = None,
 ) -> set[str]:
-    """Keep quick clicks across timer batches, then release them finitely."""
+    """Hold quick clicks across both board scans and foreground execution.
+
+    Many scans can run in one IRQ batch without the main program reading
+    its keys. A scan count alone must not expire a pulse inside that batch.
+    """
     completed = set()
     for name, remaining in tuple(release_after_scans.items()):
         if name in pending_edges:
             continue
         if remaining <= 1:
+            if foreground_pending is not None and name in foreground_pending:
+                release_after_scans[name] = 1
+                continue
             completed.add(name)
             del release_after_scans[name]
         else:
@@ -1384,14 +1556,14 @@ def inject_touch_controller_response(rsp: RspClient, response: bytes) -> bool:
     return True
 
 
-def complete_initvideo_board_profile(frame: bytes, when: dt.datetime = RTC_DEFAULT_TIME) -> bytes:
+def complete_initvideo_board_profile(frame: bytes, when: dt.datetime) -> bytes:
     """Complete only RTC/cabinet fields missing from QEMU machine=none."""
     completed = bytearray(complete_initvideo_clock(frame, when))
     completed[34:38] = INITVIDEO_DEVICE_FIELDS
     return bytes(completed)
 
 
-def complete_initvideo_clock(frame: bytes, when: dt.datetime = RTC_DEFAULT_TIME) -> bytes:
+def complete_initvideo_clock(frame: bytes, when: dt.datetime) -> bytes:
     """Replace only the absent board RTC fields in an original INITVIDEO."""
     if (
         len(frame) != INITVIDEO_FRAME_LENGTH
@@ -1408,12 +1580,18 @@ def complete_initvideo_clock(frame: bytes, when: dt.datetime = RTC_DEFAULT_TIME)
     return bytes(completed)
 
 
+def initvideo_time_text(frame: bytes) -> str:
+    """Report the minute-resolution calendar actually sent on the wire."""
+    year, month, day, hour, minute = struct.unpack("<HBBBB", frame[24:30])
+    return dt.datetime(year, month, day, hour, minute).isoformat(timespec="minutes")
+
+
 class InitvideoClockForwarder:
     """Hold only INITVIDEO frames to complete their selected RTC date."""
 
-    def __init__(self, clock: Callable[[], dt.datetime] | None = None) -> None:
+    def __init__(self, clock: Callable[[], dt.datetime]) -> None:
         self.buffer = bytearray()
-        self.clock = clock or (lambda: RTC_DEFAULT_TIME)
+        self.clock = clock
 
     def feed(self, value: bytes) -> tuple[bytes, bool]:
         if len(value) != 1:
@@ -1481,6 +1659,8 @@ class TouchClickForwarder:
 class TouchPacketStream:
     """One contact edge, real drag positions, then immediate queued release."""
 
+    MAX_PACKETS = 64
+
     def __init__(self) -> None:
         self.packets: deque[tuple[int, int, bool, bytes]] = deque()
         self.active_point: tuple[int, int] | None = None
@@ -1488,7 +1668,12 @@ class TouchPacketStream:
     def _append(self, x: int, y: int, down: bool) -> None:
         self.packets.append((x, y, down, format_tablet_packet(x, y, down)))
 
-    def _finish_release(self, x: int, y: int) -> None:
+    def can_accept_contact(self) -> bool:
+        # Leave room for the current contact's first sample, two final drag
+        # positions and release. More contacts stay in the bounded ingress.
+        return self.active_point is not None or len(self.packets) <= self.MAX_PACKETS - 4
+
+    def _trim_contact(self) -> None:
         # A slow firmware consumer must not work through a long queue of stale
         # held/move reports before seeing the release. Keep the first contact
         # sample and the two most recent positions of this contact only.
@@ -1503,6 +1688,9 @@ class TouchPacketStream:
         contact = queued[start:]
         if len(contact) > 3:
             self.packets = deque(queued[:start] + [contact[0], *contact[-2:]])
+
+    def _finish_release(self, x: int, y: int) -> None:
+        self._trim_contact()
         self._append(x, y, False)
         self.active_point = None
 
@@ -1510,8 +1698,11 @@ class TouchPacketStream:
         if down:
             if self.active_point == (x, y):
                 return
+            if not self.can_accept_contact():
+                raise queue.Full("touch contact queue is full")
             self.active_point = (x, y)
             self._append(x, y, True)
+            self._trim_contact()
             return
         if self.active_point is None:
             return
@@ -1532,18 +1723,35 @@ def format_zero_exception_frame(sr: int, pc: int, vector: int) -> bytes:
     )
 
 
-def inject_interrupt(rsp: RspClient, vector: int, handler: int) -> tuple[int, int]:
-    registers = rsp.read_registers_u32()
+def inject_interrupt(
+    rsp: RspClient, vector: int, handler: int,
+    *, snapshot: M68kRegisterSnapshot | None = None,
+) -> tuple[int, int]:
+    snapshot = snapshot if snapshot is not None else rsp.read_register_snapshot()
+    registers = snapshot.core_u32
     pc = registers[REG_PC]
     sr = registers[REG_SR]
     stack = registers[REG_A7] - 8
     rsp.write_memory(stack, format_zero_exception_frame(sr, pc, vector))
-    rsp.write_register_u32(REG_A7, stack)
     # Runtime is already supervisor-only. Mask nested IRQs while the handler
     # runs; RTE restores the exact interrupted SR from the frame.
-    rsp.write_register_u32(REG_SR, (sr | 0x2700) & 0xFFFF)
-    rsp.write_register_u32(REG_PC, handler)
+    rsp.write_registers_u32({
+        REG_A7: stack, REG_SR: (sr | 0x2700) & 0xFFFF, REG_PC: handler,
+    }, snapshot=snapshot)
     return pc, sr
+
+
+def inject_board_tick(
+    rsp: RspClient, target: tuple[int, int, int],
+    *, snapshot: M68kRegisterSnapshot | None = None,
+) -> tuple[int, int]:
+    """Assert timer hardware and enter its original vector, without firmware edits."""
+    status = rsp.read_memory(BOARD_TIMER_STATUS, 1)[0]
+    scc_active = bool(rsp.read_memory(BOARD_SCC_STATE, 1)[0] & BOARD_SCC_TX_ACTIVE)
+    rsp.write_memory(BOARD_TIMER_STATUS, bytes([board_interrupt_status(
+        status, timer_asserted=True, scc_tx_active=scc_active,
+    )]))
+    return inject_interrupt(rsp, target[0], target[1], snapshot=snapshot)
 
 
 def set_watchpoint(
@@ -1631,6 +1839,35 @@ def load_memory(rsp: RspClient, address: int, data: bytes) -> None:
         rsp.write_memory(address + offset, data[offset:offset + 1024])
 
 
+def run_original_factory_reset(rsp: RspClient, runtime: bytes, entrypoint: int) -> None:
+    """Execute the selected Factory module on the fresh virtual SRAM.
+
+    The owner module clears SRAM, invalidates the old image checksum, writes
+    INIT into QSPI RAM, and calls the loader at 0x408. Stop at that handoff,
+    then let the caller program config/firmware in their documented order.
+    Never replace the firmware's initialization flags with guessed values.
+    """
+    handoff = 0x408
+    load_memory(rsp, 0x1000, runtime)
+    rsp.write_register_u32(REG_A7, 0x001FFF80)
+    rsp.write_register_u32(REG_PC, entrypoint)
+    set_watchpoint(rsp, 0, handoff, True)
+    rsp.set_timeout(15.0)
+    try:
+        reply = rsp.command("c")
+        pc = rsp.read_register_u32(REG_PC)
+        if pc != handoff:
+            raise RuntimeError(f"Factory module did not return to loader: pc={pc:08X} stop={reply}")
+        marker = rsp.read_memory(0x00FFFD00, 4)
+        checksum = rsp.read_memory(0x1000, 4)
+        if marker != b"INIT" or checksum != bytes(4):
+            raise RuntimeError("Factory module did not prepare native initialization")
+        print("DB_FACTORY_EXECUTED source=original-module loader_handoff=00000408 marker=INIT", flush=True)
+    finally:
+        set_watchpoint(rsp, 0, handoff, False)
+        rsp.set_timeout(60.0)
+
+
 def receive_com3(
     sock: socket.socket,
     pending: deque[int],
@@ -1681,9 +1918,8 @@ def run_bridge(args: argparse.Namespace) -> int:
             f"eeprom_bytes={len(admission_eeprom)}",
             flush=True,
         )
-    timer_ticks_per_cycle = board_timer_ticks_per_cycle(args.timer_interval)
     timer_config = DuartTimerConfig(x1_hz=args.duart_x1_hz)
-    timer_budget = DuartTimerBudget(timer_config)
+    timer_budget = DuartWallTimer(timer_config)
     timer_target = board_service_target(timer_config.vector)
     door_closed = not args.door_open
     loader = args.loader.read_bytes()
@@ -1702,6 +1938,13 @@ def run_bridge(args: argparse.Namespace) -> int:
         args.config, args.expected_config_sha256,
         args.d3 if args.d3 is not None else 0xD27B7159,
     )
+    factory_runtime = None
+    factory_path = getattr(args, "factory", None)
+    if factory_path is not None:
+        factory_runtime, factory_entrypoint = prepare_factory_runtime(
+            factory_path, args.expected_factory_sha256,
+            args.d3 if args.d3 is not None else 0xD27B7159,
+        )
     if 0x1000 + len(runtime) > CONFIG_CLEAR_START:
         raise ValueError("database runtime overlaps the config SRAM region")
     entrypoint = int(runtime_report["entrypoint"], 16)
@@ -1748,6 +1991,10 @@ def run_bridge(args: argparse.Namespace) -> int:
             rsp.write_memory(0, (2 * 1024 * 1024).to_bytes(4, "big"))
             rsp.write_memory(MAIN_TX_STATUS, bytes([TX_READY]))
             rsp.write_memory(MAIN_RX_STATUS, b"\x00")
+            if factory_runtime is not None:
+                run_original_factory_reset(
+                    rsp, factory_runtime, factory_entrypoint,
+                )
             load_memory(rsp, 0x1000, runtime)
             for address, data in config_writes:
                 load_memory(rsp, address, data)
@@ -1825,26 +2072,32 @@ def run_bridge(args: argparse.Namespace) -> int:
             board_scc_a_irq_reported = False
             board_scc_feedback_reported = False
             timer_enabled = False
+            cpu_run_budget = CpuRunBudget(foreground_timer_quantum(args.timer_interval, timer_config))
+            accumulated_slice_reports = 0
+            door_input_pending = False
             timer_injections = 0
             board_timer_ticks_remaining = 0
             board_interrupt_stack: list[tuple[int, int]] = []
             nested_timer_injections = 0
-            direct_timer_expirations = 0
             timer_wait_diagnostic_at = 0.0
-            nested_cycle_started_at = None
             hopper_fault_reported = False
             hopper_idle_reported = False
             return_button_released_reported = False
             uart_return_pc = None
+            uart_service_burst = 0
             coin_validator = VirtualCoinValidator()
+            coin_entry_watch = False
             mp_error_snapshot_reported = False
             rtc_reads_reported = 0
             touch_response_latch = None
+            touch_status_poll_at = 0.0
+            timer_clock_diagnostic_at = 0.0
             reported_unknown_touch_commands = set()
             pressed_buttons: set[str] = set()
             pending_button_edges: set[str] = set()
             released_buttons: set[str] = set(KEY_IDS)
             release_after_scans: dict[str, int] = {}
+            button_run_budgets: dict[str, CpuRunBudget] = {}
             button_mapping_cache: dict[int, dict[str, int]] = {}
             button_trace_scans: dict[str, int] = {}
             touch_packets = TouchPacketStream()
@@ -1867,43 +2120,19 @@ def run_bridge(args: argparse.Namespace) -> int:
                 ensure_com3_receiver_alive(receiver_errors)
                 for _ in range(32):
                     try:
-                        control_event = controls.events.get_nowait()
+                        input_types = {"door", "coin"}
+                        if touch_packets.can_accept_contact():
+                            input_types.add("touch")
+                        control_event = controls.events.pop_types(input_types)
                     except queue.Empty:
                         break
                     event_type = control_event["type"]
                     if event_type == "door":
                         door_closed = not control_event["open"]
-                        current = rsp.read_memory(BOARD_PORT_INPUT, 1)[0]
-                        updated = apply_cabinet_inputs(
-                            current, door_closed=door_closed
-                        )
-                        rsp.write_memory(BOARD_PORT_INPUT, bytes([updated]))
+                        door_input_pending = True
                         print(
-                            "DB_CABINET_INPUT_STATE "
-                            f"door={'closed' if door_closed else 'open'} "
-                            f"mask={BOARD_DOOR_CLOSED_MASK:02X} "
-                            f"board_input={updated:02X}",
-                            flush=True,
-                        )
-                    elif event_type == "button":
-                        name = control_event["name"]
-                        if control_event["down"]:
-                            if name not in pressed_buttons:
-                                pending_button_edges.add(name)
-                            pressed_buttons.add(name)
-                            release_after_scans.pop(name, None)
-                        else:
-                            if name in pressed_buttons or name in pending_button_edges:
-                                # Preserve a short click across several board
-                                # IRQ batches so game code can observe it.
-                                release_after_scans[name] = BUTTON_PULSE_BOARD_SCANS
-                            else:
-                                pressed_buttons.discard(name)
-                                released_buttons.add(name)
-                        print(
-                            "DB_CABINET_BUTTON "
-                            f"name={name} key_id={KEY_IDS[name]} "
-                            f"down={control_event['down']}",
+                            "DB_CABINET_DOOR_QUEUED "
+                            f"door={'closed' if door_closed else 'open'}",
                             flush=True,
                         )
                     elif event_type == "touch":
@@ -1924,7 +2153,13 @@ def run_bridge(args: argparse.Namespace) -> int:
                             print(f"DB_VIRTUAL_MP_COIN_REJECTED cents=100 reason={exc}", flush=True)
                 for coin_event in coin_validator.expire_coins(time.monotonic()):
                     print(coin_event, flush=True)
-                if timer_enabled:
+                if not coin_entry_watch and coin_validator.stage_entry_sensor(rsp):
+                    set_watchpoint(rsp, 0, COIN_ENTRY_READ_PC, True)
+                    coin_entry_watch = True
+                    print(f"DB_VIRTUAL_MP_ENTRY_SENSOR_START id={coin_validator._entry_sensor_sequence} samples=4", flush=True)
+                touch_poll_now = time.monotonic()
+                if timer_enabled and (touch_poll_now >= touch_status_poll_at or touch_packets.packets):
+                    touch_status_poll_at = touch_poll_now + TOUCH_STATUS_POLL_SECONDS
                     touch_state = rsp.read_memory(
                         TOUCH_TRANSACTION_STATE, 1
                     )[0]
@@ -2023,6 +2258,11 @@ def run_bridge(args: argparse.Namespace) -> int:
                     now=retry_now,
                     retry_at=initial_frame_retry_at,
                 ):
+                    # Reuse the original profile, not its cached calendar. Every
+                    # attempt must follow the RTC initialized from settings.
+                    initial_retry_frame = complete_initvideo_clock(
+                        initial_retry_frame, rtc.now()
+                    )
                     wire_ms = send_serial_frame(
                         com3, initial_retry_frame
                     ) * 1000.0
@@ -2033,6 +2273,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                     print(
                         "DB_INITVIDEO_WIRE_RETRY "
                         f"attempt={initial_frame_attempts} "
+                        f"time={initvideo_time_text(initial_retry_frame)} "
                         f"wire_ms={wire_ms:.3f}",
                         flush=True,
                     )
@@ -2060,38 +2301,52 @@ def run_bridge(args: argparse.Namespace) -> int:
                     rx_ready_seen = True
                     rx_wait_reported = False
                 timer_stop = False
+                foreground_run = timer_enabled and not board_interrupt_stack and uart_return_pc is None
                 if timer_enabled and board_interrupt_stack:
-                    now = time.monotonic()
-                    if nested_cycle_started_at is None:
-                        nested_cycle_started_at = now
-                    run_timeout = nested_board_schedule(
-                        args.timer_interval,
-                        timer_ticks_per_cycle,
-                        now - nested_cycle_started_at,
-                    )
-                    if now - nested_cycle_started_at >= args.timer_interval:
-                        nested_cycle_started_at = now
+                    run_timeout = foreground_timer_quantum(args.timer_interval, timer_config)
                 else:
-                    nested_cycle_started_at = None
-                    run_timeout = args.timer_interval if timer_enabled else 60.0
-                rsp.set_timeout(run_timeout)
-                try:
-                    reply = rsp.command("c")
-                except TimeoutError:
-                    reply = interrupt_after_run_slice(rsp)
+                    run_timeout = cpu_run_budget.remaining if foreground_run else (args.timer_interval if timer_enabled else 60.0)
+                if foreground_run and cpu_run_budget.due:
+                    # The previous watchpoint was handled with the CPU stopped.
+                    # Service the elapsed slice now, without losing that event
+                    # or waiting for a fresh uninterrupted slice to complete.
+                    reply = "S02"
                     timer_stop = True
-                finally:
-                    # A run slice may use a 10 ms receive timeout. Register and
-                    # memory commands must not inherit that real-time deadline.
-                    rsp.set_timeout(RSP_CONTROL_REPLY_TIMEOUT)
+                else:
+                    rsp.set_timeout(run_timeout)
+                    run_started_at = time.monotonic()
+                    try:
+                        reply = rsp.command("c")
+                    except TimeoutError:
+                        reply = interrupt_after_run_slice(rsp)
+                        timer_stop = True
+                    finally:
+                        if foreground_run:
+                            foreground_seconds = min(run_timeout, time.monotonic() - run_started_at)
+                            cpu_run_budget.add_run(foreground_seconds)
+                            for button_budget in button_run_budgets.values():
+                                button_budget.add_run(foreground_seconds)
+                        # Stopped work does not consume foreground CPU time.
+                        # The independent wall timer accounts for it separately.
+                        rsp.set_timeout(RSP_CONTROL_REPLY_TIMEOUT)
 
                 if timer_stop:
+                    if foreground_run:
+                        if cpu_run_budget.segments > 1 and accumulated_slice_reports < 5:
+                            print(
+                                "DB_TIMER_SLICE_ACCUMULATED "
+                                f"segments={cpu_run_budget.segments} "
+                                f"run_ms={cpu_run_budget.elapsed * 1000:.3f}", flush=True,
+                            )
+                            accumulated_slice_reports += 1
+                        cpu_run_budget.reset()
                     if not timer_enabled:
                         raise RuntimeError(
                             "runtime did not complete board I/O initialization: "
                             + read_register_snapshot(rsp)
                         )
-                    active_registers = rsp.read_registers_u32()
+                    active_snapshot = rsp.read_register_snapshot()
+                    active_registers = active_snapshot.core_u32
                     active_pc = active_registers[REG_PC]
                     active_sr = active_registers[REG_SR]
                     active_a0 = active_registers[REG_A0]
@@ -2099,44 +2354,24 @@ def run_bridge(args: argparse.Namespace) -> int:
                         active_pc, active_sr, active_a0
                     )
                     if expired_slot is not None:
-                        scc_state = rsp.read_memory(BOARD_SCC_STATE, 1)[0]
-                        if not may_fast_forward_timer_wait(
-                            len(board_interrupt_stack), scc_state
-                        ):
-                            diagnostic_now = time.monotonic()
-                            if diagnostic_now >= timer_wait_diagnostic_at:
-                                queued_delay = int.from_bytes(
-                                    rsp.read_memory(expired_slot, 4), "big"
-                                )
-                                print(
-                                    "DB_TIMER_WAIT_NEEDS_BOARD_TICK "
-                                    f"slot={expired_slot:08X} "
-                                    f"value={queued_delay:08X} "
-                                    f"scc_state={scc_state:02X} "
-                                    f"board_depth={len(board_interrupt_stack)} "
-                                    f"uart_return={uart_return_pc if uart_return_pc is not None else -1:08X}",
-                                    flush=True,
-                                )
-                                timer_wait_diagnostic_at = (
-                                    diagnostic_now + IDLE_DIAGNOSTIC_SECONDS
-                                )
-                        else:
+                        # Let the original queue decrement under native IRQs.
+                        # Short scheduler quanta must not expire firmware
+                        # waits early or bypass timer delivery altogether.
+                        diagnostic_now = time.monotonic()
+                        if diagnostic_now >= timer_wait_diagnostic_at:
                             queued_delay = int.from_bytes(
                                 rsp.read_memory(expired_slot, 4), "big"
                             )
-                            if queued_delay:
-                                rsp.write_memory(expired_slot, b"\x00\x00\x00\x00")
-                                direct_timer_expirations += 1
-                                if direct_timer_expirations <= 10:
-                                    print(
-                                        "DB_TIMER_QUEUE_EXPIRED "
-                                        f"slot={expired_slot:08X} "
-                                        f"value={queued_delay:08X} "
-                                        f"scc_state={scc_state:02X} "
-                                        f"run_ms={args.timer_interval * 1000:.3f}",
-                                        flush=True,
-                                    )
-                            continue
+                            print(
+                                "DB_TIMER_WAIT_NEEDS_BOARD_TICK "
+                                f"pc={active_pc:08X} sr={active_sr:04X} "
+                                f"slot={expired_slot:08X} value={queued_delay:08X} "
+                                f"scc_state={rsp.read_memory(BOARD_SCC_STATE, 1)[0]:02X} "
+                                f"board_depth={len(board_interrupt_stack)} "
+                                f"input_queued={controls.events.qsize()} "
+                                f"touch_queued={len(touch_packets.packets)}", flush=True,
+                            )
+                            timer_wait_diagnostic_at = diagnostic_now + IDLE_DIAGNOSTIC_SECONDS
                     if uart_return_pc is not None:
                         continue
                     if board_interrupt_stack:
@@ -2188,7 +2423,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                             scc_a_command, scc_a_status,
                         ):
                             interrupted_pc, _ = inject_interrupt(
-                                rsp, BOARD_SCC_A_VECTOR, BOARD_SCC_A_HANDLER
+                                rsp, BOARD_SCC_A_VECTOR, BOARD_SCC_A_HANDLER,
+                                snapshot=active_snapshot,
                             )
                             board_interrupt_stack.append(
                                 (interrupted_pc, BOARD_SCC_A_RTE_PC)
@@ -2205,7 +2441,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             board_interrupt_stack[-1][1], bool(pending),
                         ):
                             interrupted_pc, _ = inject_interrupt(
-                                rsp, TIMER_VECTOR, TIMER_HANDLER
+                                rsp, TIMER_VECTOR, TIMER_HANDLER, snapshot=active_snapshot,
                             )
                             uart_return_pc = interrupted_pc
                             print(
@@ -2217,25 +2453,14 @@ def run_bridge(args: argparse.Namespace) -> int:
                         if can_nest_board_timer(
                             active_pc, active_sr, len(board_interrupt_stack)
                         ):
-                            timer_status = rsp.read_memory(
-                                BOARD_TIMER_STATUS, 1
-                            )[0]
-                            scc_tx_active = bool(
-                                rsp.read_memory(BOARD_SCC_STATE, 1)[0]
-                                & BOARD_SCC_TX_ACTIVE
-                            )
-                            rsp.write_memory(
-                                BOARD_TIMER_STATUS,
-                                bytes([
-                                    board_interrupt_status(
-                                        timer_status,
-                                        timer_asserted=True,
-                                        scc_tx_active=scc_tx_active,
-                                    )
-                                ]),
-                            )
-                            interrupted_pc, _ = inject_interrupt(
-                                rsp, *timer_target[:2]
+                            # A nested tick consumes the existing reservation
+                            # first; never deliver it again after the ISR exits.
+                            if board_timer_ticks_remaining:
+                                board_timer_ticks_remaining -= 1
+                            elif not timer_budget.due_ticks(limit=1):
+                                continue
+                            interrupted_pc, _ = inject_board_tick(
+                                rsp, timer_target, snapshot=active_snapshot,
                             )
                             board_interrupt_stack.append(
                                 (interrupted_pc, timer_target[2])
@@ -2262,29 +2487,6 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 )
                         # The short nested slices share one selected run budget.
                         continue
-                    active_d0 = rsp.read_register_u32(REG_D0)
-                    if active_pc in DEVICE_DISCOVERY_TIMER_WAIT_PCS:
-                        queued_delay = int.from_bytes(
-                            rsp.read_memory(TIMER_QUEUE_BASE, 4), "big"
-                        )
-                        expired_slot = expired_device_discovery_timer_slot(
-                            active_pc,
-                            active_sr,
-                            active_a0,
-                            active_d0,
-                            queued_delay,
-                        )
-                        if expired_slot is not None:
-                            rsp.write_memory(expired_slot, b"\x00\x00\x00\x00")
-                            print(
-                                "DB_DEVICE_DISCOVERY_TIMER_EXPIRED "
-                                f"pc={active_pc:08X} "
-                                f"slot={expired_slot:08X} "
-                                f"value={queued_delay:08X} "
-                                f"run_ms={args.timer_interval * 1000:.3f}",
-                                flush=True,
-                            )
-                            continue
                     diagnostic_now = time.monotonic()
                     if idle_protocol_diagnostic_due(
                         first_frame_reported=first_frame_reported,
@@ -2326,6 +2528,11 @@ def run_bridge(args: argparse.Namespace) -> int:
                         scc_a_busy = rsp.read_memory(0x001E1D0D, 1)[0]
                         scc_a_isr_toggle = rsp.read_memory(0x001E29D9, 1)[0]
                         scc_a_guard = rsp.read_memory(0x001E2334, 1)[0]
+                        cabinet_profile = rsp.read_memory(MP_STATE_ADDRESS, 1)[0]
+                        coin_ready = rsp.read_memory(0x001F777D, 1)[0]
+                        service_active = rsp.read_memory(0x001E2A02, 1)[0]
+                        coin_io_window = int.from_bytes(rsp.read_memory(0x001E26CE, 2), "big")
+                        pc_reply_wait = int.from_bytes(rsp.read_memory(0x001EC8B0, 4), "big")
                         scc_a_payload_detail = ""
                         if scc_a_command == 0x64 and idle_pc in (
                             SCC_A_COMMAND_WAIT_PC, SCC_A_COMMAND_WAIT_PC + 2
@@ -2358,6 +2565,11 @@ def run_bridge(args: argparse.Namespace) -> int:
                             + f" scc_a_busy={scc_a_busy:02X}"
                             + f" scc_a_isr_toggle={scc_a_isr_toggle:02X}"
                             + f" scc_a_guard={scc_a_guard:02X}"
+                            + f" cabinet_profile={cabinet_profile:02X}"
+                            + f" coin_ready={coin_ready:02X}"
+                            + f" service_active={service_active:02X}"
+                            + f" coin_io_window={coin_io_window:04X}"
+                            + f" pc_reply_wait={pc_reply_wait:08X}"
                             + scc_a_payload_detail
                             + caller_detail,
                             flush=True,
@@ -2368,35 +2580,31 @@ def run_bridge(args: argparse.Namespace) -> int:
                         idle_diagnostic_at = (
                             diagnostic_now + IDLE_DIAGNOSTIC_SECONDS
                         )
-                    timer_ticks_per_cycle = timer_budget.take_slice(args.timer_interval)
+                    if not interrupts_unmasked(active_sr):
+                        # Keep hardware debt pending while original critical
+                        # code runs; injecting through SR2700 corrupts state.
+                        continue
+                    timer_ticks_per_cycle = timer_budget.due_ticks()
                     if not timer_ticks_per_cycle:
                         continue
+                    if time.monotonic() >= timer_clock_diagnostic_at:
+                        print(
+                            "DB_TIMER_CLOCK "
+                            f"source=monotonic-wall batch={timer_ticks_per_cycle} "
+                            f"pending={timer_budget.pending_ticks} coalesced={timer_budget.coalesced_ticks} "
+                            f"foreground_ms={cpu_run_budget.seconds * 1000:.3f}", flush=True,
+                        )
+                        timer_clock_diagnostic_at = time.monotonic() + IDLE_DIAGNOSTIC_SECONDS
                     board_timer_ticks_remaining = timer_ticks_per_cycle - 1
-                    timer_status = rsp.read_memory(BOARD_TIMER_STATUS, 1)[0]
-                    scc_a_command = rsp.read_memory(BOARD_SCC_A_COMMAND, 1)[0]
-                    scc_a_status = rsp.read_memory(BOARD_SCC_CONTROL_A, 1)[0]
                     board_vector, board_handler, board_rte = timer_target
                     scc_a_active = board_vector == BOARD_SCC_A_VECTOR
-                    scc_tx_active = bool(
-                        rsp.read_memory(BOARD_SCC_STATE, 1)[0]
-                        & BOARD_SCC_TX_ACTIVE
-                    )
-                    rsp.write_memory(
-                        BOARD_TIMER_STATUS,
-                        bytes([
-                            board_interrupt_status(
-                                timer_status,
-                                timer_asserted=True,
-                                scc_tx_active=scc_tx_active,
-                            )
-                        ]),
-                    )
-                    interrupted_pc, interrupted_sr = inject_interrupt(
-                        rsp, board_vector, board_handler
+                    interrupted_pc, interrupted_sr = inject_board_tick(
+                        rsp, timer_target, snapshot=active_snapshot,
                     )
                     board_interrupt_stack.append((interrupted_pc, board_rte))
                     timer_injections += 1
                     if scc_a_active and not board_scc_a_irq_reported:
+                        scc_a_command = rsp.read_memory(BOARD_SCC_A_COMMAND, 1)[0]
                         print(
                             "DB_DUART_ALTERNATE_TIMER "
                             f"command={scc_a_command:02X} "
@@ -2421,10 +2629,11 @@ def run_bridge(args: argparse.Namespace) -> int:
                     DUART_TIMER_ACR, DUART_TIMER_CTUR, DUART_TIMER_CTLR, DUART_TIMER_IVR,
                 ):
                     changed_config = read_duart_timer_config(rsp, args.duart_x1_hz)
-                    board_timer_ticks_per_cycle(args.timer_interval, changed_config)
                     if changed_config != timer_config:
                         timer_config = changed_config
-                        timer_budget = DuartTimerBudget(timer_config)
+                        timer_budget = DuartWallTimer(timer_config)
+                        timer_budget.start()
+                        cpu_run_budget = CpuRunBudget(foreground_timer_quantum(args.timer_interval, timer_config))
                         timer_target = board_service_target(timer_config.vector)
                         board_timer_ticks_remaining = 0
                         print(
@@ -2501,6 +2710,20 @@ def run_bridge(args: argparse.Namespace) -> int:
                     continue
                 if kind is None:
                     pc = rsp.read_register_u32(REG_PC)
+                    if coin_entry_watch and pc == COIN_ENTRY_READ_PC:
+                        # This instruction reads the AY input after selecting
+                        # port A. Restore the selector after the native read;
+                        # unrelated AY accesses keep their previous behavior.
+                        selected = rsp.read_memory(COIN_ENTRY_PORT, 1)[0]
+                        sample = coin_validator.sample_entry_sensor(selected)
+                        rsp.write_memory(COIN_ENTRY_PORT, bytes([sample]))
+                        step_past_breakpoint(rsp, pc)
+                        rsp.write_memory(COIN_ENTRY_PORT, bytes([selected & ~COIN_ENTRY_MASK]))
+                        if not coin_validator._entry_sensor_samples:
+                            set_watchpoint(rsp, 0, COIN_ENTRY_READ_PC, False)
+                            coin_entry_watch = False
+                            print(f"DB_VIRTUAL_MP_ENTRY_SENSOR_RELEASED id={coin_validator._entry_sensor_sequence}", flush=True)
+                        continue
                     if pc in (AUX_RESPONSE_CHECK_PC,
                               AUX_PROFILE_RESPONSE_CHECK_PC,
                               AUX_VALUE_RESPONSE_CHECK_PC):
@@ -2588,6 +2811,22 @@ def run_bridge(args: argparse.Namespace) -> int:
                             raise RuntimeError(
                                 "board scan completed outside board interrupt"
                             )
+                        # Consume physical button edges only at the completed
+                        # board scan. A second click cannot overwrite the first
+                        # pulse or bypass its published released state.
+                        for control_event in consume_cabinet_button_events(
+                            controls.events, pressed_buttons, pending_button_edges,
+                            released_buttons, release_after_scans,
+                        ):
+                            name = control_event["name"]
+                            if control_event["down"]:
+                                button_run_budgets[name] = CpuRunBudget(args.timer_interval)
+                            print(
+                                "DB_CABINET_BUTTON "
+                                f"name={name} key_id={KEY_IDS[name]} "
+                                f"down={control_event['down']} source=board-scan "
+                                f"queued={controls.events.qsize()}", flush=True,
+                            )
                         for name, scans in tuple(button_trace_scans.items()):
                             scans += 1
                             if scans in (1, 5, 20, 100, 200):
@@ -2629,8 +2868,14 @@ def run_bridge(args: argparse.Namespace) -> int:
                         completed_button_pulses = advance_button_pulses(
                             pressed_buttons, pending_button_edges,
                             released_buttons, release_after_scans,
+                            foreground_pending={
+                                name for name, budget in button_run_budgets.items()
+                                if not budget.due
+                            },
                         )
                         if completed_button_pulses:
+                            for name in completed_button_pulses:
+                                button_run_budgets.pop(name, None)
                             print(
                                 "DB_CABINET_BUTTON_PULSE_COMPLETE "
                                 + ",".join(sorted(completed_button_pulses)),
@@ -2713,16 +2958,29 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 & ~(BOARD_TIMER_PENDING | BOARD_SCC_A_RX_PENDING)
                             ]),
                         )
-                        # Service the original UART only after the board timer
-                        # has returned, so exceptions are never nested.
-                        interrupted_pc, _ = inject_interrupt(
-                            rsp, TIMER_VECTOR, TIMER_HANDLER
-                        )
-                        uart_return_pc = interrupted_pc
+                        # No UART IRQ on an idle link. A pending byte/ready
+                        # transition still uses the original UART handler.
+                        uart_service_burst = 0
+                        resume_snapshot = rsp.read_register_snapshot()
+                        if not interrupts_unmasked(resume_snapshot.core_u32[REG_SR]):
+                            timer_budget.defer_ticks(board_timer_ticks_remaining)
+                            board_timer_ticks_remaining = 0
+                            continue
+                        if uart_work_pending(rsp, bool(pending), tx_status_watch):
+                            interrupted_pc, _ = inject_interrupt(
+                                rsp, TIMER_VECTOR, TIMER_HANDLER, snapshot=resume_snapshot,
+                            )
+                            uart_return_pc = interrupted_pc
+                        elif board_timer_ticks_remaining:
+                            interrupted_pc, _ = inject_board_tick(rsp, timer_target, snapshot=resume_snapshot)
+                            board_interrupt_stack.append((interrupted_pc, timer_target[2]))
+                            board_timer_ticks_remaining -= 1
+                            timer_injections += 1
                         continue
                     if uart_return_pc is not None and pc == UART_TIMER_RTE_PC:
                         step_past_breakpoint(rsp, UART_TIMER_RTE_PC)
                         uart_return_pc = None
+                        uart_service_burst += 1
                         if tx_status_watch:
                             remaining = tx_ready_at - time.monotonic()
                             if remaining > 0:
@@ -2732,43 +2990,30 @@ def run_bridge(args: argparse.Namespace) -> int:
                             rsp.write_memory(MAIN_TX_STATUS, bytes([TX_READY]))
                             set_watchpoint(rsp, 3, MAIN_TX_STATUS, False)
                             tx_status_watch = False
-                        tx_read = int.from_bytes(
-                            rsp.read_memory(0x1EBBB4, 4), "big"
-                        )
-                        tx_write = int.from_bytes(
-                            rsp.read_memory(0x1EBBB8, 4), "big"
-                        )
-                        if tx_read != tx_write or pending:
+                        if board_interrupt_stack:
+                            # Resume the blocked outer handler after its real
+                            # response; don't expand the reserved batch here.
+                            continue
+                        resume_snapshot = rsp.read_register_snapshot()
+                        if not interrupts_unmasked(resume_snapshot.core_u32[REG_SR]):
+                            timer_budget.defer_ticks(board_timer_ticks_remaining)
+                            board_timer_ticks_remaining = 0
+                            continue
+                        if should_drain_uart_before_board(
+                            uart_work_pending(rsp, bool(pending)),
+                            board_timer_ticks_remaining, uart_service_burst,
+                        ):
                             # Drain an already queued frame at the physical UART
-                            # rate instead of waiting for the much slower board
-                            # service tick between individual bytes.
+                            # rate, yielding periodically to already due board
+                            # timers even if the serial link remains busy.
                             interrupted_pc, _ = inject_interrupt(
-                                rsp, TIMER_VECTOR, TIMER_HANDLER
+                                rsp, TIMER_VECTOR, TIMER_HANDLER, snapshot=resume_snapshot,
                             )
                             uart_return_pc = interrupted_pc
                         elif board_timer_ticks_remaining:
                             # Deliver the remaining programmed DUART hardware
                             # ticks as a bounded batch under the icount cap.
-                            timer_status = rsp.read_memory(
-                                BOARD_TIMER_STATUS, 1
-                            )[0]
-                            scc_tx_active = bool(
-                                rsp.read_memory(BOARD_SCC_STATE, 1)[0]
-                                & BOARD_SCC_TX_ACTIVE
-                            )
-                            rsp.write_memory(
-                                BOARD_TIMER_STATUS,
-                                bytes([
-                                    board_interrupt_status(
-                                        timer_status,
-                                        timer_asserted=True,
-                                        scc_tx_active=scc_tx_active,
-                                    )
-                                ]),
-                            )
-                            interrupted_pc, _ = inject_interrupt(
-                                rsp, *timer_target[:2]
-                            )
+                            interrupted_pc, _ = inject_board_tick(rsp, timer_target, snapshot=resume_snapshot)
                             board_interrupt_stack.append(
                                 (interrupted_pc, timer_target[2])
                             )
@@ -2778,8 +3023,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                     if pc == RUNTIME_IO_INIT_RETURN_PC:
                         set_watchpoint(rsp, 0, RUNTIME_IO_INIT_RETURN_PC, False)
                         timer_config = read_duart_timer_config(rsp, args.duart_x1_hz)
-                        timer_ticks_per_cycle = board_timer_ticks_per_cycle(args.timer_interval, timer_config)
-                        timer_budget = DuartTimerBudget(timer_config)
+                        timer_budget = DuartWallTimer(timer_config)
+                        cpu_run_budget = CpuRunBudget(foreground_timer_quantum(args.timer_interval, timer_config))
                         timer_target = board_service_target(timer_config.vector)
                         for register in (DUART_TIMER_ACR, DUART_TIMER_CTUR, DUART_TIMER_CTLR, DUART_TIMER_IVR):
                             set_watchpoint(rsp, 2, register, True)
@@ -2887,6 +3132,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             rsp, 0, AUX_VALUE_RESPONSE_CHECK_PC, True
                         )
                         timer_enabled = True
+                        timer_budget.start()
                         print(
                             "DB_RTC4543_ENABLED "
                             f"control={RTC_CONTROL_REGISTER:08X} "
@@ -2898,7 +3144,9 @@ def run_bridge(args: argparse.Namespace) -> int:
                         print(
                             "DB_TIMER_ENABLED source=board-io "
                             f"run_ms={args.timer_interval * 1000:.3f} "
-                            f"ticks_per_cycle={timer_ticks_per_cycle} "
+                            "clock=monotonic-wall "
+                            f"max_batch={MAX_WALL_TIMER_BATCH_TICKS} max_pending={MAX_WALL_TIMER_PENDING_TICKS} "
+                            f"foreground_ms={cpu_run_budget.seconds * 1000:.3f} "
                             f"acr={timer_config.acr:02X} preset={timer_config.preset:04X} "
                             f"vector={timer_config.vector} x1_hz={timer_config.x1_hz} "
                             f"period_ms={timer_config.period_seconds * 1000:.6f} "
@@ -2972,6 +3220,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 print(
                                     "DB_INITVIDEO_BOARD_PROFILE_COMPLETED "
                                     f"length={len(completed_frame)} "
+                                    f"time={initvideo_time_text(completed_frame)} "
                                     f"attempt={initial_frame_attempts} "
                                     f"generation_ms={generation_ms:.3f} "
                                     f"wire_ms={wire_ms:.3f} "
@@ -3032,7 +3281,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             )
                             print(
                                 "DB_INITVIDEO_CLOCK_COMPLETED "
-                                f"time={rtc.now().isoformat()} data={outgoing.hex(' ').upper()}",
+                                f"time={initvideo_time_text(outgoing)} data={outgoing.hex(' ').upper()}",
                                 flush=True,
                             )
                     last_uart_activity_at = time.monotonic()
@@ -3165,7 +3414,9 @@ def run_bridge(args: argparse.Namespace) -> int:
                             expected, response = coin_validator.prepare_pairing_reply(rsp)
                             print(
                                 "DB_VIRTUAL_MP_PAIRING_EXPECTED "
-                                f"value={expected:04X}",
+                                f"value={expected:04X} "
+                                f"channel={coin_validator.last_tx_frame[2]} "
+                                f"denomination={response[0]:02X}",
                                 flush=True,
                             )
                         if coin_validator.type_pending:
@@ -3227,6 +3478,15 @@ def run_bridge(args: argparse.Namespace) -> int:
                         feedback, door_closed=door_closed
                     )
                     rsp.write_memory(BOARD_PORT_INPUT, bytes([feedback]))
+                    door_input_pending = False
+                    if (current ^ feedback) & BOARD_DOOR_CLOSED_MASK:
+                        print(
+                            "DB_CABINET_INPUT_STATE "
+                            f"door={'closed' if door_closed else 'open'} "
+                            f"mask={BOARD_DOOR_CLOSED_MASK:02X} "
+                            f"board_input={feedback:02X} source=board-strobe",
+                            flush=True,
+                        )
                     board_port_strobes += 1
                     if board_port_strobes == 1:
                         pc = rsp.read_register_u32(REG_PC)
@@ -3369,6 +3629,9 @@ def main() -> int:
     parser.add_argument("--expected-database-sha256", required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--expected-config-sha256", required=True)
+    parser.add_argument("--factory", type=Path,
+                        help="original Factory module, executed before cold-start programming")
+    parser.add_argument("--expected-factory-sha256")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--d3", type=parse_int)
     source.add_argument("--runtime-dump", type=Path)
@@ -3410,6 +3673,8 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    if (args.factory is None) != (args.expected_factory_sha256 is None):
+        parser.error("--factory and --expected-factory-sha256 must be provided together")
     try:
         validate_timer_interval(args.timer_interval)
     except ValueError as exc:

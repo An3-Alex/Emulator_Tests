@@ -9,6 +9,7 @@ param(
     [ValidateSet(64, 128, 256)][int]$QxlVramMiB = 64,
     [string]$Database,
     [string]$Loader,
+    [string]$FactoryReset,
     [string]$Config,
     [datetime]$DatabaseDate = [datetime]'2012-02-01T22:14:00',
     [Nullable[uint32]]$D3 = [uint32]::Parse('D27B7159', [Globalization.NumberStyles]::HexNumber),
@@ -83,6 +84,9 @@ $arguments = @(
     '--qemu', $QemuM68k
 )
 if (-not $SafeTb) { $arguments += '--fast-tb' }
+if (-not [string]::IsNullOrWhiteSpace($FactoryReset)) {
+    $arguments += @('--factory', $FactoryReset, '--expected-factory-sha256', (Get-SelectedInputHash $FactoryReset))
+}
 if ($TraceDiagnostics) { $arguments += '--trace-diagnostics' }
 if ($DoorOpen) { $arguments += '--door-open' }
 if (-not [string]::IsNullOrWhiteSpace($AdmissionEeprom)) {

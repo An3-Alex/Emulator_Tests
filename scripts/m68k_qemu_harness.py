@@ -17,7 +17,9 @@ import subprocess
 import sys
 import time
 from collections import deque
+from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -33,6 +35,13 @@ SYNC_WAIT = b"\x1bSYNCSYNCWAITGO\n"
 REG_D3 = 3
 REG_D6 = 6
 REG_PC = 17
+
+
+class M68kRegisterSnapshot(NamedTuple):
+    """Explicit halted-target context, retaining every byte of the RSP g reply."""
+
+    raw_hex: str
+    core_u32: tuple[int, ...]
 
 
 def qemu_creation_flags() -> int:
@@ -104,8 +113,31 @@ class RspClient:
         response = self.command(f"p{register:x}")
         return int.from_bytes(bytes.fromhex(response), "big")
 
+    @staticmethod
+    def _decode_register_snapshot(response: str) -> M68kRegisterSnapshot:
+        if len(response) < 18 * 8:
+            raise RuntimeError(f"short m68k register reply: {response!r}")
+        # G must contain the complete register block, not just the 18 core
+        # words. Extra registers can have other widths and remain opaque.
+        # Do not write an unavailable ('xx') register as a guessed value.
+        if len(response) % 2 or any(
+            character not in "0123456789abcdefABCDEF" for character in response
+        ):
+            raise RuntimeError("invalid or unavailable m68k register reply")
+        core = tuple(
+            int(response[index:index + 8], 16)
+            for index in range(0, 18 * 8, 8)
+        )
+        return M68kRegisterSnapshot(response, core)
+
+    def read_register_snapshot(self) -> M68kRegisterSnapshot:
+        """Read an explicit complete g block while the target is halted."""
+        return self._decode_register_snapshot(self.command("g"))
+
     def read_registers_u32(self) -> tuple[int, ...]:
         """Read the m68020's D0-D7, A0-A7, SR and PC in one RSP exchange."""
+        # Core-only readers need not reject unavailable optional registers.
+        # A snapshot intended for a complete G write uses stricter validation.
         response = self.command("g")
         if len(response) < 18 * 8:
             raise RuntimeError(f"short m68k register reply: {response!r}")
@@ -113,6 +145,37 @@ class RspClient:
             int(response[index:index + 8], 16)
             for index in range(0, 18 * 8, 8)
         )
+
+    def write_registers_u32(
+        self, updates: Mapping[int, int], *, snapshot: M68kRegisterSnapshot
+    ) -> M68kRegisterSnapshot:
+        """Apply core-register updates with one complete G packet.
+
+        The caller must supply a current snapshot of the halted target. Do
+        not reuse it after a resume, step, interrupt, or unrelated register
+        write. No implicit snapshot cache or extra g round trip is used.
+        Memory writes while the target remains halted do not invalidate it.
+        The returned snapshot may serve subsequent writes at that same stop.
+        """
+        if not isinstance(snapshot, M68kRegisterSnapshot):
+            raise TypeError("an explicit m68k register snapshot is required")
+        decoded = self._decode_register_snapshot(snapshot.raw_hex)
+        if decoded.core_u32 != snapshot.core_u32:
+            raise ValueError("m68k register snapshot core does not match its raw block")
+        raw = snapshot.raw_hex
+        for register, value in updates.items():
+            if type(register) is not int or not 0 <= register < 18:
+                raise ValueError("m68k bulk writes require a core register index 0..17")
+            if type(value) is not int or not 0 <= value <= 0xFFFFFFFF:
+                raise ValueError("m68k bulk register values must be unsigned 32-bit integers")
+            start = register * 8
+            raw = raw[:start] + f"{value:08x}" + raw[start + 8:]
+        if not updates:
+            return snapshot
+        response = self.command("G" + raw)
+        if response != "OK":
+            raise RuntimeError(f"bulk register write failed: {response}")
+        return self._decode_register_snapshot(raw)
 
     def write_memory(self, address: int, data: bytes) -> None:
         response = self.command(f"M{address:x},{len(data):x}:{data.hex()}")
