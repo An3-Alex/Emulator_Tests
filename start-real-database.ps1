@@ -7,6 +7,7 @@ param(
     [ValidateRange(1, 2)][int]$GuestVcpus = 1,
     [ValidateSet('whpx', 'tcg')][string]$Acceleration = 'whpx',
     [ValidateSet(64, 128, 256)][int]$QxlVramMiB = 64,
+    [ValidateSet('swiftshader', 'qemu3dfx')][string]$GraphicsBackend = 'swiftshader',
     [string]$Database,
     [string]$Loader,
     [string]$FactoryReset,
@@ -48,6 +49,7 @@ $visibleOptions = @{
     Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
     MuteAudio = $MuteAudio
     AudioBridge = $AudioBridge; Python = $Python
+    GraphicsBackend = $GraphicsBackend
 }
 if (($null -eq $D3) -eq [string]::IsNullOrWhiteSpace($RuntimeDump)) {
     throw 'Specify exactly one of -D3 or -RuntimeDump. The raw flash files alone do not contain the boot-ROM D3 value.'
@@ -209,6 +211,7 @@ if (-not $NoEventWindow -or -not $NoControlWindow) {
             $controlScript = Join-Path $PSScriptRoot 'scripts\cabinet_control_panel.py'
             $capturePath = Join-Path $logDirectory 'cabinet-lower.png'
             $controlArgs = ('"{0}" --qemu-pid {1} --capture "{2}"' -f $controlScript, $qemuPid, $capturePath)
+            if ($GraphicsBackend -eq 'qemu3dfx') { $controlArgs += ' --display-backend sdl' }
             if ($DoorOpen) { $controlArgs += ' --door-open' }
             $controlPanel = Start-Process -FilePath $pythonw -ArgumentList $controlArgs -PassThru
             Write-Output "Cabinet control window PID=$($controlPanel.Id)"

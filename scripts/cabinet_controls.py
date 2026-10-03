@@ -38,6 +38,9 @@ def validate_command(value: Any) -> dict[str, Any]:
     kind = value.get("type")
     if kind == "ping" and set(value) == {"type"}:
         return {"type": "ping"}
+    if kind == "touch_calibration" and set(value) == {"type", "points"}:
+        points = validate_calibration_points(value["points"])
+        return {"type": kind, "points": [list(point) for point in points]}
     if kind == "door" and set(value) == {"type", "open"}:
         if type(value["open"]) is not bool:
             raise ValueError("door.open must be boolean")
@@ -57,6 +60,20 @@ def validate_command(value: Any) -> dict[str, Any]:
             raise ValueError("invalid touch coordinates or state")
         return {"type": "touch", "x": x, "y": y, "down": down}
     raise ValueError("unsupported cabinet command")
+
+
+def validate_calibration_points(points) -> tuple[tuple[int, int], tuple[int, int]]:
+    if not isinstance(points, (tuple, list)) or len(points) != 2:
+        raise ValueError("two calibration points required")
+    for point in points:
+        if not isinstance(point, (tuple, list)) or len(point) != 2:
+            raise ValueError("invalid calibration point")
+        validate_command({"type": "touch", "x": point[0], "y": point[1], "down": True})
+    first, second = tuple(points[0]), tuple(points[1])
+    if not (first[0] < 400 < second[0] and second[1] < 300 < first[1]
+            and second[0] - first[0] >= 200 and first[1] - second[1] >= 150):
+        raise ValueError("invalid calibration span or target order")
+    return first, second
 
 
 def format_tablet_packet(x: int, y: int, down: bool) -> bytes:

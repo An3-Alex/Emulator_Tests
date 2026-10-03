@@ -12,9 +12,13 @@ CF-Images, Datenbankdateien und fremde Software werden nicht mitgeliefert.
 - Automatische Einrichtung einer getrennten Arbeitskopie des CF-Images,
   einschließlich QXL-Grafiktreiber und PCM-Audio-Bridge.
 - Bedienfenster für Touch, Menü, Autostart, Einsatz, Maximaleinsatz, Start,
-  Auszahlung, Service-Taste, Türschalter und „+1 € (MP)“ für Spielgeld.
+  Auszahlung, Service-Taste, Türschalter, Touch-Kalibrierung und „+1 € (MP)“ für Spielgeld.
 - Optionales Live-Protokoll der Datenbankkommunikation.
 - Gespeicherte Dateipfade und Einstellungen für Spiel-PC und Datenbank.
+- Separat wählbarer QEMU-3dfx-Grafikpfad: unterer Spielbildschirm über
+  WineD3D/OpenGL-Passthrough, oberer Bildschirm weiterhin über SwiftShader.
+  Benötigt ein eigenes Laufzeitpaket und eine offline migrierte Arbeitskopie.
+  Einrichtung und Grenzen: [QEMU-3dfx](docs/QEMU3DFX.md).
 - „Alles beenden“ fährt den Spiel-PC herunter und beendet die zu diesem Lauf
   gehörenden Prozesse. Reagiert XP nicht, wird nur der eigene Prozessverbund
   beendet. Beim Schließen des Starters werden diese Prozesse ebenfalls beendet.
@@ -60,6 +64,21 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Änderungen
 
+- 0.1.18: Der Starter kann eine vorbereitete QEMU-3dfx-Kopie mit zwei SDL-Fenstern
+  starten. Unvollständige Grafikpakete und nicht vorbereitete Images werden
+  abgewiesen. Die Migration sichert Gast-DLLs und die XP-Registry; der bisherige
+  Grafikpfad und der Datenbanktakt bleiben unverändert. Direkte Touchs gehen
+  nur an den unteren Bildschirm. Die GPU-Vorschau ist noch nicht verfügbar.
+- 0.1.18: Die Service-Anwendung verwendet denselben dateibasierten SRAM wie das Spiel,
+  einschließlich ihrer ANSI-Geräteabfragen. Mehrere SRAM-Handles und parallele
+  Zugriffe werden unterstützt. Die ursprüngliche Service-Datei wird gesichert;
+  vorhandene SRAM-Inhalte bleiben erhalten.
+- 0.1.18: „Touch kalibrieren“ im Bedienfeld öffnet eine Zwei-Punkt-Kalibrierung ohne
+  Service-Menü: zunächst das Fadenkreuz unten links, danach oben rechts
+  anklicken und jeweils loslassen. Die Einstellung wird pro Arbeitsimage
+  gespeichert. Abbrechen behält die bisherigen Werte. Während einer laufenden
+  Kalibrierung im originalen Service-Menü wird keine Bedienfeld-Kalibrierung
+  übernommen. Die Bestätigung erscheint im Live-Protokoll.
 - 0.1.17: Die virtuelle Touch-Einheit unterstützt die Zwei-Punkt-
   Kalibrierung im Service-Menü mit Bestätigung beim Loslassen. Die Kalibrierung
   wird je Arbeitsimage in `<Image>.touch.json` gespeichert; ein normaler Reset

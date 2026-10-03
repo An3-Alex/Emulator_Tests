@@ -5,6 +5,7 @@ param(
     [ValidateRange(1, 2)][int]$GuestVcpus = 1,
     [ValidateSet('whpx', 'tcg')][string]$Acceleration = 'whpx',
     [ValidateSet(64, 128, 256)][int]$QxlVramMiB = 64,
+    [ValidateSet('swiftshader', 'qemu3dfx')][string]$GraphicsBackend = 'swiftshader',
     [switch]$UsbTablet,
     [switch]$SwapDisplays,
     [switch]$MuteAudio,
@@ -30,6 +31,12 @@ $qemuArgs = $qemuArgs.Replace('-accel whpx', "-accel $Acceleration").Replace('-s
 if (-not $SwapDisplays) {
     $qemuArgs = $qemuArgs.Replace('qxl-vga,id=lower', 'qxl-vga,id=upper').Replace('qxl,id=upper', 'qxl,id=lower')
 }
+if ($GraphicsBackend -eq 'qemu3dfx') {
+    if (-not $SwapDisplays) { throw 'QEMU-3dfx benötigt den unteren Bildschirm als Primäranzeige (-SwapDisplays).' }
+    $qemuArgs = $qemuArgs.Replace('-display gtk,show-tabs=on', '-name M90-3dfx -display sdl,gl=off')
+    $biosPath = [IO.Path]::Combine((Split-Path $Qemu -Parent), 'pc-bios').Replace('\', '/')
+    $qemuArgs += ' -L "' + $biosPath + '"'
+}
 
 $launchPlan = [ordered]@{
     qemu = $Qemu
@@ -51,6 +58,9 @@ $launchPlan = [ordered]@{
     display_tabs = @($primaryDisplay, $secondaryDisplay)
     swap_displays = [bool]$SwapDisplays
     cabinet_lower_device = 'lower'
+    graphics_backend = $GraphicsBackend
+    display_backend = if ($GraphicsBackend -eq 'qemu3dfx') { 'sdl' } else { 'gtk' }
+    gpu_adapters = @($(if ($GraphicsBackend -eq 'qemu3dfx') { 0 }))
     guest_pointer = if ($UsbTablet) { 'USB tablet (absolute coordinates)' } else { 'PS/2 mouse' }
     guest_reboots_allowed = $true
 }
@@ -67,6 +77,12 @@ if (-not (Test-Path -LiteralPath $Qemu -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) {
     throw "QEMU image not found: $Image"
+}
+if ($GraphicsBackend -eq 'qemu3dfx') {
+    # A stock image with the new host executable is not a GPU installation.
+    # Require the explicit offline migration receipt before creating a process.
+    & $Python (Join-Path $PSScriptRoot 'scripts\qemu3dfx_package.py') verify-launch --image $Image --qemu $Qemu
+    if ($LASTEXITCODE -ne 0) { throw 'QEMU-3dfx-Paket oder Image-Vorbereitung ungültig.' }
 }
 
 function Assert-QemuStartup {

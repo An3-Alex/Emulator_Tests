@@ -17,7 +17,7 @@ try {
     )
     foreach ($name in @(
         'program-and-start-emulator.ps1', 'start-real-database.ps1',
-        'test-swiftshader.ps1'
+        'test-swiftshader.ps1', 'prepare-qemu3dfx.ps1'
     )) {
         $source = Join-Path $project $name
         $arguments += @('--add-data', "${source}:.")
@@ -31,7 +31,7 @@ try {
         'prepare_image_stage.sh', 'stage_display_verify.sh', 'retry_qxl_install.sh',
         'finalize_image_stage.sh', 'check_image_stage.sh', 'update_runtime_graphics.sh',
         'image_partition.sh',
-        'stage_audio_bridge.sh', 'install_qxl_helper_shell.sh'
+        'stage_audio_bridge.sh', 'install_qxl_helper_shell.sh', 'stage_qemu3dfx.sh'
     )) {
         $source = Join-Path $project "scripts\$name"
         $arguments += @('--add-data', "${source}:scripts")

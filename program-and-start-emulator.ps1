@@ -7,6 +7,7 @@ param(
     [ValidateRange(1, 2)][int]$GuestVcpus = 1,
     [ValidateSet('whpx', 'tcg')][string]$Acceleration = 'whpx',
     [ValidateSet(64, 128, 256)][int]$QxlVramMiB = 64,
+    [ValidateSet('swiftshader', 'qemu3dfx')][string]$GraphicsBackend = 'swiftshader',
     [string]$Database,
     [string]$Loader,
     [string]$FactoryReset,
@@ -50,6 +51,7 @@ $runtimeOptions = @{
     Acceleration = $Acceleration; QxlVramMiB = $QxlVramMiB
     MuteAudio = $MuteAudio
     AudioBridge = $AudioBridge
+    GraphicsBackend = $GraphicsBackend
     DbTimerInterval = $DbTimerInterval; DuartX1Hz = $DuartX1Hz
     DbConnectTimeout = $DbConnectTimeout; FastTb = $FastTb
     DatabaseDate = $DatabaseDate

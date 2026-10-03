@@ -18,6 +18,18 @@ def digest(data):
 
 
 class GraphicsUpdateTests(unittest.TestCase):
+    def test_service_update_is_not_skipped_when_graphics_already_current(self):
+        self.run_update()
+        with mock.patch("service_sram.update", side_effect=["Service SRAM update required", "Service SRAM updated"]) as service:
+            self.assertEqual(self.run_update(sram=Path("proxy.dll")), "Service SRAM updated")
+        self.assertEqual(service.call_count, 2)
+
+    def test_unknown_service_blocks_graphics_before_any_write(self):
+        with mock.patch("service_sram.update", side_effect=ValueError("Unrecognized service")):
+            with self.assertRaisesRegex(ValueError, "Unrecognized service"):
+                self.run_update(sram=Path("proxy.dll"))
+        self.assert_original_files()
+
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)

@@ -18,6 +18,7 @@ from cabinet_controls import (
     validate_command,
 )
 from cabinet_control_panel import ControlPanel, qmp_screendump
+import cabinet_control_panel as panel_module
 from m68k_database_bridge import (
     BUTTON_PULSE_BOARD_SCANS, MP_STATE_ADDRESS, advance_button_pulses,
     publish_cabinet_buttons,
@@ -25,6 +26,46 @@ from m68k_database_bridge import (
 
 
 class CabinetDisplayTests(unittest.TestCase):
+    def test_calibration_dialog_sends_one_command_only_after_two_liftoffs(self):
+        from types import SimpleNamespace
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.root = MagicMock()
+        panel.calibration_window = None
+        panel.pad_touch = panel.qemu_touch = None
+        panel.held_buttons = set()
+        panel._send = MagicMock(return_value=True)
+        canvas = MagicMock()
+        with patch.object(panel_module.tk, "Toplevel") as top, \
+             patch.object(panel_module.tk, "Canvas", return_value=canvas), \
+             patch.object(panel_module.ttk, "Label"), patch.object(panel_module.ttk, "Button"):
+            panel._calibrate_touch()
+            bindings = {call.args[0]: call.args[1] for call in canvas.bind.call_args_list}
+            press, release = bindings["<ButtonPress-1>"], bindings["<ButtonRelease-1>"]
+            release(SimpleNamespace(x=100, y=525))
+            panel._send.assert_not_called()
+            press(SimpleNamespace(x=100, y=525))
+            press(SimpleNamespace(x=100, y=525))
+            release(SimpleNamespace(x=100, y=525))
+            panel._send.assert_not_called()
+            press(SimpleNamespace(x=700, y=75))
+            release(SimpleNamespace(x=700, y=75))
+            panel._send.assert_called_once_with({"type": "touch_calibration", "points": [[100, 525], [700, 75]]})
+            self.assertIsNone(panel.calibration_window)
+            top.return_value.destroy.assert_called_once()
+
+    def test_calibration_cancel_sends_no_input_and_retains_previous_settings(self):
+        panel = ControlPanel.__new__(ControlPanel)
+        panel.root = MagicMock(); panel.calibration_window = None
+        panel.pad_touch = panel.qemu_touch = None; panel.held_buttons = set()
+        panel._send = MagicMock()
+        with patch.object(panel_module.tk, "Toplevel") as top, \
+             patch.object(panel_module.tk, "Canvas"), patch.object(panel_module.ttk, "Label"), \
+             patch.object(panel_module.ttk, "Button") as button:
+            panel._calibrate_touch()
+            button.call_args.kwargs["command"]()
+            panel._send.assert_not_called()
+            self.assertIsNone(panel.calibration_window)
+
     def test_preview_captures_cabinet_lower_device_not_boot_primary(self) -> None:
         stream = MagicMock()
         stream.readline.side_effect = [b'{"QMP": {}}\n', b'{"return": {}}\n', b'{"return": {}}\n']

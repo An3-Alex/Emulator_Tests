@@ -23,6 +23,7 @@ EMULATION_FIELDS = (
     ("guest_ram_mib", "Spiel-PC", "RAM (MiB)", int, (512, 3072), "Standard: 2048; mehr RAM beschleunigt die CPU nicht."),
     ("guest_vcpus", "Spiel-PC", "Virtuelle CPUs", int, (1, 2), "Standard: 1; XP/Image-Kompatibilität bei Änderungen beachten."),
     ("acceleration", "Spiel-PC", "Beschleunigung", str, ("whpx", "tcg"), "WHPX: Windows-Hypervisor; TCG: Software-Emulation, langsamer."),
+    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("swiftshader", "qemu3dfx"), "SwiftShader: bisheriger Renderer. QEMU-3dfx: separate GPU-Arbeitskopie und passendes Laufzeitpaket erforderlich; unterer Ausgang über GPU, oberer über SwiftShader. GPU-Vorschau noch nicht verfügbar."),
     ("qxl_vram_mib", "Spiel-PC", "QXL-Grafikspeicher je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; gilt für beide QXL-Geräte."),
     ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
     ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
@@ -66,6 +67,8 @@ def validate_emulation(selection: Selection) -> list[str]:
             issues.append(f"{label}: ungültiger Wert ({value!r})")
     if not issues and math.ceil(selection.db_timer_interval * selection.duart_x1_hz / (32 * 0x3A)) > 128:
         issues.append("DUART-Takt und CPU-Laufabschnitt überschreiten das Timer-Budget (128 Interrupts). Laufabschnitt verkleinern.")
+    if selection.graphics_backend == "qemu3dfx" and not selection.swap_displays:
+        issues.append("QEMU-3dfx: ‚Bildschirme tauschen‘ einschalten; lower muss Primäranzeige sein.")
     return issues
 
 
@@ -90,6 +93,7 @@ class Selection:
     guest_ram_mib: int = 2048
     guest_vcpus: int = 1
     acceleration: str = "whpx"
+    graphics_backend: str = "swiftshader"
     qxl_vram_mib: int = 64
     usb_tablet: bool = False
     db_icount_shift: int = 6
@@ -185,6 +189,12 @@ def check_runtime(selection: Selection) -> list[str]:
     issues = validate_selection(selection)
     if issues:
         return issues
+    if selection.graphics_backend == "qemu3dfx":
+        from qemu3dfx_package import verify_launch
+        try:
+            verify_launch(Path(selection.image), Path(selection.qemu_x86))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return [f"QEMU-3dfx: GPU-Arbeitskopie oder Laufzeitpaket nicht vorbereitet ({exc})"]
     for path, label, arguments in (
         (selection.qemu_x86, "QEMU Spiel-PC", ["--version"]),
         (selection.qemu_m68k, "QEMU Datenbank", ["--version"]),
@@ -251,4 +261,6 @@ def launch_command(selection: Selection, project: Path) -> list[str]:
         command.append("-NoEventWindow")
     if selection.swap_displays:
         command.append("-SwapDisplays")
+    if selection.graphics_backend == "qemu3dfx":
+        command.extend(("-GraphicsBackend", "qemu3dfx"))
     return command

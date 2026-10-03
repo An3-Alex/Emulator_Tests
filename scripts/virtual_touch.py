@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from cabinet_controls import TOUCH_WIDTH, TOUCH_HEIGHT, validate_command
+from cabinet_controls import TOUCH_WIDTH, TOUCH_HEIGHT, validate_command, validate_calibration_points
 
 
 ACK = b"\x010\r"
@@ -62,17 +62,14 @@ class VirtualTouchController:
     def _validate_points(points) -> tuple[tuple[int, int], tuple[int, int]] | None:
         if points is None:
             return None
-        if not isinstance(points, (tuple, list)) or len(points) != 2:
-            raise ValueError("two calibration points required")
-        for point in points:
-            if not isinstance(point, (tuple, list)) or len(point) != 2:
-                raise ValueError("invalid calibration point")
-            validate_command({"type": "touch", "x": point[0], "y": point[1], "down": True})
-        first, second = tuple(points[0]), tuple(points[1])
-        if not (first[0] < 400 < second[0] and second[1] < 300 < first[1]
-                and second[0] - first[0] >= 200 and first[1] - second[1] >= 150):
-            raise ValueError("invalid calibration span or target order")
-        return first, second
+        return validate_calibration_points(points)
+
+    def apply_panel_calibration(self, points) -> None:
+        if self.calibration_session:
+            raise ValueError("native service calibration is active")
+        self.points = validate_calibration_points(points)
+        self.events.append("DB_TOUCH_CALIBRATION_COMPLETED source=control_panel")
+        self._save()
 
     def _save(self) -> None:
         if self.state_path is None:

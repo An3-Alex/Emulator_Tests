@@ -69,6 +69,7 @@ def durable_copy(source: Path, destination: Path) -> None:
 
 
 def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = None,
+           sram: Path | None = None,
            check_only: bool = False) -> str:
     root = root.resolve()
     require_hash(bootstrap, {BOOTSTRAP_HASH})
@@ -101,6 +102,10 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
             targets.append((f"{directory}/irrKlang.dll", audio, AUDIO_HASH,
                             {AUDIO_HASH, *PREVIOUS_AUDIO}))
     changed = []
+    service_pending = False
+    if sram is not None:
+        from service_sram import update as update_service_sram
+        service_pending = update_service_sram(root, sram, check_only=True) != "Service SRAM already current"
     # Validate every target before creating backups or changing anything.
     for relative, source, expected, accepted in targets:
         target = inside(root, relative)
@@ -110,6 +115,8 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
         if target.with_name(target.name + ".m90-graphics-new").exists():
             raise ValueError(f"Unfinished update file: {target}")
     if not changed:
+        if service_pending:
+            return f"{label} update required" if check_only else update_service_sram(root, sram)
         return f"{label} already current"
     if check_only:
         return f"{label} update required"
@@ -151,6 +158,8 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
             if temporary.exists():
                 temporary.unlink()
     manifest.write_text(json.dumps(dict(state="installed", files=entries), indent=2) + "\n")
+    if service_pending:
+        update_service_sram(root, sram)
     return f"{label} updated; backup: {backup.relative_to(root)}"
 
 
@@ -160,7 +169,9 @@ if __name__ == "__main__":
     parser.add_argument("bootstrap", type=Path)
     parser.add_argument("proxy", type=Path)
     parser.add_argument("--audio", type=Path)
+    parser.add_argument("--sram", type=Path)
     parser.add_argument("--check-only", action="store_true")
     options = parser.parse_args()
     print(update(options.root, options.bootstrap, options.proxy, audio=options.audio,
+                 sram=options.sram,
                  check_only=options.check_only))

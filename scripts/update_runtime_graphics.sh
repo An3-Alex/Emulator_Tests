@@ -2,9 +2,10 @@
 # Update only the selected prepared copy, with guest-file backups. No VM boot.
 set -euo pipefail
 source "$(dirname -- "$0")/image_partition.sh"
-[[ $# -eq 4 || $# -eq 5 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO]' >&2; exit 2; }
+[[ $# -ge 4 && $# -le 6 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO [SRAM]]' >&2; exit 2; }
 audio_args=()
-if [[ $# -eq 5 ]]; then audio_args=(--audio "$5"); fi
+if [[ $# -ge 5 ]]; then audio_args=(--audio "$5"); fi
+if [[ $# -eq 6 ]]; then audio_args+=(--sram "$6"); fi
 original=$(realpath "$1")
 image=$(realpath "$2")
 [[ -f "$original" && -f "$image" && "$original" != "$image" && ! "$original" -ef "$image" ]] || {

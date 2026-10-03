@@ -51,7 +51,7 @@ verify_hash "$shim" 16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b1
 verify_hash "$bootstrap" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
 verify_hash "$qxl_installer" 96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a
 verify_hash "$d3d9" cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737
-verify_hash "$fbwf" 4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94
+verify_hash "$fbwf" 31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6
 verify_hash "$irrklang" 11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7
 verify_hash "$swiftshader" fc5994b209a57a77275e5ecee1904cd9139a344c69e221e54f05af90580a90c9
 verify_hash "$qxl_dir/qxl.inf" 2c2ce985936c87406313d68ba54b1c36f42aec97ee357d894e3238aecda776fa
@@ -138,6 +138,7 @@ for dir in NVRAM WorkDir; do
   cp "$irrklang" "$mount_dir/$dir/irrKlang.dll"
   cp "$swiftshader" "$mount_dir/$dir/swiftshader_d3d9.dll"
 done
+python3 "$script_dir/service_sram.py" "$mount_dir" "$fbwf"
 python3 "$script_dir/set_registry_dword.py" \
   "$mount_dir/WINDOWS/system32/config/SYSTEM" ControlSet001/Services/FBWF Start 4 --expect 0
 printf 'stage=qxl-pnp\n' > "$mount_dir/NVRAM/m90_setup_stage.txt"

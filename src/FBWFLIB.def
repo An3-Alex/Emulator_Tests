@@ -2,3 +2,4 @@ LIBRARY FBWFLIB
 EXPORTS
     FbwfEnableFilter @9
     FbwfIsFilterEnabled @18
+    SramCompatInitialize @19

@@ -282,7 +282,7 @@ class Launcher(tk.Tk):
                 ttk.Checkbutton(frame, text=label, variable=variable).grid(row=row, column=0, columnspan=2, sticky="w")
             else:
                 ttk.Label(frame, text=label, width=38).grid(row=row, column=0, sticky="w")
-                if key in ("acceleration", "qxl_vram_mib", "db_icount_shift", "guest_vcpus"):
+                if key in ("acceleration", "graphics_backend", "qxl_vram_mib", "db_icount_shift", "guest_vcpus"):
                     widget = ttk.Combobox(frame, textvariable=variable, values=limits, state="readonly", width=23)
                 else:
                     widget = ttk.Entry(frame, textvariable=variable, width=25)
@@ -293,7 +293,7 @@ class Launcher(tk.Tk):
         ttk.Label(form, wraplength=790, text=(
             "Fest verdrahtet: MC68331/CPU32, Firmware-SRAM 2 MiB, Board-Adressen und lokale Schnittstellen "
             "(COM3 4553, Bedienung 4554, QMP 4444, GDB 1235). Die Zulassungskarte ist kein eigener CPU-Prozess. "
-            "Sound verwendet AC97/WinMM; der Münzprüfer hat keine separat konfigurierbare Emulation. "
+            "Sound verwendet die PCM-Bridge über COM1; der Münzprüfer hat keine separat konfigurierbare Emulation. "
             "Es gibt kein Windows-CPU-Prozentlimit. Ungeeignete Werte können Bootfehler oder Abstürze verursachen."
         )).pack(anchor="w", pady=8)
 
@@ -451,6 +451,10 @@ class Launcher(tk.Tk):
 
     def _prepare_worker(self, selection: Selection) -> None:
         try:
+            if selection.graphics_backend == "qemu3dfx":
+                self._update_graphics(selection)
+                self.events.put(("prepared", selection.image))
+                return
             self.events.put(("prepare_phase", "Bestehende Arbeitskopie prüfen"))
             image = Path(selection.image) if selection.image else None
             stage = "new"
@@ -541,6 +545,11 @@ class Launcher(tk.Tk):
         )
         if probe.returncode != 0 or probe.stdout.strip() != "0":
             raise RuntimeError("Vor dem Laufzeit-Update alle QEMU-Instanzen schließen")
+        if selection.graphics_backend == "qemu3dfx":
+            from qemu3dfx_package import verify_launch
+            verify_launch(Path(selection.image), Path(selection.qemu_x86))
+            self.events.put(("line", "QEMU-3dfx-Arbeitskopie geprüft; bestehende GPU-Dateien bleiben erhalten.\n"))
+            return
         self._run_step(graphics_update_command(selection, PROJECT),
                        "Grafik- und Audiodateien der Arbeitskopie werden aktualisiert")
         self._run_step(audio_bridge_setup_command(selection, PROJECT),

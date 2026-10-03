@@ -2201,14 +2201,20 @@ def run_bridge(args: argparse.Namespace) -> int:
                 ensure_com3_receiver_alive(receiver_errors)
                 for _ in range(32):
                     try:
-                        input_types = {"door", "coin"}
+                        input_types = {"door", "coin", "touch_calibration"}
                         if touch_packets.can_accept_contact():
                             input_types.add("touch")
                         control_event = controls.events.pop_types(input_types)
                     except queue.Empty:
                         break
                     event_type = control_event["type"]
-                    if event_type == "door":
+                    if event_type == "touch_calibration":
+                        try:
+                            touch_controller.apply_panel_calibration(control_event["points"])
+                        except ValueError as exc:
+                            print(f"DB_TOUCH_CALIBRATION_REJECTED source=control_panel reason={exc}", flush=True)
+                        log_touch_controller_events(touch_controller)
+                    elif event_type == "door":
                         door_closed = not control_event["open"]
                         door_input_pending = True
                         print(

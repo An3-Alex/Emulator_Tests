@@ -7,6 +7,9 @@
 #include "display_policy.h"
 
 static HMODULE g_self;
+#ifndef D3D9_PROXY_LOG
+#define D3D9_PROXY_LOG "C:\\NVRAM\\d3d9_proxy.log"
+#endif
 /* Required by MSVC's float-forwarding methods; this DLL uses no CRT. */
 extern "C" { int _fltused = 0; }
 typedef IDirect3D9 *(WINAPI *PFN_Direct3DCreate9)(UINT);
@@ -19,7 +22,7 @@ static void zero_memory(void *memory, size_t size)
 
 static void log_text(const char *text)
 {
-    HANDLE file = CreateFileA("C:\\NVRAM\\d3d9_proxy.log", FILE_APPEND_DATA,
+    HANDLE file = CreateFileA(D3D9_PROXY_LOG, FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, NULL);
     if (file != INVALID_HANDLE_VALUE) {
@@ -212,11 +215,26 @@ public:
 class Direct3D9Proxy : public IDirect3D9 {
     LONG refs_;
     IDirect3D9 *inner_;
+#ifdef M90_QEMU3DFX
+    IDirect3D9 *gpu_;
+    IDirect3D9 *engine(UINT adapter) const
+    {
+        return adapter == 0 ? gpu_ : inner_;
+#define M90_ENGINE(adapter) engine(adapter)
+    }
+#else
+#define M90_ENGINE(adapter) inner_
+#endif
 public:
     static void *operator new(size_t size) { return HeapAlloc(GetProcessHeap(), 0, size); }
     static void operator delete(void *p) { if (p) HeapFree(GetProcessHeap(), 0, p); }
+#ifdef M90_QEMU3DFX
+    Direct3D9Proxy(IDirect3D9 *inner, IDirect3D9 *gpu) : refs_(1), inner_(inner), gpu_(gpu) {}
+    ~Direct3D9Proxy() { if (inner_) inner_->Release(); if (gpu_) gpu_->Release(); }
+#else
     Direct3D9Proxy(IDirect3D9 *inner) : refs_(1), inner_(inner) {}
     ~Direct3D9Proxy() { if (inner_) inner_->Release(); }
+#endif
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object)
     {
@@ -224,7 +242,12 @@ public:
         if (same_guid(riid, IID_IUnknown) || same_guid(riid, IID_IDirect3D9)) {
             *object = static_cast<IDirect3D9 *>(this); AddRef(); return S_OK;
         }
+#ifdef M90_QEMU3DFX
+        *object = NULL;
+        return E_NOINTERFACE;
+#else
         return inner_->QueryInterface(riid, object);
+#endif
     }
     ULONG STDMETHODCALLTYPE AddRef() { return (ULONG)InterlockedIncrement(&refs_); }
     ULONG STDMETHODCALLTYPE Release()
@@ -242,11 +265,11 @@ public:
         return count;
     }
     HRESULT STDMETHODCALLTYPE GetAdapterIdentifier(UINT a, DWORD f, D3DADAPTER_IDENTIFIER9 *id)
-      { return inner_->GetAdapterIdentifier(map_adapter(a), f, id); }
+      { return M90_ENGINE(a)->GetAdapterIdentifier(map_adapter(a), f, id); }
     UINT STDMETHODCALLTYPE GetAdapterModeCount(UINT a, D3DFORMAT f)
-      { return inner_->GetAdapterModeCount(map_adapter(a), f); }
+      { return M90_ENGINE(a)->GetAdapterModeCount(map_adapter(a), f); }
     HRESULT STDMETHODCALLTYPE EnumAdapterModes(UINT a, D3DFORMAT f, UINT m, D3DDISPLAYMODE *o)
-      { return inner_->EnumAdapterModes(map_adapter(a), f, m, o); }
+      { return M90_ENGINE(a)->EnumAdapterModes(map_adapter(a), f, m, o); }
     HRESULT STDMETHODCALLTYPE GetAdapterDisplayMode(UINT a, D3DDISPLAYMODE *m)
     {
         if (!m) return D3DERR_INVALIDCALL;
@@ -263,17 +286,17 @@ public:
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE CheckDeviceType(UINT a, D3DDEVTYPE t, D3DFORMAT ad, D3DFORMAT bb, BOOL w)
-      { return inner_->CheckDeviceType(map_adapter(a), t, ad, bb, w); }
+      { return M90_ENGINE(a)->CheckDeviceType(map_adapter(a), t, ad, bb, w); }
     HRESULT STDMETHODCALLTYPE CheckDeviceFormat(UINT a, D3DDEVTYPE t, D3DFORMAT af, DWORD u, D3DRESOURCETYPE r, D3DFORMAT cf)
-      { return inner_->CheckDeviceFormat(map_adapter(a), t, af, u, r, cf); }
+      { return M90_ENGINE(a)->CheckDeviceFormat(map_adapter(a), t, af, u, r, cf); }
     HRESULT STDMETHODCALLTYPE CheckDeviceMultiSampleType(UINT a, D3DDEVTYPE t, D3DFORMAT sf, BOOL w, D3DMULTISAMPLE_TYPE ms, DWORD *q)
-      { return inner_->CheckDeviceMultiSampleType(map_adapter(a), t, sf, w, ms, q); }
+      { return M90_ENGINE(a)->CheckDeviceMultiSampleType(map_adapter(a), t, sf, w, ms, q); }
     HRESULT STDMETHODCALLTYPE CheckDepthStencilMatch(UINT a, D3DDEVTYPE t, D3DFORMAT af, D3DFORMAT rf, D3DFORMAT ds)
-      { return inner_->CheckDepthStencilMatch(map_adapter(a), t, af, rf, ds); }
+      { return M90_ENGINE(a)->CheckDepthStencilMatch(map_adapter(a), t, af, rf, ds); }
     HRESULT STDMETHODCALLTYPE CheckDeviceFormatConversion(UINT a, D3DDEVTYPE t, D3DFORMAT s, D3DFORMAT d)
-      { return inner_->CheckDeviceFormatConversion(map_adapter(a), t, s, d); }
+      { return M90_ENGINE(a)->CheckDeviceFormatConversion(map_adapter(a), t, s, d); }
     HRESULT STDMETHODCALLTYPE GetDeviceCaps(UINT a, D3DDEVTYPE t, D3DCAPS9 *c)
-      { return inner_->GetDeviceCaps(map_adapter(a), t, c); }
+      { return M90_ENGINE(a)->GetDeviceCaps(map_adapter(a), t, c); }
     HMONITOR STDMETHODCALLTYPE GetAdapterMonitor(UINT a)
     {
         HMONITOR monitor = NULL;
@@ -319,7 +342,10 @@ public:
             }
             log_text("CreateDevice: separate monitor, non-exclusive windowed mode\r\n");
         }
-        HRESULT hr = inner_->CreateDevice(map_adapter(a), t, w, flags, effective, device);
+#ifdef M90_QEMU3DFX
+        log_text(a == 0 ? "CreateDevice backend=QEMU3DFX\r\n" : "CreateDevice backend=SwiftShader\r\n");
+#endif
+        HRESULT hr = M90_ENGINE(a)->CreateDevice(map_adapter(a), t, w, flags, effective, device);
         log_hex("CreateDevice result=", (DWORD)hr, "\r\n");
         if (SUCCEEDED(hr) && pp && effective == &adjusted) {
             *pp = adjusted;
@@ -356,7 +382,21 @@ extern "C" __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
     IDirect3D9 *inner = create(sdk);
     log_hex("real Direct3DCreate9 -> ", (DWORD)(ULONG_PTR)inner, "\r\n");
     if (!inner) return NULL;
+#ifdef M90_QEMU3DFX
+    const char gpu_name[] = "wined3d_d3d9.dll";
+    i = 0;
+    while (gpu_name[i] && length + i + 1 < MAX_PATH) { path[length + i] = gpu_name[i]; ++i; }
+    path[length + i] = 0;
+    HMODULE gpu_module = LoadLibraryA(path);
+    if (!gpu_module) { inner->Release(); log_text("QEMU3DFX backend missing\r\n"); return NULL; }
+    PFN_Direct3DCreate9 gpu_create = (PFN_Direct3DCreate9)GetProcAddress(gpu_module, "Direct3DCreate9");
+    IDirect3D9 *gpu = gpu_create ? gpu_create(sdk) : NULL;
+    if (!gpu) { inner->Release(); log_text("QEMU3DFX creation failed\r\n"); return NULL; }
+    Direct3D9Proxy *proxy = new Direct3D9Proxy(inner, gpu);
+    if (!proxy) gpu->Release();
+#else
     Direct3D9Proxy *proxy = new Direct3D9Proxy(inner);
+#endif
     if (!proxy) { inner->Release(); log_text("proxy allocation failed\r\n"); }
     return proxy;
 }

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Build only. Never boots a VM or installs a driver on the host.
+set -euo pipefail
+[[ $# == 3 ]] || { echo 'usage: build_qemu3dfx.sh host|guest QEMU3DFX_CHECKOUT QEMU_9_2_2_ARCHIVE' >&2; exit 2; }
+mode=$1
+project=$(realpath -e -- "$2")
+archive=$(realpath -e -- "$3")
+[[ $(git -C "$project" rev-parse HEAD) == 920661f3b48bd278b93acd9cf9ff8c968afb02c9 ]] || { echo 'Unexpected qemu-3dfx revision' >&2; exit 3; }
+[[ $(sha256sum "$archive" | cut -d' ' -f1) == 752eaeeb772923a73d536b231e05bcc09c9b1f51690a41ad9973d900e4ec9fbf ]] || { echo 'Unexpected QEMU source archive' >&2; exit 3; }
+case "$mode" in
+  host)
+    [[ ${MSYSTEM:-} == UCRT64 ]] || { echo 'Use the MSYS2 UCRT64 shell' >&2; exit 3; }
+    src="$project/qemu-9.2.2"
+    if [[ ! -f "$project/host-source-patched" ]]; then
+      [[ ! -e "$src" ]] || { echo 'Source directory already exists without build marker; refusing overwrite' >&2; exit 3; }
+      tar -xf "$archive" -C "$project" --exclude='qemu-9.2.2/roms'
+      rsync -r "$project/qemu-0/hw/3dfx" "$project/qemu-1/hw/mesa" "$src/hw/"
+      (cd "$src"; patch -p0 -i "$project/00-qemu92x-mesa-glide.patch"; bash "$project/scripts/sign_commit" -git="$project")
+      touch "$project/host-source-patched"
+    fi
+    # Windows file URLs need file:///C:/..., not file://C:/.... The symlink
+    # install view is developer convenience only; distribution copies files.
+    python3 - "$src" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+p = root / 'python/scripts/mkvenv.py'
+s = p.read_text()
+old = 'f"file://{str(wheels_dir)}"'
+new = 'Path(wheels_dir).absolute().as_uri()'
+if old in s: p.write_text(s.replace(old, new))
+elif new not in s: raise SystemExit('Unknown mkvenv revision')
+p = root / 'scripts/symlink-install-tree.py'
+s = p.read_text()
+marker = '# M90 copied Windows runtime bundle'
+if marker not in s:
+    old = 'import sys\n'
+    if old not in s: raise SystemExit('Unknown symlink-install-tree revision')
+    s = s.replace(old, old + '\n' + marker + '\nif os.name == "nt":\n    sys.exit(0)\n', 1)
+    p.write_text(s)
+PY
+    mkdir -p "$project/build-host"
+    cd "$project/build-host"
+    "$src/configure" --target-list=x86_64-softmmu --enable-whpx --enable-sdl \
+      --enable-opengl --enable-slirp --disable-gtk --disable-werror --disable-docs
+    ninja -j2 qemu-system-x86_64.exe
+    ;;
+  guest)
+    [[ ${MSYSTEM:-} == MINGW32 ]] || { echo 'Use the MSYS2 MINGW32 shell' >&2; exit 3; }
+    mkdir -p "$project/wrappers/mesa/build"
+    cd "$project/wrappers/mesa/build"
+    bash "$project/scripts/conf_wrapper"
+    # The emulated game CPU promises SSE2, not SSE4.2 or POPCNT.
+    flags='-march=i686 -msse2 -mfpmath=sse -mtune=generic -O3 -pipe -I../../../qemu-1/hw/mesa -I../../fxlib -Wall -Werror -fomit-frame-pointer -fuse-linker-plugin -flto=auto'
+    make clean
+    make CFLAGS="$flags" fxlib
+    make -j2 CFLAGS="$flags" opengl32.dll exports-check
+    make -B CFLAGS="$flags" wglinfo.exe
+    mkdir -p "$project/wrappers/3dfx/build"
+    make -C "$project/wrappers/3dfx/drv" fxptl.sys fxmemmap.vxd
+    cd "$project/wrappers/3dfx/build"
+    shasum fxmemmap.vxd fxptl.sys | sed 's/ \*/ /' | diff - <(tr -d '\r' < ../drv/shasum.txt)
+    ;;
+  *) echo 'Choose host or guest' >&2; exit 2 ;;
+esac
+printf 'QEMU3DFX_BUILD_COMPLETE %s (no guest started)\n' "$mode"

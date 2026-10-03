@@ -17,6 +17,7 @@ POWERSHELL_FILES = (
     "program-and-start-emulator.ps1",
     "start-real-database.ps1",
     "test-swiftshader.ps1",
+    "prepare-qemu3dfx.ps1",
 )
 SHELL_FILES = (
     "prepare_image_stage.sh",
@@ -28,6 +29,7 @@ SHELL_FILES = (
     "image_partition.sh",
     "stage_audio_bridge.sh",
     "install_qxl_helper_shell.sh",
+    "stage_qemu3dfx.sh",
 )
 REQUIRED_PYTHON_FILES = (
     "audio_legacy_driver.py",
@@ -54,6 +56,9 @@ REQUIRED_PYTHON_FILES = (
     "qxl_setup_runner.py",
     "rtc4543.py",
     "virtual_touch.py",
+    "service_sram.py",
+    "qemu3dfx_image.py",
+    "qemu3dfx_package.py",
     "runtime_bundle.py",
     "serialloader_chip_emulator.py",
 )

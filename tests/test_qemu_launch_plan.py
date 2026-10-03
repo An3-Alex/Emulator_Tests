@@ -56,6 +56,26 @@ class QemuLaunchPlanTests(unittest.TestCase):
         self.assertIn("-display gtk,show-tabs=on", arguments)
         self.assertNotIn("-no-reboot", arguments)
 
+    def test_qemu3dfx_is_explicit_sdl_and_preserves_database_and_audio(self):
+        for launcher in (LAUNCHER, REAL_DATABASE_LAUNCHER, PROGRAM_AND_START_LAUNCHER):
+            plan = self.script_plan(launcher, "-GraphicsBackend", "qemu3dfx", "-SwapDisplays",
+                                    "-Qemu", "D:/GPU Runtime/host/qemu-system-x86_64.exe")
+            visible = plan.get("visible_qemu") or plan.get("runtime", {}).get("visible_qemu") or plan
+            self.assertEqual(visible["graphics_backend"], "qemu3dfx")
+            self.assertEqual(visible["display_backend"], "sdl")
+            self.assertEqual(visible["gpu_adapters"], [0])
+            self.assertIn("-name M90-3dfx -display sdl,gl=off", visible["arguments"])
+            self.assertIn('-L "D:/GPU Runtime/host/pc-bios"', visible["arguments"])
+            self.assertNotIn("-display gtk", visible["arguments"])
+            self.assertNotIn("gl=on", visible["arguments"])
+            self.assertIn("qxl-vga,id=lower", visible["arguments"])
+            self.assertIn("qxl,id=upper", visible["arguments"])
+            self.assertEqual(visible["audio_backend"], "bridge")
+
+    def test_qemu3dfx_rejects_the_wrong_primary_screen_before_launch(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.script_plan(LAUNCHER, "-GraphicsBackend", "qemu3dfx")
+
     def test_dry_run_does_not_throttle_the_host_qemu_process(self) -> None:
         plan = self.launch_plan()
         self.assertEqual(plan["guest_vcpus"], 1)

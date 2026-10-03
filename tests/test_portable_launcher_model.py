@@ -21,6 +21,24 @@ import portable_launcher_model as model
 
 
 class PortableLauncherTests(unittest.TestCase):
+    def test_gpu_selection_is_explicit_and_requires_the_correct_primary(self):
+        self.assertEqual(Selection().graphics_backend, "swiftshader")
+        selection = Selection(graphics_backend="qemu3dfx", swap_displays=True)
+        command = launch_command(selection, PROJECT)
+        self.assertEqual(command[command.index("-GraphicsBackend") + 1], "qemu3dfx")
+        self.assertIn("-SwapDisplays", command)
+        self.assertIn("-AudioBridge", command)
+        with self.assertRaisesRegex(ValueError, "Primäranzeige"):
+            launch_command(replace(selection, swap_displays=False), PROJECT)
+
+    def test_gpu_choice_persists_without_changing_the_database_timing(self):
+        selection = Selection(graphics_backend="qemu3dfx", swap_displays=True,
+                              db_timer_interval=0.04, db_icount_shift=6)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            selection.save(path)
+            self.assertEqual(Selection.from_json(path), selection)
+
     def test_selected_paths_remain_separate_arguments_and_log_is_optional(self) -> None:
         selection = Selection(
             image=r"D:\CF Images\clean M90.img",

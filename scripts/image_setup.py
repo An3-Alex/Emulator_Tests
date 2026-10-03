@@ -18,7 +18,7 @@ COMPONENTS = {
     "qxl_installer": ("build/qxl-installer.exe", "96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a"),
     "display_verify": ("build/display-verify.exe", "81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349"),
     "d3d9": ("build/d3d9-proxy/d3d9.dll", "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737"),
-    "fbwf": ("build/sram-compat/FBWFLIB.dll", "4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94"),
+    "fbwf": ("build/sram-compat/FBWFLIB.dll", "31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6"),
     "irrklang": ("build/irrklang-proxy/irrKlang.dll", "11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7"),
 }
 QXL_HASHES = {
@@ -175,7 +175,7 @@ def graphics_update_command(selection: Selection, project: Path) -> list[str]:
     paths = [project / "scripts/update_runtime_graphics.sh",
              Path(selection.original_image), Path(selection.image),
              project / COMPONENTS["bootstrap"][0], project / COMPONENTS["d3d9"][0],
-             project / COMPONENTS["irrklang"][0]]
+             project / COMPONENTS["irrklang"][0], project / COMPONENTS["fbwf"][0]]
     return ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
 
 
