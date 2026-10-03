@@ -24,6 +24,13 @@ case "$mode" in
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
+for name in ('include/hw/i386/pc.h', 'hw/mesa/mglfuncs.h'):
+    p = root / name
+    s = p.read_text()
+    for old, new in (('0xec000000', '0x9c000000'), ('0xea000000', '0x9a000000'),
+                     ('0xefffe000', '0x9fffe000'), ('(0xE0U << 24)', '(0x90U << 24)')):
+        s = s.replace(old, new)
+    p.write_text(s)
 p = root / 'python/scripts/mkvenv.py'
 s = p.read_text()
 old = 'f"file://{str(wheels_dir)}"'
@@ -47,6 +54,22 @@ PY
     ;;
   guest)
     [[ ${MSYSTEM:-} == MINGW32 ]] || { echo 'Use the MSYS2 MINGW32 shell' >&2; exit 3; }
+    python_command=python3
+    if ! command -v python3 >/dev/null && [[ -x /ucrt64/bin/python.exe ]]; then
+      python_command=/ucrt64/bin/python.exe
+    fi
+    "$python_command" - "$project" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+for name in ('qemu-1/hw/mesa/mglfuncs.h', 'wrappers/mesa/src/wrapgl32.c'):
+    path = root / name
+    value = path.read_text()
+    for old, new in (('0xec000000', '0x9c000000'), ('0xea000000', '0x9a000000'),
+                     ('0xefffe000', '0x9fffe000'), ('(0xE0U << 24)', '(0x90U << 24)')):
+        value = value.replace(old, new)
+    path.write_text(value)
+PY
     mkdir -p "$project/wrappers/mesa/build"
     cd "$project/wrappers/mesa/build"
     bash "$project/scripts/conf_wrapper"

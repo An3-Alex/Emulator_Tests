@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Offline installation into an explicitly selected prepared copy; no VM boot.
 set -euo pipefail
-[[ $# == 4 ]] || { echo 'usage: stage_qemu3dfx.sh SOURCE_IMAGE GPU_WORKING_IMAGE BUNDLE WINDOWS_WORKING_PATH' >&2; exit 2; }
+[[ $# == 4 || ( $# == 5 && $5 == --status ) ]] || { echo 'usage: stage_qemu3dfx.sh SOURCE_IMAGE GPU_WORKING_IMAGE BUNDLE WINDOWS_WORKING_PATH [--status]' >&2; exit 2; }
 source "$(dirname -- "$0")/image_partition.sh"
 source_image=$(realpath -e -- "$1")
 image=$(realpath -e -- "$2")
@@ -23,6 +23,10 @@ trap cleanup EXIT
 loop_device=$(image_loop_device "$image" ro)
 ntfs-3g -o ro "$loop_device" "$mount_dir"
 mounted=1
+if [[ ${5:-} == --status ]]; then
+  python3 "$script_dir/qemu3dfx_image.py" "$mount_dir" "$bundle" --status
+  exit 0
+fi
 python3 "$script_dir/qemu3dfx_image.py" "$mount_dir" "$bundle" --check-only
 umount "$mount_dir"; mounted=0
 losetup -d "$loop_device"; loop_device=

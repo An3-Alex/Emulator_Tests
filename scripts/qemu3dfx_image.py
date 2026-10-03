@@ -41,6 +41,28 @@ def register_driver(source: Path, destination: Path) -> None:
     hive.commit(str(destination))
 
 
+def verify_driver(hive_path: Path) -> None:
+    """Allow normal XP registry writes, but require the actual MAPMEM settings."""
+    import hivex
+    hive = hivex.Hivex(str(hive_path), write=False)
+    controls = [node for node in hive.node_children(hive.root())
+                if hive.node_name(node).startswith("ControlSet")]
+    if not controls:
+        raise ValueError("No XP control sets")
+    for control in controls:
+        services = hive.node_get_child(control, "Services")
+        service = hive.node_get_child(services, "MAPMEM") if services else None
+        if not service:
+            raise ValueError("GPU MAPMEM service missing")
+        for name, expected in (("Type", 1), ("Start", 2), ("ErrorControl", 1)):
+            kind, value = hive.value_value(hive.node_get_value(service, name))
+            if kind != 4 or value != struct.pack("<I", expected):
+                raise ValueError(f"GPU MAPMEM {name} changed")
+        kind, value = hive.value_value(hive.node_get_value(service, "ImagePath"))
+        if kind != 2 or value.decode("utf-16le").rstrip("\0").casefold() != r"%SystemRoot%\system32\drivers\fxptl.sys".casefold():
+            raise ValueError("GPU MAPMEM driver path changed")
+
+
 def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
     root, bundle = root.resolve(), bundle.resolve()
     manifest = validate(bundle)
@@ -49,10 +71,25 @@ def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
         state = json.loads(marker.read_text())
         if state.get("version") != 1 or state.get("state") != "installed":
             raise ValueError("Unfinished or unknown GPU migration; restore its backup first")
-        if state.get("bundle_sha256") != sha256(bundle / "manifest.json"):
-            raise ValueError("Another GPU bundle is already installed")
+        expected = {SYSTEM, DRIVER}
+        expected.update(f"{directory}/{name}" for directory in ("NVRAM", "WorkDir")
+                        for name in ("d3d9.dll", "wined3d_d3d9.dll", "wined3d.dll", "opengl32.dll"))
+        if {entry["path"] for entry in state["files"]} != expected or len(state["files"]) != len(expected):
+            raise ValueError("Unexpected installed GPU targets")
         for entry in state["files"]:
-            require_hash(inside(root, entry["path"]), {entry["replacement"]})
+            if entry["path"] != SYSTEM:
+                guest_name = "fxptl.sys" if entry["path"] == DRIVER else Path(entry["path"]).name
+                if entry["replacement"] != manifest["files"][f"guest/{guest_name}"]:
+                    raise ValueError("Another guest GPU bundle is already installed")
+                require_hash(inside(root, entry["path"]), {entry["replacement"]})
+        verify_driver(inside(root, SYSTEM))
+        if not check_only and state.get("bundle_sha256") != sha256(bundle / "manifest.json"):
+            state["bundle_sha256"] = sha256(bundle / "manifest.json")
+            temporary = marker.with_suffix(".json.new")
+            if temporary.exists():
+                raise ValueError("Unfinished GPU marker update")
+            temporary.write_text(json.dumps(state, indent=2) + "\n")
+            temporary.replace(marker)
         return "QEMU3DFX_IMAGE_CURRENT"
     require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH})
     if inside(root, "NVRAM/m90_setup_stage.txt").read_text().strip() != "stage=ready":
@@ -164,8 +201,15 @@ if __name__ == "__main__":
     parser.add_argument("bundle", type=Path, nargs="?")
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--restore", action="store_true")
+    parser.add_argument("--status", action="store_true")
     args = parser.parse_args()
-    if args.restore:
+    if args.status:
+        if args.restore or args.check_only or args.bundle is None:
+            parser.error("--status requires a bundle and no other action")
+        validate(args.bundle)
+        print(install(args.root, args.bundle, check_only=True)
+              if inside(args.root.resolve(), MARKER).exists() else "QEMU3DFX_IMAGE_REQUIRED")
+    elif args.restore:
         if args.check_only: parser.error("--restore and --check-only cannot be combined")
         print(restore(args.root))
     else:

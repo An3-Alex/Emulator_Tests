@@ -25,12 +25,12 @@ from tkinter import filedialog, messagebox, ttk
 
 from image_setup import (
     COMPONENTS, check_file, check_preparation, finalize_command, guest_setup_command,
-    graphics_update_command, audio_bridge_setup_command,
+    graphics_update_command, audio_bridge_setup_command, gpu_stage_command,
     retry_qxl_command, stage_display_verify_command,
     stage_check_command, stage_command,
 )
 from portable_launcher_model import (
-    EMULATION_FIELDS, Selection, check_runtime, launch_command, validate_emulation,
+    EMULATION_FIELDS, Selection, check_runtime, launch_command, validate_emulation, graphics_selection,
 )
 from runtime_bundle import (
     OWN_BINARIES, REQUIRED_PYTHON_FILES, SHELL_FILES, project_for_launcher,
@@ -159,6 +159,8 @@ class Launcher(tk.Tk):
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
         self.prepare_timer = tk.StringVar(value="Image-Einrichtung: noch nicht gestartet")
         self._build()
+        self.emulation_variables["graphics_backend"].trace_add("write", self._graphics_changed)
+        self._graphics_changed()
         self.after(100, self._drain_events)
         self.after(1000, self._tick_prepare_timer)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -340,6 +342,13 @@ class Launcher(tk.Tk):
                 found += 1
         self._write(f"Datenbank-Ordner: {found} von {len(DATABASE_FILES)} erwarteten Dateien gefunden.\n")
 
+    def _graphics_changed(self, *_args) -> None:
+        if self.emulation_variables["graphics_backend"].get() == "qemu3dfx":
+            self.variables["qemu_x86"].set(str(PROJECT / "build/qemu3dfx-runtime/host/qemu-system-x86_64.exe"))
+            self.swap_displays.set(True)
+        elif Path(self.variables["qemu_x86"].get()).parent.name == "host":
+            self.variables["qemu_x86"].set(str(Path(self.variables["qemu_m68k"].get()).with_name("qemu-system-x86_64.exe")))
+
     def _selection(self) -> Selection:
         options = {}
         for key, _group, label, kind, _limits, _help in EMULATION_FIELDS:
@@ -348,7 +357,8 @@ class Launcher(tk.Tk):
                 options[key] = kind(raw.strip()) if kind is not bool else raw
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"{label}: gültigen Zahlenwert eingeben") from exc
-        selection = Selection(**{key: value.get().strip() for key, value in self.variables.items()}, **options)
+        selection = graphics_selection(
+            Selection(**{key: value.get().strip() for key, value in self.variables.items()}, **options), PROJECT)
         issues = validate_emulation(selection)
         if issues:
             raise ValueError("\n".join(issues))
@@ -451,10 +461,6 @@ class Launcher(tk.Tk):
 
     def _prepare_worker(self, selection: Selection) -> None:
         try:
-            if selection.graphics_backend == "qemu3dfx":
-                self._update_graphics(selection)
-                self.events.put(("prepared", selection.image))
-                return
             self.events.put(("prepare_phase", "Bestehende Arbeitskopie prüfen"))
             image = Path(selection.image) if selection.image else None
             stage = "new"
@@ -516,7 +522,7 @@ class Launcher(tk.Tk):
 
     def _check_worker(self, selection: Selection, start: bool) -> None:
         try:
-            issues = check_runtime(selection)
+            issues = check_runtime(selection, require_gpu_image=not start)
             if not issues:
                 result = subprocess.run(
                     stage_check_command(Path(selection.image), PROJECT),
@@ -547,8 +553,20 @@ class Launcher(tk.Tk):
             raise RuntimeError("Vor dem Laufzeit-Update alle QEMU-Instanzen schließen")
         if selection.graphics_backend == "qemu3dfx":
             from qemu3dfx_package import verify_launch
+            status = subprocess.run(gpu_stage_command(selection, PROJECT, status=True),
+                                    capture_output=True, text=True, timeout=120)
+            marker = status.stdout.strip().splitlines()[-1].removeprefix("QEMU3DFX_IMAGE_") if status.stdout.strip() else ""
+            if status.returncode != 0 or marker not in ("CURRENT", "REQUIRED"):
+                raise RuntimeError(f"GPU-Arbeitskopie konnte nicht geprüft werden: {status.stderr.strip()}")
+            if marker == "REQUIRED":
+                self._run_step(graphics_update_command(selection, PROJECT),
+                               "Grafik- und SRAM-Dateien werden vorbereitet")
+                self._run_step(audio_bridge_setup_command(selection, PROJECT),
+                               "Audio-Ausgabe der Arbeitskopie wird eingestellt")
+            self._run_step(gpu_stage_command(selection, PROJECT),
+                           "QEMU-3dfx-Gastdateien werden automatisch eingerichtet")
             verify_launch(Path(selection.image), Path(selection.qemu_x86))
-            self.events.put(("line", "QEMU-3dfx-Arbeitskopie geprüft; bestehende GPU-Dateien bleiben erhalten.\n"))
+            self.events.put(("line", "QEMU-3dfx-Arbeitskopie eingerichtet und geprüft.\n"))
             return
         self._run_step(graphics_update_command(selection, PROJECT),
                        "Grafik- und Audiodateien der Arbeitskopie werden aktualisiert")
@@ -866,9 +884,12 @@ class Launcher(tk.Tk):
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--verify-bundle":
+        from qemu3dfx_package import validate
+        gpu_manifest = validate(PROJECT / "build/qemu3dfx-runtime")
         report = {
             "runtime": str(PROJECT),
             "scripts": len(list((PROJECT / "scripts").glob("*.py"))),
+            "gpu_runtime": {"valid": True, "files": len(gpu_manifest["files"])},
             "required_python_files": {
                 name: (PROJECT / "scripts" / name).is_file()
                 for name in REQUIRED_PYTHON_FILES

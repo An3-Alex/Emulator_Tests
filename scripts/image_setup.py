@@ -231,4 +231,21 @@ def guest_setup_command(selection: Selection, project: Path, *, verify: bool = F
         command.append("--verify")
     if selection.swap_displays:
         command.append("--swap-displays")
+    if selection.graphics_backend == "qemu3dfx":
+        command.append("--gpu-runtime")
+    return command
+
+
+def gpu_stage_command(selection: Selection, project: Path, *, status: bool = False) -> list[str]:
+    original, image = Path(selection.original_image), Path(selection.image)
+    if not selection.original_image or not original.is_file():
+        raise ValueError("Original-CF-Image für die sichere GPU-Einrichtung auswählen")
+    if original.resolve() == image.resolve() or (image.exists() and original.samefile(image)):
+        raise ValueError("Original und GPU-Arbeitskopie müssen verschieden sein")
+    bundle = Path(selection.qemu_x86).resolve().parent.parent
+    command = ["wsl.exe", "--user", "root", "--exec", "bash",
+               wsl_path(project / "scripts/stage_qemu3dfx.sh"),
+               wsl_path(original), wsl_path(image), wsl_path(bundle), str(image.resolve())]
+    if status:
+        command.append("--status")
     return command

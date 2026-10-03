@@ -32,8 +32,14 @@ if (-not $SwapDisplays) {
     $qemuArgs = $qemuArgs.Replace('qxl-vga,id=lower', 'qxl-vga,id=upper').Replace('qxl,id=upper', 'qxl,id=lower')
 }
 if ($GraphicsBackend -eq 'qemu3dfx') {
+    if ($GuestRamMiB -gt 2048) { throw 'QEMU-3dfx unterstützt maximal 2048 MiB Gast-RAM wegen des getrennten GPU-MMIO-Bereichs.' }
     if (-not $SwapDisplays) { throw 'QEMU-3dfx benötigt den unteren Bildschirm als Primäranzeige (-SwapDisplays).' }
     $qemuArgs = $qemuArgs.Replace('-display gtk,show-tabs=on', '-name M90-3dfx -display sdl,gl=off')
+    # QEMU 9.2 WHPX kernel APIC injection can stall this XP guest at boot.
+    # Keep hardware CPU acceleration; emulate only its interrupt controller.
+    if ($Acceleration -eq 'whpx') {
+        $qemuArgs = $qemuArgs.Replace('-accel whpx ', '-accel whpx,kernel-irqchip=off ')
+    }
     $biosPath = [IO.Path]::Combine((Split-Path $Qemu -Parent), 'pc-bios').Replace('\', '/')
     $qemuArgs += ' -L "' + $biosPath + '"'
 }

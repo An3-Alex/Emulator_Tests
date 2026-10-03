@@ -5,7 +5,8 @@ CF-Images und Datenbankdateien. QEMU emuliert den Spiel-PC und den
 Motorola-68k-Datenbankprozessor getrennt. Die Einrichtung, der Start und die
 Bedienung erfolgen über eine grafische Oberfläche.
 
-CF-Images, Datenbankdateien und fremde Software werden nicht mitgeliefert.
+CF-Images, Datenbankdateien und proprietäre Gastsoftware werden nicht mitgeliefert.
+Die Open-Source-Grafiklaufzeit für QEMU-3dfx ist in der Starter-EXE enthalten.
 
 ## Funktionen
 
@@ -17,7 +18,7 @@ CF-Images, Datenbankdateien und fremde Software werden nicht mitgeliefert.
 - Gespeicherte Dateipfade und Einstellungen für Spiel-PC und Datenbank.
 - Separat wählbarer QEMU-3dfx-Grafikpfad: unterer Spielbildschirm über
   WineD3D/OpenGL-Passthrough, oberer Bildschirm weiterhin über SwiftShader.
-  Benötigt ein eigenes Laufzeitpaket und eine offline migrierte Arbeitskopie.
+  Die enthaltene Laufzeit und ihre Gastdateien werden automatisch eingerichtet.
   Einrichtung und Grenzen: [QEMU-3dfx](docs/QEMU3DFX.md).
 - „Alles beenden“ fährt den Spiel-PC herunter und beendet die zu diesem Lauf
   gehörenden Prozesse. Reagiert XP nicht, wird nur der eigene Prozessverbund
@@ -64,6 +65,16 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
 
 ## Änderungen
 
+- 0.1.19: QEMU-3dfx einschließlich Host-DLLs, BIOS und Gastwrappern ist in der EXE
+  enthalten. Der Starter wählt die passende QEMU-Datei und Primäranzeige selbst,
+  richtet frische Images mit SDL ein und installiert den Grafikpfad in der
+  getrennten Arbeitskopie. Manuelle Paketpfade und Manifest-Auswahl entfallen.
+  Erneute Starts erhalten normale XP-Registryänderungen und prüfen stattdessen
+  gezielt die GPU-Diensteinstellungen und Grafikdateien.
+  Der QEMU-3dfx-WHPX-Pfad emuliert den Interruptcontroller in QEMU, während
+  die CPU weiterhin hardwarebeschleunigt läuft. Das Netzwerk-BIOS ist enthalten.
+  GPU-Puffer und Register liegen außerhalb der Speicherbereiche beider QXL-
+  Bildschirme; der Spiel-PC verwendet dabei maximal 2048 MiB RAM.
 - 0.1.18: Der Starter kann eine vorbereitete QEMU-3dfx-Kopie mit zwei SDL-Fenstern
   starten. Unvollständige Grafikpakete und nicht vorbereitete Images werden
   abgewiesen. Die Migration sichert Gast-DLLs und die XP-Registry; der bisherige

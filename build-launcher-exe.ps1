@@ -49,6 +49,10 @@ try {
         $destination = (Split-Path -Parent $name).Replace('\', '/')
         $arguments += @('--add-data', "${source}:$destination")
     }
+    $gpuRuntime = Join-Path $project 'build\qemu3dfx-runtime'
+    & $Python (Join-Path $project 'scripts\qemu3dfx_package.py') validate $gpuRuntime
+    if ($LASTEXITCODE -ne 0) { throw 'QEMU-3dfx-Laufzeitpaket fehlt oder ist verändert.' }
+    $arguments += @('--add-data', "${gpuRuntime}:build/qemu3dfx-runtime")
     $arguments += 'scripts/emulator_launcher.py'
     & $Python @arguments
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller fehlgeschlagen: $LASTEXITCODE" }

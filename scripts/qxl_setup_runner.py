@@ -18,17 +18,17 @@ VERIFY_OK = b"M90-QXL-VERIFY-OK\n"
 VERIFY_FAILED = b"M90-QXL-VERIFY-FAILED\n"
 
 
-def qemu_command(qemu: Path, image: Path, serial_port: int, qmp_port: int, *, swap_displays: bool = False) -> list[str]:
+def qemu_command(qemu: Path, image: Path, serial_port: int, qmp_port: int, *, swap_displays: bool = False, gpu_runtime: bool = False) -> list[str]:
     primary, secondary = ("lower", "upper") if swap_displays else ("upper", "lower")
-    return [
-        str(qemu), "-accel", "whpx", "-machine", "pc",
+    command = [
+        str(qemu), "-accel", "whpx,kernel-irqchip=off" if gpu_runtime else "whpx", "-machine", "pc",
         "-cpu", "qemu32,+sse2,model-id=Intel(R) Celeron(R) M CPU 440 @ 1.86GHz",
         "-smp", "1", "-m", "2048", "-drive",
         f"file={image.as_posix()},format=raw,if=ide,index=0,media=disk",
         "-boot", "c", "-vga", "none",
         "-device", f"qxl-vga,id={primary},revision=2,vgamem_mb=64,xres=640,yres=480",
         "-device", f"qxl,id={secondary},revision=2,vgamem_mb=64,xres=640,yres=480",
-        "-display", "gtk,show-tabs=on",
+        "-display", "sdl,gl=off" if gpu_runtime else "gtk,show-tabs=on",
         "-netdev", "user,id=n0,restrict=on", "-device",
         "i82559c,netdev=n0,mac=00:13:95:06:EE:6E",
         "-serial", f"tcp:127.0.0.1:{serial_port},server=on,wait=off",
@@ -36,6 +36,9 @@ def qemu_command(qemu: Path, image: Path, serial_port: int, qmp_port: int, *, sw
         "-qmp", f"tcp:127.0.0.1:{qmp_port},server=on,wait=off",
         "-no-reboot",
     ]
+    if gpu_runtime:
+        command.extend(["-name", "M90-3dfx-setup", "-L", str(qemu.parent / "pc-bios")])
+    return command
 
 
 def require_free_port(port: int) -> None:
@@ -118,6 +121,7 @@ def main() -> int:
     parser.add_argument("--max-boots", type=int, default=4)
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--swap-displays", action="store_true")
+    parser.add_argument("--gpu-runtime", action="store_true")
     args = parser.parse_args()
     if not args.qemu.is_file() or not args.image.is_file():
         parser.error("QEMU executable and staged image must exist")
@@ -125,7 +129,7 @@ def main() -> int:
     require_free_port(args.qmp_port)
     args.stderr_log.parent.mkdir(parents=True, exist_ok=True)
     command = qemu_command(args.qemu, args.image, args.serial_port, args.qmp_port,
-                           swap_displays=args.swap_displays)
+                           swap_displays=args.swap_displays, gpu_runtime=args.gpu_runtime)
     success = VERIFY_OK if args.verify else SETUP_OK
     failure = VERIFY_FAILED if args.verify else SETUP_FAILED
     with args.stderr_log.open("ab") as stderr_file:

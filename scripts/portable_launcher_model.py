@@ -6,7 +6,7 @@ This module never copies disk images or database dumps into the application.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 import hashlib
 import json
@@ -23,7 +23,7 @@ EMULATION_FIELDS = (
     ("guest_ram_mib", "Spiel-PC", "RAM (MiB)", int, (512, 3072), "Standard: 2048; mehr RAM beschleunigt die CPU nicht."),
     ("guest_vcpus", "Spiel-PC", "Virtuelle CPUs", int, (1, 2), "Standard: 1; XP/Image-Kompatibilität bei Änderungen beachten."),
     ("acceleration", "Spiel-PC", "Beschleunigung", str, ("whpx", "tcg"), "WHPX: Windows-Hypervisor; TCG: Software-Emulation, langsamer."),
-    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("swiftshader", "qemu3dfx"), "SwiftShader: bisheriger Renderer. QEMU-3dfx: separate GPU-Arbeitskopie und passendes Laufzeitpaket erforderlich; unterer Ausgang über GPU, oberer über SwiftShader. GPU-Vorschau noch nicht verfügbar."),
+    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("swiftshader", "qemu3dfx"), "QEMU-3dfx und seine Gastdateien werden automatisch bereitgestellt. Unterer Ausgang über GPU, oberer über SwiftShader; Primäranzeige wird automatisch gewählt. GPU-Vorschau noch nicht verfügbar."),
     ("qxl_vram_mib", "Spiel-PC", "QXL-Grafikspeicher je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; gilt für beide QXL-Geräte."),
     ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
     ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
@@ -69,6 +69,8 @@ def validate_emulation(selection: Selection) -> list[str]:
         issues.append("DUART-Takt und CPU-Laufabschnitt überschreiten das Timer-Budget (128 Interrupts). Laufabschnitt verkleinern.")
     if selection.graphics_backend == "qemu3dfx" and not selection.swap_displays:
         issues.append("QEMU-3dfx: ‚Bildschirme tauschen‘ einschalten; lower muss Primäranzeige sein.")
+    if selection.graphics_backend == "qemu3dfx" and selection.guest_ram_mib > 2048:
+        issues.append("QEMU-3dfx: maximal 2048 MiB Gast-RAM wählen; der getrennte GPU-Speicherbereich liegt darüber.")
     return issues
 
 
@@ -184,15 +186,29 @@ def validate_selection(selection: Selection) -> list[str]:
     return issues
 
 
-def check_runtime(selection: Selection) -> list[str]:
+def graphics_selection(selection: Selection, project: Path) -> Selection:
+    """Select our complete GPU runtime automatically, never a stock EXE."""
+    if selection.graphics_backend != "qemu3dfx":
+        return selection
+    from qemu3dfx_package import validate
+    root = project / "build/qemu3dfx-runtime"
+    validate(root)
+    return replace(selection, qemu_x86=str(root / "host/qemu-system-x86_64.exe"),
+                   swap_displays=True)
+
+
+def check_runtime(selection: Selection, *, require_gpu_image: bool = True) -> list[str]:
     """Check installed interpreters/emulators without launching a VM."""
     issues = validate_selection(selection)
     if issues:
         return issues
     if selection.graphics_backend == "qemu3dfx":
-        from qemu3dfx_package import verify_launch
+        from qemu3dfx_package import verify_launch, validate
         try:
-            verify_launch(Path(selection.image), Path(selection.qemu_x86))
+            if require_gpu_image:
+                verify_launch(Path(selection.image), Path(selection.qemu_x86))
+            else:
+                validate(Path(selection.qemu_x86).resolve().parent.parent)
         except (OSError, ValueError, TypeError, KeyError) as exc:
             return [f"QEMU-3dfx: GPU-Arbeitskopie oder Laufzeitpaket nicht vorbereitet ({exc})"]
     for path, label, arguments in (

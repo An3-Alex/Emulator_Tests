@@ -15,6 +15,7 @@ REVISION = "920661f3b48bd278b93acd9cf9ff8c968afb02c9"
 WINE_REVISION = "f977ef3903b444fb5cfd65c543cde1ad5e8f601c"
 DRIVER_HASH = "7374ce199ee9e223bd7d823023c51da11a753a1741943377d7fde8383b24b145"
 BIOS_FILES = ("bios.bin", "bios-256k.bin", "vgabios-qxl.bin", "efi-eepro100.rom",
+              "pxe-eepro100.rom",
               "kvmvapic.bin", "linuxboot.bin", "linuxboot_dma.bin",
               "multiboot.bin", "multiboot_dma.bin")
 GUEST_FILES = ("d3d9.dll", "wined3d_d3d9.dll", "wined3d.dll", "opengl32.dll", "fxptl.sys")
@@ -97,7 +98,7 @@ def build(checkout: Path, runtime: Path, wine: Path, proxy: Path, destination: P
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
     manifest = dict(version=1, backend="qemu3dfx-hybrid", qemu_revision=REVISION,
-                    wine_revision=WINE_REVISION, gpu_adapter=0, cpu_adapter=1,
+                    wine_revision=WINE_REVISION, gpu_adapter=0, cpu_adapter=1, memory_layout="m90-dual-qxl-v1",
                     files={name: sha256(destination / name) for name in files})
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     validate(destination)
@@ -106,10 +107,14 @@ def build(checkout: Path, runtime: Path, wine: Path, proxy: Path, destination: P
 def validate(root: Path) -> dict:
     root = root.resolve()
     manifest_path = inside(root, "manifest.json")
+    if not manifest_path.is_file():
+        raise ValueError("QEMU-3dfx-Laufzeitpaket fehlt oder ist unvollständig: "
+                         "Die aktuelle Starter-EXE erneut ausführen, um die enthaltene Laufzeit bereitzustellen.")
     manifest = json.loads(manifest_path.read_text())
     if (manifest.get("version") != 1 or manifest.get("backend") != "qemu3dfx-hybrid"
             or manifest.get("qemu_revision") != REVISION or manifest.get("wine_revision") != WINE_REVISION
-            or manifest.get("gpu_adapter") != 0 or manifest.get("cpu_adapter") != 1):
+            or manifest.get("gpu_adapter") != 0 or manifest.get("cpu_adapter") != 1
+            or manifest.get("memory_layout") != "m90-dual-qxl-v1"):
         raise ValueError("Unknown GPU runtime manifest")
     files = manifest.get("files")
     required = {"host/qemu-system-x86_64.exe", "licenses/QEMU-COPYING"}
@@ -129,15 +134,27 @@ def validate(root: Path) -> dict:
 
 
 def verify_launch(image: Path, qemu: Path) -> None:
-    root = qemu.resolve().parent.parent
-    validate(root)
+    qemu = qemu.resolve()
+    # Check the package layout before trying to read its manifest. A normal
+    # Program Files/qemu installation has no GPU bundle one directory above it.
+    if qemu.name.lower() != "qemu-system-x86_64.exe" or qemu.parent.name.lower() != "host":
+        raise ValueError("Die normale QEMU-Installation unterstützt diesen Grafikpfad nicht. "
+                         "Im aktuellen Starter ‚qemu3dfx‘ wählen; die enthaltene Host-EXE wird automatisch ausgewählt.")
+    root = qemu.parent.parent
     expected = root / "host/qemu-system-x86_64.exe"
-    if qemu.resolve() != expected:
+    if qemu != expected:
         raise ValueError("Selected QEMU is not the packaged GPU host")
-    receipt = json.loads(Path(str(image) + ".qemu3dfx.json").read_text())
+    validate(root)
+    if not image.is_file():
+        raise ValueError("Für QEMU-3dfx eine vorbereitete GPU-Arbeitskopie als Start-Image auswählen.")
+    receipt_path = Path(str(image) + ".qemu3dfx.json")
+    if not receipt_path.is_file():
+        raise ValueError("GPU-Arbeitskopie noch nicht eingerichtet: im Starter ‚Frisches Image einrichten‘ "
+                         "ausführen oder eine bereits vorbereitete getrennte Arbeitskopie starten.")
+    receipt = json.loads(receipt_path.read_text())
     if (receipt.get("version") != 1 or receipt.get("backend") != "qemu3dfx-hybrid"
             or receipt.get("bundle_sha256") != sha256(root / "manifest.json")
-            or receipt.get("image") != str(image.resolve())):
+            or Path(receipt.get("image", "")).resolve() != image.resolve()):
         raise ValueError("No matching offline GPU preparation receipt")
 
 

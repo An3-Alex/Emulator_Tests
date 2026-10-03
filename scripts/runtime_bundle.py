@@ -1,7 +1,8 @@
 """Materialize our scripts and binaries carried by a frozen launcher.
 
-Owner images, database dumps and third-party binaries are never part of this
-bundle. Logs and generated database state live beside, not inside, the EXE.
+Owner images and database dumps are never part of this bundle. The separately
+licensed QEMU-3dfx runtime is included when built. Logs and generated database
+state live beside, not inside, the EXE.
 """
 
 from __future__ import annotations
@@ -106,6 +107,13 @@ def runtime_payload(source: Path) -> list[tuple[Path, Path]]:
     )
     files.extend((source / "scripts" / name, Path("scripts") / name) for name in SHELL_FILES)
     files.extend((source / relative, relative) for relative in OWN_BINARIES)
+    gpu = source / "build/qemu3dfx-runtime"
+    if gpu.exists():
+        from qemu3dfx_package import validate
+        manifest = validate(gpu)
+        for name in ("manifest.json", *manifest["files"]):
+            relative = Path("build/qemu3dfx-runtime") / name
+            files.append((source / relative, relative))
     for path, _ in files:
         if not path.is_file():
             raise FileNotFoundError(f"Laufzeitdatei fehlt im Paket: {path}")

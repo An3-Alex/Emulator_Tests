@@ -74,6 +74,7 @@ class ImageMigrationTests(unittest.TestCase):
             patch.object(image_module, "SWIFTSHADER_HASH", digest(b"swift")),
             patch.object(image_module, "CGOS_HASH", digest(b"cgos")),
             patch.object(image_module, "validate", return_value=self.manifest),
+            patch.object(image_module, "verify_driver"),
             patch.object(image_module, "register_driver",
                          side_effect=lambda source, target: target.write_bytes(source.read_bytes() + b"-MAPMEM")),
         ]
@@ -127,8 +128,77 @@ class ImageMigrationTests(unittest.TestCase):
         self.assertEqual((self.root / image_module.SYSTEM).read_bytes(), b"guest-changed-registry")
         self.assertEqual((self.root / "WorkDir/d3d9.dll").read_bytes(), b"new-d3d9.dll")
 
+    def test_normal_xp_registry_writes_do_not_block_next_start(self):
+        image_module.install(self.root, self.bundle)
+        (self.root / image_module.SYSTEM).write_bytes(b"normal-xp-write")
+        self.assertEqual(image_module.install(self.root, self.bundle, check_only=True), "QEMU3DFX_IMAGE_CURRENT")
+        image_module.verify_driver.assert_called_once_with((self.root / image_module.SYSTEM).resolve())
+
+    def test_changed_driver_settings_block_next_start(self):
+        image_module.install(self.root, self.bundle)
+        with patch.object(image_module, "verify_driver", side_effect=ValueError("MAPMEM changed")):
+            with self.assertRaisesRegex(ValueError, "MAPMEM changed"):
+                image_module.install(self.root, self.bundle, check_only=True)
+
 
 class PackageValidationTests(unittest.TestCase):
+    def test_gpu_buffers_require_ram_below_the_reserved_layout(self):
+        from portable_launcher_model import Selection, validate_emulation
+        self.assertFalse(validate_emulation(Selection(graphics_backend="qemu3dfx", swap_displays=True, guest_ram_mib=2048)))
+        self.assertTrue(any("2048" in issue for issue in validate_emulation(
+            Selection(graphics_backend="qemu3dfx", swap_displays=True, guest_ram_mib=3072))))
+        self.assertFalse(validate_emulation(Selection(guest_ram_mib=3072)))
+    def test_gpu_selection_uses_contained_host_and_primary_display(self):
+        from portable_launcher_model import Selection, graphics_selection
+        root = Path("project")
+        selection = Selection(graphics_backend="qemu3dfx", qemu_x86="stock.exe", swap_displays=False)
+        with patch.object(package, "validate") as validate:
+            resolved = graphics_selection(selection, root)
+        self.assertEqual(resolved.qemu_x86, str(root / "build/qemu3dfx-runtime/host/qemu-system-x86_64.exe"))
+        self.assertTrue(resolved.swap_displays)
+        validate.assert_called_once_with(root / "build/qemu3dfx-runtime")
+        self.assertEqual(selection.qemu_x86, "stock.exe")
+
+    def test_gpu_setup_uses_sdl_bios_and_no_sound_card(self):
+        from qxl_setup_runner import qemu_command
+        command = qemu_command(Path("gpu/host/qemu.exe"), Path("work.img"), 4554, 4446,
+                               gpu_runtime=True, swap_displays=True)
+        self.assertEqual(command[command.index("-display") + 1], "sdl,gl=off")
+        self.assertEqual(command[command.index("-accel") + 1], "whpx,kernel-irqchip=off")
+        self.assertIn(str(Path("gpu/host/pc-bios")), command)
+        self.assertIn("qxl-vga,id=lower,revision=2,vgamem_mb=64,xres=640,yres=480", command)
+        self.assertFalse(any("ac97" in arg.lower() for arg in command))
+
+    def test_stock_qemu_does_not_trigger_a_manifest_read_in_program_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "Program Files"
+            qemu = root / "qemu/qemu-system-x86_64.exe"
+            qemu.parent.mkdir(parents=True)
+            qemu.write_bytes(b"stock-qemu")
+            with patch.object(package, "validate") as validate:
+                with self.assertRaisesRegex(ValueError, "normale QEMU-Installation"):
+                    package.verify_launch(root / "image.img", qemu)
+                validate.assert_not_called()
+            self.assertFalse((root / "manifest.json").exists())
+
+    def test_missing_gpu_manifest_has_an_actionable_message(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "aktuelle Starter-EXE"):
+                package.validate(root)
+
+    def test_missing_gpu_image_receipt_is_not_a_raw_file_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qemu = root / "gpu/host/qemu-system-x86_64.exe"
+            qemu.parent.mkdir(parents=True)
+            qemu.write_bytes(b"gpu-qemu")
+            image = root / "work.img"
+            image.write_bytes(b"image")
+            with patch.object(package, "validate"):
+                with self.assertRaisesRegex(ValueError, "Frisches Image einrichten"):
+                    package.verify_launch(image, qemu)
+
     def test_manifest_rejects_traversal_before_reading_external_files(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -139,7 +209,8 @@ class PackageValidationTests(unittest.TestCase):
             files = {"../escape": "0" * 64, **files}
             (root / "manifest.json").write_text(json.dumps(dict(
                 version=1, backend="qemu3dfx-hybrid", qemu_revision=package.REVISION,
-                wine_revision=package.WINE_REVISION, gpu_adapter=0, cpu_adapter=1, files=files)))
+                wine_revision=package.WINE_REVISION, gpu_adapter=0, cpu_adapter=1,
+                memory_layout="m90-dual-qxl-v1", files=files)))
             with self.assertRaisesRegex(ValueError, "Invalid runtime file"):
                 package.validate(root)
 

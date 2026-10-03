@@ -15,6 +15,17 @@ der Offline-Registry des XP-Gasts. Auf dem Host wird weder `INSTDRV.EXE` noch
 ein Gasttreiber ausgeführt. Das Hostfenster verwendet SDL ohne `gl=on`; der Passthrough verwaltet
 seinen eigenen OpenGL-Kontext.
 
+Der mitgelieferte QEMU-9.2-Build verwendet bei WHPX `kernel-irqchip=off` sowohl
+für die Einrichtung als auch beim Spielstart. Damit bleibt die CPU
+hardwarebeschleunigt, während QEMU den Interruptcontroller übernimmt.
+Die Einstellung betrifft nicht den separaten Datenbankprozessor.
+
+Der gemeinsame Host-/Gastbuild verwendet für die GPU-Puffer einen eigenen
+Adressbereich `0x90000000–0x9FFFFFFF`, außerhalb der QXL-PCI-BARs. Der virtuelle
+Spiel-PC darf in diesem Grafikpfad höchstens 2048 MiB RAM erhalten, damit dieser
+Bereich nicht mit Gast-RAM kollidiert. Beide Buildseiten und das Paketmanifest
+verwenden dieselbe Kennung `m90-dual-qxl-v1`.
+
 ## Quellen und Build
 
 - [QEMU-3dfx](https://github.com/kjliew/qemu-3dfx), Revision
@@ -35,6 +46,15 @@ QEMU und die Wrapper sind GPL-lizenziert, WineD3D LGPL-lizenziert. Bei einer
 Binärveröffentlichung gehören Lizenztexte und die zugehörigen verwendeten
 Quellen samt Änderungen dazu.
 
+Die zugehörigen Quellen liegen im GitHub-Release als
+`gpu-corresponding-sources.tar.gz`, `gpu-dependency-sources.tar` und
+`qemu-9.2.2.tar.xz`. Das erste Archiv enthält die tatsächlich verwendeten
+QEMU-3dfx-/WineD3D-Quellen einschließlich der Änderungen; das zweite die
+MSYS2-Quellpakete mit Versions- und SHA256-Verzeichnis. Das QEMU-Originalarchiv
+enthält auch die BIOS-/iPXE-Quellen. Die eigenen Adapter- und Buildänderungen
+stehen zusätzlich im Repository. `scripts/package_gpu_sources.py` bündelt
+diese Dateien anhand der installierten Paketmetadaten.
+
 ## Bildschirme und Auswahl
 
 Der Starter verwendet standardmäßig SwiftShader und bietet QEMU-3dfx als
@@ -48,7 +68,7 @@ der untere Spielbildschirm) nutzt `wined3d_d3d9.dll`; Adapter 1 bleibt bei
 `swiftshader_d3d9.dll`. Der bisherige Build ohne Schalter bleibt unverändert.
 Die Variante ist über den expliziten Startparameter `-GraphicsBackend qemu3dfx`
 verfügbar. In der Starter-Oberfläche ist sie unter „Emulationseinstellungen →
-Grafikpfad“ wählbar, bleibt aber ohne passende GPU-Arbeitskopie gesperrt.
+Grafikpfad“ wählbar. Die EXE enthält die Laufzeit und richtet die Gastdateien automatisch ein.
 Standard bleibt SwiftShader.
 
 Die Migration erfolgt an einer getrennten Arbeitskopie. Original-CF,
@@ -90,12 +110,23 @@ gesperrt; direkte Touchs und die Kalibriertaste bleiben verfügbar.
 Die GPU-Ausgabe wird direkt im unteren SDL-Fenster bedient, nicht über die
 QXL-Vorschau.
 
-Für den Starter die GPU-Arbeitskopie als Start-Image und die paketierte Host-EXE
-als „QEMU Spiel-PC“ wählen, dann den Grafikpfad auf `qemu3dfx` stellen und
-„Bildschirme tauschen“ einschalten. „Frisches Image einrichten“ installiert in
-diesem Modus keinen neuen Gast, sondern prüft eine bereits migrierte Kopie.
-Eine frische CF-Kopie zuerst mit SwiftShader vollständig einrichten, danach
-eine separate Kopie mit `prepare-qemu3dfx.ps1` migrieren. Zurückwechseln bedeutet
+Im Starter unter „Emulationseinstellungen → Grafikpfad“ `qemu3dfx` wählen.
+Die mitgelieferte Host-EXE und Primäranzeige werden automatisch ausgewählt.
+Das Paket wird unter `%LOCALAPPDATA%\M90 Emulator\runtime\build\qemu3dfx-runtime`
+bereitgestellt; `manifest.json` ist das interne SHA256-Verzeichnis und muss
+nicht selbst erstellt oder ausgewählt werden.
+
+Für ein frisches CF-Image Original und einen getrennten Arbeitskopie-Pfad sowie
+die benötigten Eigentümerdateien auswählen, dann „Frisches Image einrichten“.
+Der Starter erstellt die Kopie, startet XP kurz für die QXL-Installation und
+Anzeigeprüfung, beendet diesen Gast und installiert die GPU-Dateien samt
+MAPMEM-Dienst. Anschließend „Emulator starten“ wählen. Bei einer schon fertig
+eingerichteten normalen Arbeitskopie erfolgt die GPU-Migration beim Start
+automatisch, sofern das getrennte Original ausgewählt ist. Original und
+Arbeitskopie dürfen nicht dieselbe Datei sein. Eine frühere Spielkopie als
+separaten Rückweg aufbewahren.
+
+Zurückwechseln bedeutet
 den bisherigen Renderer, dessen QEMU und dessen unveränderte Arbeitskopie
 wieder auszuwählen.
 
