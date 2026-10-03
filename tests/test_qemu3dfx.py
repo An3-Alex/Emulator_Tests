@@ -4,6 +4,8 @@ import hashlib
 import json
 import sys
 import tempfile
+import struct
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -132,13 +134,76 @@ class ImageMigrationTests(unittest.TestCase):
         image_module.install(self.root, self.bundle)
         (self.root / image_module.SYSTEM).write_bytes(b"normal-xp-write")
         self.assertEqual(image_module.install(self.root, self.bundle, check_only=True), "QEMU3DFX_IMAGE_CURRENT")
-        image_module.verify_driver.assert_called_once_with((self.root / image_module.SYSTEM).resolve())
+        image_module.verify_driver.assert_called_once_with((self.root / image_module.SYSTEM).resolve(), allow_legacy_path=True)
+
+    def test_legacy_driver_check_is_read_only_and_repair_preserves_backup(self):
+        image_module.install(self.root, self.bundle)
+        hive = self.root / image_module.SYSTEM
+        before = hive.read_bytes()
+        original_backup = (self.root / image_module.BACKUP / "SYSTEM").read_bytes()
+        with patch.object(image_module, "verify_driver", return_value=True), patch.object(
+                image_module, "repair_driver_path", side_effect=lambda source, target: target.write_bytes(source.read_bytes()+b"-path-fixed")) as repair:
+            self.assertEqual(image_module.install(self.root, self.bundle, check_only=True), "QEMU3DFX_IMAGE_CURRENT")
+            repair.assert_not_called()
+            self.assertEqual(hive.read_bytes(), before)
+            image_module.install(self.root, self.bundle)
+        self.assertEqual(hive.read_bytes(), before+b"-path-fixed")
+        self.assertEqual((self.root / image_module.BACKUP / "SYSTEM").read_bytes(), original_backup)
+        self.assertEqual((self.root / image_module.BACKUP / "SYSTEM.before-driver-path-fix").read_bytes(), before)
 
     def test_changed_driver_settings_block_next_start(self):
         image_module.install(self.root, self.bundle)
         with patch.object(image_module, "verify_driver", side_effect=ValueError("MAPMEM changed")):
             with self.assertRaisesRegex(ValueError, "MAPMEM changed"):
                 image_module.install(self.root, self.bundle, check_only=True)
+
+
+class DriverPathTests(unittest.TestCase):
+    def setUp(self):
+        self.values = {
+            "Type": (4, struct.pack("<I", 1)),
+            "Start": (4, struct.pack("<I", 2)),
+            "ErrorControl": (4, struct.pack("<I", 1)),
+            "ImagePath": (2, (image_module.DRIVER_PATH+"\0").encode("utf-16le")),
+            "OtherValue": (4, struct.pack("<I", 42)),
+        }
+        def child(node, name):
+            return name if name in ("Services", "MAPMEM") else None
+        self.hive = SimpleNamespace(
+            root=lambda: "root", node_children=lambda node: ["ControlSet001"],
+            node_name=lambda node: node, node_get_child=child,
+            node_get_value=lambda node, name: self.values[name],
+            value_value=lambda value: value,
+            node_set_value=lambda node, entry: self.values.__setitem__(entry["key"], (entry["t"],entry["value"])),
+            commit=lambda destination: Path(destination).write_bytes(b"committed"),
+        )
+        self.mock = patch.dict(sys.modules, {"hivex": SimpleNamespace(Hivex=lambda *args, **kwargs: self.hive)})
+        self.mock.start(); self.addCleanup(self.mock.stop)
+
+    def test_native_systemroot_path_is_accepted(self):
+        self.assertFalse(image_module.verify_driver(Path("SYSTEM")))
+
+    def test_legacy_path_only_accepted_for_owned_migration(self):
+        self.values["ImagePath"] = (2,(image_module.LEGACY_DRIVER_PATH+"\0").encode("utf-16le"))
+        with self.assertRaisesRegex(ValueError,"path changed"):
+            image_module.verify_driver(Path("SYSTEM"))
+        self.assertTrue(image_module.verify_driver(Path("SYSTEM"),allow_legacy_path=True))
+
+    def test_foreign_driver_path_is_never_repaired(self):
+        self.values["ImagePath"] = (2,"C:\\other.sys\0".encode("utf-16le"))
+        with self.assertRaisesRegex(ValueError,"path changed"):
+            image_module.verify_driver(Path("SYSTEM"),allow_legacy_path=True)
+
+    def test_legacy_repair_preserves_other_values(self):
+        self.values["ImagePath"] = (2,(image_module.LEGACY_DRIVER_PATH+"\0").encode("utf-16le"))
+        before=dict(self.values)
+        with tempfile.TemporaryDirectory() as directory:
+            destination=Path(directory)/"SYSTEM.new"
+            image_module.repair_driver_path(Path("SYSTEM"),destination)
+            self.assertEqual(destination.read_bytes(),b"committed")
+        self.assertFalse(image_module.verify_driver(Path("SYSTEM")))
+        for key,value in before.items():
+            if key!="ImagePath": self.assertEqual(self.values[key],value)
 
 
 class PackageValidationTests(unittest.TestCase):

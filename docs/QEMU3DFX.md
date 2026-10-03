@@ -15,6 +15,20 @@ der Offline-Registry des XP-Gasts. Auf dem Host wird weder `INSTDRV.EXE` noch
 ein Gasttreiber ausgeführt. Das Hostfenster verwendet SDL ohne `gl=on`; der Passthrough verwaltet
 seinen eigenen OpenGL-Kontext.
 
+MAPMEM verwendet den nativen XP-Treiberpfad
+`\SystemRoot\system32\drivers\fxptl.sys`. Ein vorhandener älterer Pfadeintrag
+wird gezielt mit Sicherung der aktuellen Registry korrigiert; andere
+Diensteinstellungen bleiben erhalten. Vor der Grafikinitialisierung prüft
+die Adapter-Bridge den laufenden Gasttreiber und startet ihn bei Bedarf.
+OpenGL und WineD3D werden aus dem Ordner der Adapter-Bridge geladen,
+unabhängig vom Arbeitsverzeichnis des Spielprozesses. Windows-Ladefehler
+stehen mit ihrem Fehlercode in `NVRAM/d3d9_proxy.log`; ein Rückfall auf das
+normale XP-OpenGL wird nicht als GPU-Beschleunigung akzeptiert.
+
+`WAITING FOR IDLE STATE` gehört zum ADP-Loader: Er prüft den CPU-Leerlauf
+innerhalb von XP und wartet auf mindestens 90 Prozent. Die Meldung ist keine
+Warteanforderung der Datenbank und kein INITVIDEO-Befehl.
+
 Der mitgelieferte QEMU-9.2-Build verwendet bei WHPX `kernel-irqchip=off` sowohl
 für die Einrichtung als auch beim Spielstart. Damit bleibt die CPU
 hardwarebeschleunigt, während QEMU den Interruptcontroller übernimmt.

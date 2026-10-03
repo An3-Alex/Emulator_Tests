@@ -22,6 +22,7 @@ if ($Qemu3dfx) { $compile += ' /DM90_QEMU3DFX=1' }
 $link = 'link /nologo /Brepro /DLL /MACHINE:X86 /SUBSYSTEM:WINDOWS,5.01 /OSVERSION:5.1 ' +
         '/NODEFAULTLIB /ENTRY:DllMain /OUT:"' + $dll + '" ' +
         '/MAP:"' + $map + '" /DEF:"' + $def + '" "' + $obj + '" kernel32.lib user32.lib uuid.lib dxguid.lib'
+if ($Qemu3dfx) { $link += ' advapi32.lib' }
 $command = '"' + $devcmd + '" -no_logo -arch=x86 -host_arch=x64 && ' +
            $compile + ' && ' + $link
 & $env:ComSpec /d /s /c $command

@@ -48,9 +48,17 @@ if marker not in s:
 PY
     mkdir -p "$project/build-host"
     cd "$project/build-host"
+    # GCC sees both MSYS and Windows paths. Keep __FILE__ and debug paths
+    # independent of the developer's account and checkout directory.
+    project_win=$(cygpath -m "$project")
+    [[ "$project" != *[[:space:]]* ]] || { echo 'Use an MSYS2 build checkout without spaces' >&2; exit 3; }
+    prefix_flags="-ffile-prefix-map=$project=/usr/src/qemu-3dfx -ffile-prefix-map=$project_win=/usr/src/qemu-3dfx"
     "$src/configure" --target-list=x86_64-softmmu --enable-whpx --enable-sdl \
-      --enable-opengl --enable-slirp --disable-gtk --disable-werror --disable-docs
-    ninja -j2 qemu-system-x86_64.exe
+      --enable-opengl --enable-slirp --disable-gtk --disable-werror --disable-docs \
+      --extra-cflags="$prefix_flags" --extra-cxxflags="$prefix_flags"
+    jobs=${M90_BUILD_JOBS:-2}
+    [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid M90_BUILD_JOBS' >&2; exit 3; }
+    ninja -j"$jobs" qemu-system-x86_64.exe
     ;;
   guest)
     [[ ${MSYSTEM:-} == MINGW32 ]] || { echo 'Use the MSYS2 MINGW32 shell' >&2; exit 3; }

@@ -14,6 +14,8 @@ MARKER = "NVRAM/m90_qemu3dfx.json"
 BACKUP = "NVRAM/m90-qemu3dfx-backup"
 SYSTEM = "WINDOWS/system32/config/SYSTEM"
 DRIVER = "WINDOWS/system32/drivers/fxptl.sys"
+DRIVER_PATH = r"\SystemRoot\system32\drivers\fxptl.sys"
+LEGACY_DRIVER_PATH = r"%SystemRoot%\system32\drivers\fxptl.sys"
 
 
 def register_driver(source: Path, destination: Path) -> None:
@@ -35,13 +37,13 @@ def register_driver(source: Path, destination: Path) -> None:
                   for name, value in (("Type", 1), ("Start", 2), ("ErrorControl", 1))]
         values.extend({"key": name, "t": kind, "value": (value + "\0").encode("utf-16le")}
                       for name, kind, value in (
-                          ("ImagePath", 2, r"%SystemRoot%\system32\drivers\fxptl.sys"),
+                          ("ImagePath", 2, DRIVER_PATH),
                           ("DisplayName", 1, "MAPMEM")))
         hive.node_set_values(service, values)
     hive.commit(str(destination))
 
 
-def verify_driver(hive_path: Path) -> None:
+def verify_driver(hive_path: Path, *, allow_legacy_path: bool = False) -> bool:
     """Allow normal XP registry writes, but require the actual MAPMEM settings."""
     import hivex
     hive = hivex.Hivex(str(hive_path), write=False)
@@ -49,6 +51,7 @@ def verify_driver(hive_path: Path) -> None:
                 if hive.node_name(node).startswith("ControlSet")]
     if not controls:
         raise ValueError("No XP control sets")
+    legacy = False
     for control in controls:
         services = hive.node_get_child(control, "Services")
         service = hive.node_get_child(services, "MAPMEM") if services else None
@@ -59,8 +62,32 @@ def verify_driver(hive_path: Path) -> None:
             if kind != 4 or value != struct.pack("<I", expected):
                 raise ValueError(f"GPU MAPMEM {name} changed")
         kind, value = hive.value_value(hive.node_get_value(service, "ImagePath"))
-        if kind != 2 or value.decode("utf-16le").rstrip("\0").casefold() != r"%SystemRoot%\system32\drivers\fxptl.sys".casefold():
+        path = value.decode("utf-16le").rstrip("\0").casefold()
+        if kind != 2:
             raise ValueError("GPU MAPMEM driver path changed")
+        if path == DRIVER_PATH.casefold():
+            continue
+        if allow_legacy_path and path == LEGACY_DRIVER_PATH.casefold():
+            legacy = True
+        else:
+            raise ValueError("GPU MAPMEM driver path changed")
+    return legacy
+
+
+def repair_driver_path(source: Path, destination: Path) -> None:
+    """Repair only our legacy path; preserve all other live XP hive contents."""
+    if not verify_driver(source, allow_legacy_path=True):
+        raise ValueError("No legacy MAPMEM path to repair")
+    import hivex
+    hive = hivex.Hivex(str(source), write=True)
+    for control in hive.node_children(hive.root()):
+        if not hive.node_name(control).startswith("ControlSet"):
+            continue
+        services = hive.node_get_child(control, "Services")
+        service = hive.node_get_child(services, "MAPMEM")
+        hive.node_set_value(service, {"key": "ImagePath", "t": 2,
+                            "value": (DRIVER_PATH + "\0").encode("utf-16le")})
+    hive.commit(str(destination))
 
 
 def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
@@ -82,8 +109,25 @@ def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
                 if entry["replacement"] != manifest["files"][f"guest/{guest_name}"]:
                     raise ValueError("Another guest GPU bundle is already installed")
                 require_hash(inside(root, entry["path"]), {entry["replacement"]})
-        verify_driver(inside(root, SYSTEM))
-        if not check_only and state.get("bundle_sha256") != sha256(bundle / "manifest.json"):
+        legacy_driver = verify_driver(inside(root, SYSTEM), allow_legacy_path=True) is True
+        if legacy_driver and not check_only:
+            hive = inside(root, SYSTEM)
+            saved = inside(root, BACKUP + "/SYSTEM.before-driver-path-fix")
+            temporary_hive = hive.with_name(hive.name + ".gpu-driver-new")
+            if saved.exists() or temporary_hive.exists():
+                raise ValueError("Unfinished MAPMEM path repair; refusing overwrite")
+            durable_copy(hive, saved)
+            try:
+                repair_driver_path(hive, temporary_hive)
+                verify_driver(temporary_hive)
+                temporary_hive.replace(hive)
+            finally:
+                if temporary_hive.exists():
+                    temporary_hive.unlink()
+            for entry in state["files"]:
+                if entry["path"] == SYSTEM:
+                    entry["replacement"] = sha256(hive)
+        if not check_only and (legacy_driver or state.get("bundle_sha256") != sha256(bundle / "manifest.json")):
             state["bundle_sha256"] = sha256(bundle / "manifest.json")
             temporary = marker.with_suffix(".json.new")
             if temporary.exists():

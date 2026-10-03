@@ -97,6 +97,9 @@ def build(checkout: Path, runtime: Path, wine: Path, proxy: Path, destination: P
         target = inside(destination, name)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
+    # Distribution copy only: retain the development binary and source tree.
+    subprocess.run([str(runtime / "strip.exe"), "--strip-debug",
+                    str(destination / "host/qemu-system-x86_64.exe")], check=True)
     manifest = dict(version=1, backend="qemu3dfx-hybrid", qemu_revision=REVISION,
                     wine_revision=WINE_REVISION, gpu_adapter=0, cpu_adapter=1, memory_layout="m90-dual-qxl-v1",
                     files={name: sha256(destination / name) for name in files})

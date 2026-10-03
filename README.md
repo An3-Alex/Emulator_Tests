@@ -73,6 +73,9 @@ gewährleistet. Details stehen unter [Audio-Anbindung](docs/audio.md).
   gezielt die GPU-Diensteinstellungen und Grafikdateien.
   Der QEMU-3dfx-WHPX-Pfad emuliert den Interruptcontroller in QEMU, während
   die CPU weiterhin hardwarebeschleunigt läuft. Das Netzwerk-BIOS ist enthalten.
+  Der MAPMEM-Treiberpfad ist für XP korrigiert; der GPU-Wrapper prüft den
+  Gasttreiber vor dem Laden. Die Grafik-DLLs werden aus ihrem eigenen Ordner
+  geladen, und Ladefehler erscheinen mit Windows-Fehlercode im Grafikprotokoll.
   GPU-Puffer und Register liegen außerhalb der Speicherbereiche beider QXL-
   Bildschirme; der Spiel-PC verwendet dabei maximal 2048 MiB RAM.
 - 0.1.18: Der Starter kann eine vorbereitete QEMU-3dfx-Kopie mit zwei SDL-Fenstern

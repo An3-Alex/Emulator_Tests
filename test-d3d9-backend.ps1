@@ -13,7 +13,7 @@ $obj = Join-Path $out 'harness.obj'
 $exe = Join-Path $out 'harness.exe'
 $command = '"' + $devcmd + '" -no_logo -arch=x86 -host_arch=x64 && ' +
     'cl /nologo /c /O1 /GS- /GR- /EHs-c- /Zl /W4 /D_WIN32_WINNT=0x0501 /DWINVER=0x0501 /Fo"' + $obj + '" "' + $src + '" && ' +
-    'link /nologo /MACHINE:X86 /SUBSYSTEM:CONSOLE,5.01 /NODEFAULTLIB /ENTRY:mainCRTStartup /OUT:"' + $exe + '" "' + $obj + '" kernel32.lib user32.lib uuid.lib dxguid.lib'
+    'link /nologo /MACHINE:X86 /SUBSYSTEM:CONSOLE,5.01 /NODEFAULTLIB /ENTRY:mainCRTStartup /OUT:"' + $exe + '" "' + $obj + '" kernel32.lib user32.lib advapi32.lib uuid.lib dxguid.lib'
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'D3D9 backend harness build failed' }
 Push-Location $out

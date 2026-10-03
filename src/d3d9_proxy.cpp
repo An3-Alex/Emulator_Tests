@@ -5,6 +5,9 @@
 #undef Direct3DCreate9
 #include <stddef.h>
 #include "display_policy.h"
+#ifdef M90_QEMU3DFX
+#include <winsvc.h>
+#endif
 
 static HMODULE g_self;
 #ifndef D3D9_PROXY_LOG
@@ -46,6 +49,48 @@ static void log_hex(const char *prefix, DWORD value, const char *suffix)
     line[pos] = 0;
     log_text(line);
 }
+
+#ifdef M90_QEMU3DFX
+/* Called by Direct3DCreate9, never from DllMain / under the loader lock.
+   This only starts the already installed guest service; it installs nothing. */
+static BOOL ensure_gpu_mapper()
+{
+    SC_HANDLE manager = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!manager) { log_hex("MAPMEM manager error=", GetLastError(), "\r\n"); return FALSE; }
+    SC_HANDLE service = OpenServiceA(manager, "MAPMEM", SERVICE_QUERY_STATUS | SERVICE_START);
+    if (!service) {
+        DWORD error = GetLastError(); CloseServiceHandle(manager);
+        log_hex("MAPMEM service error=", error, "\r\n"); return FALSE;
+    }
+    SERVICE_STATUS status;
+    zero_memory(&status, sizeof(status));
+    BOOL ready = QueryServiceStatus(service, &status);
+    DWORD error = ready ? ERROR_SUCCESS : GetLastError();
+    if (ready && status.dwServiceType != SERVICE_KERNEL_DRIVER) {
+        ready = FALSE; error = ERROR_INVALID_DATA;
+    }
+    if (ready && status.dwCurrentState == SERVICE_STOPPED) {
+        ready = StartServiceA(service, 0, NULL);
+        error = ready ? ERROR_SUCCESS : GetLastError();
+        if (!ready && error == ERROR_SERVICE_ALREADY_RUNNING) ready = TRUE;
+    }
+    if (ready) {
+        DWORD started = GetTickCount();
+        do {
+            ready = QueryServiceStatus(service, &status);
+            if (!ready) { error = GetLastError(); break; }
+            if (status.dwCurrentState != SERVICE_START_PENDING) break;
+            Sleep(50);
+        } while ((DWORD)(GetTickCount() - started) < 5000);
+        ready = ready && status.dwCurrentState == SERVICE_RUNNING;
+        if (!ready && !error) error = status.dwWin32ExitCode ? status.dwWin32ExitCode : ERROR_SERVICE_NOT_ACTIVE;
+    }
+    CloseServiceHandle(service); CloseServiceHandle(manager);
+    log_hex("MAPMEM ready=", ready, "\r\n");
+    if (!ready) log_hex("MAPMEM start error=", error, "\r\n");
+    return ready;
+}
+#endif
 
 static UINT map_adapter(UINT adapter)
 {
@@ -371,6 +416,22 @@ extern "C" __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
     length = GetModuleFileNameA(g_self, path, MAX_PATH);
     if (!length || length >= MAX_PATH) { log_text("proxy path failed\r\n"); return NULL; }
     while (length && path[length - 1] != '\\') --length;
+#ifdef M90_QEMU3DFX
+    if (!ensure_gpu_mapper()) return NULL;
+    const char gl_name[] = "opengl32.dll";
+    DWORD gl_index = 0;
+    while (gl_name[gl_index] && length + gl_index + 1 < MAX_PATH) { path[length + gl_index] = gl_name[gl_index]; ++gl_index; }
+    path[length + gl_index] = 0;
+    HMODULE gl_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!gl_module) { log_hex("QEMU3DFX OpenGL load error=", GetLastError(), "\r\n"); return NULL; }
+    char actual_gl[MAX_PATH];
+    DWORD gl_length = GetModuleFileNameA(gl_module, actual_gl, MAX_PATH);
+    if (!gl_length || gl_length >= MAX_PATH || lstrcmpiA(actual_gl, path) != 0) {
+        log_text("QEMU3DFX refuses system OpenGL fallback\r\n");
+        FreeLibrary(gl_module); return NULL;
+    }
+    log_text("QEMU3DFX OpenGL ready\r\n");
+#endif
     const char real_name[] = "swiftshader_d3d9.dll";
     DWORD i = 0;
     while (real_name[i] && length + i + 1 < MAX_PATH) { path[length + i] = real_name[i]; ++i; }
@@ -387,8 +448,15 @@ extern "C" __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
     i = 0;
     while (gpu_name[i] && length + i + 1 < MAX_PATH) { path[length + i] = gpu_name[i]; ++i; }
     path[length + i] = 0;
-    HMODULE gpu_module = LoadLibraryA(path);
-    if (!gpu_module) { inner->Release(); log_text("QEMU3DFX backend missing\r\n"); return NULL; }
+    HMODULE gpu_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!gpu_module) {
+        DWORD error = GetLastError();
+        log_text("QEMU3DFX backend missing\r\n");
+        log_text("QEMU3DFX DLL path="); log_text(path); log_text("\r\n");
+        log_hex("QEMU3DFX LoadLibrary error=", error, "\r\n");
+        inner->Release();
+        return NULL;
+    }
     PFN_Direct3DCreate9 gpu_create = (PFN_Direct3DCreate9)GetProcAddress(gpu_module, "Direct3DCreate9");
     IDirect3D9 *gpu = gpu_create ? gpu_create(sdk) : NULL;
     if (!gpu) { inner->Release(); log_text("QEMU3DFX creation failed\r\n"); return NULL; }
