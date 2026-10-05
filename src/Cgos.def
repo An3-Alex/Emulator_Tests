@@ -1,0 +1,27 @@
+LIBRARY "Cgos"
+EXPORTS
+    CgosBoardClose             @1
+    CgosBoardGetInfoW          @6
+    CgosBoardOpen              @11
+    CgosI2CCount               @26
+    CgosI2CIsAvailable         @27
+    CgosI2CRead                @28
+    CgosI2CWrite               @31
+    CgosLibGetLastError        @45
+    CgosLibGetVersion          @46
+    CgosLibInitialize          @47
+    CgosLibInstall             @48
+    CgosLibIsAvailable         @49
+    CgosLibUninitialize        @51
+    CgosTemperatureCount       @68
+    CgosTemperatureGetCurrent  @69
+    CgosTemperatureGetInfo     @70
+    CgosVgaCount               @72
+    CgosVgaGetBacklight        @74
+    CgosVgaGetContrast         @76
+    CgosVgaSetBacklight        @79
+    CgosVgaSetContrast         @81
+    CgosWDogDisable            @88
+    CgosWDogSetConfig          @93
+    CgosWDogTrigger            @96
+

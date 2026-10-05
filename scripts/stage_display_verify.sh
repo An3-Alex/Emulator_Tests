@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Stage a second XP boot that proves both QXL displays are usable.
+set -euo pipefail
+source "$(dirname -- "$0")/image_partition.sh"
+[[ $# -eq 2 || ( $# -eq 3 && $3 == '--repair-ready' ) ]] || {
+  echo 'usage: stage_display_verify.sh WORKING_IMAGE DISPLAY_VERIFY_EXE [--repair-ready]' >&2; exit 2;
+}
+image=$1
+verifier=$2
+repair_ready=${3:-}
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+mount_dir=$(mktemp -d /tmp/m90-display-verify.XXXXXX)
+loop_device=
+mounted=0
+cleanup() {
+  if (( mounted )); then sync; umount "$mount_dir"; fi
+  if [[ -n "$loop_device" ]]; then losetup -d "$loop_device"; fi
+  rmdir "$mount_dir"
+}
+trap cleanup EXIT
+[[ -f "$image" ]] || {
+  echo 'working image missing' >&2; exit 3;
+}
+[[ -f "$verifier" && $(sha256sum "$verifier" | cut -d' ' -f1) == \
+  81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349 ]] || {
+  echo 'display verifier missing or unrecognized' >&2; exit 3;
+}
+loop_device=$(image_loop_device "$image" ro)
+ntfs-3g -o ro "$loop_device" "$mount_dir"
+mounted=1
+if [[ "$repair_ready" == '--repair-ready' ]]; then
+  [[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=ready' ]] || {
+    echo 'image is not a previously prepared copy' >&2; exit 3;
+  }
+  expected_shell=fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
+else
+  [[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-pnp' ]] || {
+    echo 'image is not in QXL installation stage' >&2; exit 3;
+  }
+  expected_shell=96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a
+fi
+shell_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
+[[ "$shell_hash" == "$expected_shell" ||
+   ( "$repair_ready" == '' && "$shell_hash" == 0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ) ||
+   ( "$repair_ready" == '--repair-ready' && "$shell_hash" == ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6 ) ]] || {
+  echo 'unexpected active XP shell' >&2; exit 3;
+}
+grep -Fq 'Matched devices: 0x00000002' "$mount_dir/NVRAM/qxl_install.log"
+grep -Fq 'Installed devices: 0x00000002' "$mount_dir/NVRAM/qxl_install.log"
+umount "$mount_dir"
+mounted=0
+losetup -d "$loop_device"
+loop_device=
+loop_device=$(image_loop_device "$image" rw)
+ntfs-3g -o big_writes "$loop_device" "$mount_dir"
+mounted=1
+if [[ "$repair_ready" == '--repair-ready' ]]; then
+  python3 "$script_dir/set_registry_dword.py" \
+    "$mount_dir/WINDOWS/system32/config/SYSTEM" ControlSet001/Services/FBWF Start 4 --expect 0
+fi
+cp "$verifier" "$mount_dir/WINDOWS/explorer.exe.new"
+mv "$mount_dir/WINDOWS/explorer.exe.new" "$mount_dir/WINDOWS/explorer.exe"
+printf 'stage=qxl-verify\n' > "$mount_dir/NVRAM/m90_setup_stage.txt"
+sync
+echo 'QXL display verification boot staged.'

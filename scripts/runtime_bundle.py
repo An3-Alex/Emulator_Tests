@@ -1,0 +1,149 @@
+"""Materialize our scripts and binaries carried by a frozen launcher.
+
+Owner images and database dumps are never part of this bundle. The separately
+licensed QEMU-3dfx runtime is included when built. Logs and generated database
+state live beside, not inside, the EXE.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+import shutil
+import sys
+
+
+POWERSHELL_FILES = (
+    "program-and-start-emulator.ps1",
+    "start-real-database.ps1",
+    "test-swiftshader.ps1",
+    "prepare-qemu3dfx.ps1",
+)
+SHELL_FILES = (
+    "prepare_image_stage.sh",
+    "stage_display_verify.sh",
+    "retry_qxl_install.sh",
+    "finalize_image_stage.sh",
+    "check_image_stage.sh",
+    "update_runtime_graphics.sh",
+    "image_partition.sh",
+    "stage_audio_bridge.sh",
+    "install_qxl_helper_shell.sh",
+    "stage_qemu3dfx.sh",
+    "stage_loader_idle.sh",
+)
+REQUIRED_PYTHON_FILES = (
+    "audio_legacy_driver.py",
+    "image_partition.py",
+    "audio_bridge_image.py",
+    "pcm_audio_bridge.py",
+    "admission_card.py",
+    "cabinet_control_panel.py",
+    "cabinet_controls.py",
+    "emulator_launcher.py",
+    "emulator_processes.py",
+    "duart_timer.py",
+    "graphics_update.py",
+    "loader_idle.py",
+    "event_log_viewer.py",
+    "image_setup.py",
+    "inspect_owner_database.py",
+    "m68k_database_bridge.py",
+    "m68k_database_transform.py",
+    "m68k_qemu_harness.py",
+    "owner_config_runtime.py",
+    "owner_database_runtime.py",
+    "portable_launcher_model.py",
+    "qmp_capture.py",
+    "qxl_setup_runner.py",
+    "rtc4543.py",
+    "virtual_touch.py",
+    "service_sram.py",
+    "qemu3dfx_image.py",
+    "qemu3dfx_package.py",
+    "runtime_bundle.py",
+    "serialloader_chip_emulator.py",
+)
+OWN_BINARIES = (
+    Path("build/Cgos.dll"),
+    Path("build/display-bootstrap.exe"),
+    Path("build/qxl-installer.exe"),
+    Path("build/display-verify.exe"),
+    Path("build/d3d9-proxy/d3d9.dll"),
+    Path("build/sram-compat/FBWFLIB.dll"),
+    Path("build/irrklang-proxy/irrKlang.dll"),
+)
+
+RETIRED_PYTHON_FILES = frozenset({
+    "audio_driver_package.py", "audio_diagnostics.py",
+    "audio_image_stage.py", "audio_setup_runner.py",
+})
+
+
+def bundled_root() -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+
+
+def runtime_root() -> Path:
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parents[1]
+    override = os.environ.get("M90_RUNTIME_ROOT")
+    if override:
+        return Path(override)
+    base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+    return base / "M90 Emulator" / "runtime"
+
+
+def runtime_payload(source: Path) -> list[tuple[Path, Path]]:
+    """Return only project-owned files needed by the live launcher."""
+    for name in REQUIRED_PYTHON_FILES:
+        path = source / "scripts" / name
+        if not path.is_file():
+            raise FileNotFoundError(f"Laufzeit-Skript fehlt im Paket: {path}")
+    files = [(source / name, Path(name)) for name in POWERSHELL_FILES]
+    files.extend(
+        (path, Path("scripts") / path.name)
+        for path in sorted((source / "scripts").glob("*.py"))
+        if path.name not in RETIRED_PYTHON_FILES
+    )
+    files.extend((source / "scripts" / name, Path("scripts") / name) for name in SHELL_FILES)
+    files.extend((source / relative, relative) for relative in OWN_BINARIES)
+    gpu = source / "build/qemu3dfx-runtime"
+    if gpu.exists():
+        from qemu3dfx_package import validate
+        manifest = validate(gpu)
+        for name in ("manifest.json", *manifest["files"]):
+            relative = Path("build/qemu3dfx-runtime") / name
+            files.append((source / relative, relative))
+    for path, _ in files:
+        if not path.is_file():
+            raise FileNotFoundError(f"Laufzeitdatei fehlt im Paket: {path}")
+    return files
+
+
+def _digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def materialize_runtime(source: Path, target: Path) -> Path:
+    """Atomically refresh packaged scripts; preserve logs/build and owner data."""
+    for origin, relative in runtime_payload(source):
+        destination = target / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.is_file() and _digest(origin) == _digest(destination):
+            continue
+        temporary = destination.with_name(destination.name + ".new")
+        shutil.copyfile(origin, temporary)
+        temporary.replace(destination)
+    return target
+
+
+def project_for_launcher() -> Path:
+    if not getattr(sys, "frozen", False):
+        return runtime_root()
+    return materialize_runtime(bundled_root(), runtime_root())

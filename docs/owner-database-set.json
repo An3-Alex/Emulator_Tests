@@ -1,0 +1,59 @@
+{
+  "schema": "m90-owner-database-set-v3",
+  "set_id": "magie-90-cc4-owner-read-2026-09-12",
+  "members": [
+    {
+      "role": "database",
+      "source_name": "Magie_90_CC4.bin",
+      "size": 1847608,
+      "sha256": "593CF4B3A1CCC83F206E1492E44B9D303EA3C05990059B8659D8308DA1DC2EE8",
+      "product": "MERKUR MAGIE  90 G   CC4",
+      "edition": "1Aa/",
+      "build_id": "151008",
+      "release_id": "070101",
+      "module_id": "61640403",
+      "load_base": 4096,
+      "end_address": 1851703,
+      "end_exclusive": 1851704,
+      "entrypoint": 5376,
+      "entrypoint_file_offset": 1280
+    },
+    {
+      "role": "loader",
+      "source_name": "Loader_61640403_L5.0b_2MB.bin",
+      "size": 3008,
+      "sha256": "B0768C65B34834C7A740615D2B0ABDB470AEC012FE4DC4A3C11531EFA221E109",
+      "signature": "|load",
+      "version": "L 5.0b",
+      "architecture": "Motorola 68020-class (inferred from MOVEC)"
+    },
+    {
+      "role": "database_module",
+      "source_name": "FactoryReset_61640403.xc",
+      "size": 1328,
+      "sha256": "4F088DB4AF5F4A5D112A003EF312EB19B4388C25902FFA03F75742379A0CD5C4",
+      "module_id": "61640403",
+      "entrypoint": 5376
+    },
+    {
+      "role": "database_module",
+      "source_name": "M90_Las_Vegas.bin",
+      "size": 1920,
+      "sha256": "DCE3A865B742123C95EA4F0B14FA16F287DDF90CD86432F68B2301B70A919783",
+      "module_id": "61640403",
+      "entrypoint": 5376
+    },
+    {
+      "role": "database_module",
+      "source_name": "M90_Multi_Juwel.bin",
+      "size": 1920,
+      "sha256": "445EF8CB754D5BCD8E8CE3901B90F0F32B53A9269F1CC2605F16119B3732A911",
+      "module_id": "61640403",
+      "entrypoint": 5376
+    }
+  ],
+  "provenance": "Owner states both files were read from their physical database.",
+  "handling": "Hash-pin and inspect read-only; do not redistribute or modify source files.",
+  "relationship": "Loader accepts module family 61640400. The main database and all three auxiliary modules declare module ID 61640403; their load extents and complement pairs validate.",
+  "runtime_status": "Protocol mapping and in-image consumption are not yet proven."
+}
