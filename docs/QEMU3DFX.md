@@ -189,11 +189,17 @@ Ohne passenden Vorbereitungsbeleg `<GPU-Kopie>.qemu3dfx.json` erfolgt kein Start
 Das untere Fenster heißt `QEMU (M90-3dfx-0)`, das obere `QEMU (M90-3dfx-1)`.
 Direkte Touchs werden ausschließlich aus dem unteren Fenster übernommen.
 
-Die Bedienfeld-Vorschau stammt weiterhin aus QXL, nicht aus dem darüber
-liegenden Host-OpenGL-Bild. In dieser Variante sind deshalb Vorschau-Touchs
-gesperrt; direkte Touchs und die Kalibriertaste bleiben verfügbar.
-Die GPU-Ausgabe wird direkt im unteren SDL-Fenster bedient, nicht über die
-QXL-Vorschau.
+Die Bedienfeld-Vorschau wechselt mit der unteren Anzeige von QXL zum echten
+Host-OpenGL-Spielbild. QMP fordert den nativen Frame vor der Fensterskalierung
+an; ohne Bildanforderung findet kein Readback statt. Die Vorschau wird etwa
+alle zwei Sekunden aktualisiert und kann ebenfalls für Touch verwendet werden.
+OpenGL-Pixelpack-, PBO- und Read-Framebuffer-Zustand werden nach dem Abgriff
+wiederhergestellt. Die gecachte QXL-Startanzeige ersetzt kein GPU-Spielbild.
+
+Das QEMU-Protokoll enthält ungefähr alle zehn Sekunden `M90_GPU_PRESENT` mit
+der Zahl der ausgeführten Bildübergaben pro Sekunde. Die Protokollierung ist
+kein vollständiger Frame-Profiler; sie unterscheidet nicht zwischen identischen
+und veränderten Bildern. Die OpenGL-Rendererzeile nennt die verwendete GPU.
 
 Im Starter unter „Emulationseinstellungen → Grafikpfad“ `qemu3dfx` wählen.
 Die mitgelieferte Host-EXE und Primäranzeige werden automatisch ausgewählt.
