@@ -120,6 +120,7 @@ class CabinetControlTests(unittest.TestCase):
 
     def test_preview_touch_deduplicates_press_and_recovers_missed_release(self) -> None:
         panel = ControlPanel.__new__(ControlPanel)
+        panel.photo = object()
         panel.pad_touch = None
         panel.qemu_touch = None
         panel._pad_point = lambda _event: (320, 240)
@@ -158,6 +159,7 @@ class CabinetControlTests(unittest.TestCase):
 
     def test_dragging_from_preview_to_qemu_does_not_start_second_contact(self) -> None:
         panel = ControlPanel.__new__(ControlPanel)
+        panel.photo = object()
         panel.pad_touch = panel.qemu_touch = None
         panel.previous_left_down = False
         panel._pad_point = lambda _event: (320, 240)

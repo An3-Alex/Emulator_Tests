@@ -12,6 +12,13 @@ GPU_REVISION = "920661f3b48bd278b93acd9cf9ff8c968afb02c9"
 PASSTHROUGH_STATE = '''void graphic_hw_passthrough(QemuConsole *con, bool passthrough)
 {
     con->passthrough = passthrough;
+    if (!passthrough) {
+        con->gpu_snapshot_requested = false;
+        if (con->gpu_snapshot) {
+            pixman_image_unref(con->gpu_snapshot);
+            con->gpu_snapshot = NULL;
+        }
+    }
 }
 
 bool qemu_console_is_passthrough(const QemuConsole *con)
@@ -19,7 +26,138 @@ bool qemu_console_is_passthrough(const QemuConsole *con)
     return con && con->passthrough;
 }
 
+pixman_image_t *qemu_console_get_gpu_snapshot(QemuConsole *con)
+{
+    con->gpu_snapshot_requested = true;
+    return con->gpu_snapshot ? pixman_image_ref(con->gpu_snapshot) : NULL;
+}
+
+bool qemu_console_gpu_snapshot_requested(QemuConsole *con)
+{
+    return con && con->passthrough && con->gpu_snapshot_requested;
+}
+
+void qemu_console_set_gpu_snapshot(QemuConsole *con, pixman_image_t *image)
+{
+    if (con->gpu_snapshot) {
+        pixman_image_unref(con->gpu_snapshot);
+    }
+    con->gpu_snapshot = image; /* Transfer ownership; QMP refs stay immutable. */
+    con->gpu_snapshot_requested = false;
+}
+
 '''
+
+GPU_SNAPSHOT = '''/* Snapshot only on QMP demand, before the window scaler. BQL is held. */
+static void m90_gpu_snapshot(void)
+{
+    QemuConsole *con = qemu_console_lookup_by_index(0);
+    MESA_PFN(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);
+    MESA_PFN(PFNGLBINDBUFFERPROC, glBindBuffer);
+    GLint framebuffer, read_buffer, default_buffer, pbo, pack[4];
+    const GLenum pack_names[] = { GL_PACK_ALIGNMENT, GL_PACK_ROW_LENGTH,
+                                 GL_PACK_SKIP_ROWS, GL_PACK_SKIP_PIXELS };
+    int v[4], width, height, stride;
+    uint8_t *data, *row;
+    pixman_image_t *image;
+
+    if (!qemu_console_gpu_snapshot_requested(con) ||
+        !p_glBindFramebuffer || !p_glBindBuffer) {
+        return;
+    }
+    mesa_gui_fullscreen(v);
+    width = v[0];
+    height = v[1] & 0x7FFFU;
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
+        v[2] < width || v[3] < height) {
+        return;
+    }
+    image = pixman_image_create_bits(PIXMAN_x8r8g8b8, width, height, NULL, 0);
+    if (!image) {
+        return;
+    }
+    data = (uint8_t *)pixman_image_get_data(image);
+    stride = pixman_image_get_stride(image);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+    for (int i = 0; i < 4; i++) {
+        glGetIntegerv(pack_names[i], &pack[i]);
+        glPixelStorei(pack_names[i], i == 0 ? 4 : 0);
+    }
+    PFN_CALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
+    PFN_CALL(glBindFramebuffer(GL_READ_FRAMEBUFFER, 0));
+    glGetIntegerv(GL_READ_BUFFER, &default_buffer);
+    glReadBuffer(GL_BACK);
+    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, data);
+    glReadBuffer(default_buffer);
+    PFN_CALL(glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer));
+    glReadBuffer(read_buffer);
+    PFN_CALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo));
+    for (int i = 0; i < 4; i++) {
+        glPixelStorei(pack_names[i], pack[i]);
+    }
+    /* OpenGL rows run bottom-up; QMP/Tk images run top-down. */
+    row = g_malloc(stride);
+    for (int y = 0; y < height / 2; y++) {
+        uint8_t *top = data + y * stride;
+        uint8_t *bottom = data + (height - 1 - y) * stride;
+        memcpy(row, top, stride);
+        memcpy(top, bottom, stride);
+        memcpy(bottom, row, stride);
+    }
+    g_free(row);
+    qemu_console_set_gpu_snapshot(con, image);
+}
+
+'''
+
+
+def capture_gpu_present(source: str) -> str:
+    source = replace_once(source, 'int MGLSwapBuffers(void)\n',
+                          GPU_SNAPSHOT + 'int MGLSwapBuffers(void)\n')
+    source = replace_once(source, '    MesaBlitScale();\n',
+                        '    m90_gpu_snapshot();\n    MesaBlitScale();\n')
+    return replace_once(source, '    SDL_GL_SwapWindow(window);\n',
+        '    SDL_GL_SwapWindow(window);\n'
+        '    /* Low-rate performance data, not per-call tracing. */\n'
+        '    {\n'
+        '        static int64_t last;\n'
+        '        static unsigned frames;\n'
+        '        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);\n'
+        '        if (!last) { last = now; }\n'
+        '        frames++;\n'
+        '        if (now - last >= 10000000000LL) {\n'
+        '            fprintf(stderr, "M90_GPU_PRESENT fps=%.2f frames=%u seconds=%.2f\\n",\n'
+        '                    frames * 1e9 / (now - last), frames, (now - last) / 1e9);\n'
+        '            frames = 0;\n'
+        '            last = now;\n'
+        '        }\n'
+        '    }\n')
+
+
+def capture_qmp_gpu(source: str) -> str:
+    start = source.index('    surface = qemu_console_surface(con);',
+                         source.index('qmp_screendump('))
+    end = source.index('    object_unref(con);',
+                       source.index('    image = pixman_image_ref(surface->image);', start))
+    return source[:start] + '''    if (qemu_console_is_passthrough(con)) {
+        image = qemu_console_get_gpu_snapshot(con);
+        if (!image) {
+            error_setg(errp, "GPU frame pending; retry screendump");
+            object_unref(con);
+            return;
+        }
+    } else {
+        surface = qemu_console_surface(con);
+        if (!surface) {
+            error_setg(errp, "no surface");
+            object_unref(con);
+            return;
+        }
+        image = pixman_image_ref(surface->image);
+    }
+''' + source[end:]
 
 
 def protect_sdl_2d(source: str) -> str:
@@ -216,16 +354,21 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
          "void qemu_graphic_console_close(QemuConsole *con);",
          "void qemu_graphic_console_close(QemuConsole *con);\n"
          "void graphic_hw_passthrough(QemuConsole *con, bool passthrough);\n"
-         "bool qemu_console_is_passthrough(const QemuConsole *con);\n" + prototypes))
+         "bool qemu_console_is_passthrough(const QemuConsole *con);\n"
+         "pixman_image_t *qemu_console_get_gpu_snapshot(QemuConsole *con);\n"
+         "bool qemu_console_gpu_snapshot_requested(QemuConsole *con);\n"
+         "void qemu_console_set_gpu_snapshot(QemuConsole *con, pixman_image_t *image);\n" + prototypes))
     # Rendering ownership is internal state, not a replaceable UI-info field.
     # RESIZED supplies only width/height and must never re-enable QXL painting.
     edit("ui/console-priv.h", lambda s: replace_once(s, "    QemuUIInfo ui_info;",
-         "    QemuUIInfo ui_info;\n    bool passthrough;"))
+         "    QemuUIInfo ui_info;\n    bool passthrough;\n"
+         "    bool gpu_snapshot_requested;\n    pixman_image_t *gpu_snapshot;"))
     edit("ui/console.c", lambda s: replace_once(replace_once(s,
          "void qemu_console_hw_update_done(", PASSTHROUGH_STATE + "void qemu_console_hw_update_done("),
          "    if (!con->hw_ops->gfx_update || con->hw_ops->gfx_update(con->hw)) {",
          "    if (con->passthrough || !con->hw_ops->gfx_update ||\n"
          "        con->hw_ops->gfx_update(con->hw)) {"))
+    edit("ui/ui-qmp-cmds.c", capture_qmp_gpu)
     edit("ui/sdl2-2d.c", protect_sdl_2d)
     sdl_add = additions(patch, "ui/sdl2.c")
     focus = sdl_add[sdl_add.index("static int fxui_grab_val"):sdl_add.index("        fxui_focus_gained(scon);")]
@@ -274,6 +417,8 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
                 s = s.replace(old, new)
             if target == 'hw/mesa/mesagl_blit.c':
                 s = protect_scaler_state(protect_blit_bounds(s))
+            if target == 'hw/mesa/mglcntx_sdlgl.c':
+                s = capture_gpu_present(s)
             updates[target] = s
     # MSYS2 native Python needs a canonical Windows file URI.
     edit("python/scripts/mkvenv.py", lambda s: s.replace('f"file://{str(wheels_dir)}"', 'Path(wheels_dir).absolute().as_uri()'))
@@ -302,7 +447,9 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
         if path.exists() and name not in owned_files:
             if name not in tracked or path.is_symlink() or path.read_bytes().replace(b"\r\n", b"\n") != pinned_file(host, HOST_REVISION, name).encode():
                 raise ValueError(f"Refusing to overwrite an unowned source change: {name}")
-    for name in filter(None, tracked):
+    # A verified previous port already normalized the pristine checkout.
+    # Re-reading every upstream file for a small patch is unnecessary.
+    for name in (() if previous_port else filter(None, tracked)):
         path = host / name
         if path.is_file() and not path.is_symlink():
             raw = path.read_bytes()

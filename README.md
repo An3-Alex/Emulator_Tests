@@ -20,6 +20,9 @@ Mit „Alles beenden“ werden die zum Emulator gehörenden Prozesse beendet.
 Dateipfade und Einstellungen bleiben für den nächsten Start gespeichert.
 Das Original-CF-Image wird nicht verändert.
 
+[SwiftShader und QXL vorbereiten](docs/grafikdateien.md): passende Dateien,
+Downloadquelle für QXL und Auswahl im Starter.
+
 ## Grafik und Voraussetzungen
 
 Windows 10/11, die im Starter angezeigten Abhängigkeiten und ausreichend freier

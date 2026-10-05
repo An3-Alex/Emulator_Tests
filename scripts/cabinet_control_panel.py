@@ -161,12 +161,11 @@ class ControlPanel:
         self.canvas.grid(row=1, column=0, columnspan=5, pady=(4, 10))
         self.canvas.create_text(200, 150, fill="white",
                                 text="Warte auf QEMU-Bildschirm …")
-        # QMP captures QXL, not the host OpenGL overlay. Do not let an outdated
-        # GPU preview inject a touch at an unrelated visible element.
-        if display_backend == "gtk":
-            self.canvas.bind("<ButtonPress-1>", self._touch_press)
-            self.canvas.bind("<B1-Motion>", self._touch_move)
-            self.canvas.bind("<ButtonRelease-1>", self._touch_release)
+        # The packaged GPU host exposes the native game frame through QMP too.
+        # Enable preview input only once a real frame has been received.
+        self.canvas.bind("<ButtonPress-1>", self._touch_press)
+        self.canvas.bind("<B1-Motion>", self._touch_move)
+        self.canvas.bind("<ButtonRelease-1>", self._touch_release)
 
         for index, (caption, name) in enumerate(BUTTONS):
             row, column = divmod(index, 5)
@@ -186,7 +185,7 @@ class ControlPanel:
         ttk.Checkbutton(frame, text="Mausklicks im QEMU-Fenster als Touch",
                         variable=self.native_mouse).grid(row=4, column=2,
                                                         columnspan=3, sticky="w")
-        ttk.Label(frame, text=("QEMU: Fenster M90-3dfx-0 verwenden; Vorschau zeigt nur den QXL-Inhalt."
+        ttk.Label(frame, text=("QEMU: Fenster M90-3dfx-0 verwenden; Vorschau wird alle 2 Sekunden aktualisiert."
                               if display_backend == "sdl" else
                               "QEMU: Reiter lower verwenden; Tasten gedrückt halten wie am Automaten.")).grid(
             row=5, column=0, columnspan=5, sticky="w")
@@ -297,6 +296,8 @@ class ControlPanel:
                 max(0, min(TOUCH_HEIGHT - 1, int(event.y * TOUCH_HEIGHT / display_h))))
 
     def _touch_press(self, event: tk.Event) -> None:
+        if getattr(self, "photo", None) is None:
+            return
         if self.pad_touch is not None or self.qemu_touch is not None:
             return
         self.pad_touch = self._pad_point(event)
