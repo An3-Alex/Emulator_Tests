@@ -29,8 +29,16 @@ Ein Downloadlink allein ersetzt nicht die Lizenzpflichten einer eigenen Verteilu
 Der aktuelle Starter benötigt **SwiftShader Build 5003, Direct3D 9, x86/32 Bit,
 Windows XP**. Eine beliebige Datei namens `d3d9.dll` reicht nicht aus.
 
-1. Eine rechtmäßig bezogene Kopie dieses Legacy-Pakets einschließlich seiner
-   Lizenz und README bereithalten und entpacken.
+1. Das Paket beschaffen: SwiftShader 3.0 war früher als kostenlose Demo von
+   TransGaming erhältlich (Paketname etwa „SwiftShader DX9 SM3 Build 5003“,
+   ZIP mit `d3d9.dll` und `SwiftShader.ini`). Einen offiziellen Download gibt
+   es nicht mehr; Kopien liegen in Software-Archiven. Die Lizenzbedingungen
+   des jeweiligen Pakets gelten, und vor der Verwendung muss die Datei per
+   SHA-256 geprüft werden (siehe unten). Den offen lizenzierten D3D9-Quellcode
+   pflegt Google im Branch
+   [legacy-d3d9](https://swiftshader.googlesource.com/SwiftShader/+/refs/heads/legacy-d3d9);
+   ein Eigenbau daraus ist aber eine andere Version und wird nicht akzeptiert.
+   Das Paket mit Lizenz und README entpacken.
 2. Die **32-Bit-`d3d9.dll`** daraus im Feld „SwiftShader-DLL“ auswählen.
    Nicht unsere Proxy-DLL und nicht die Windows-System-DLL auswählen.
 3. Die übrigen Image- und Datenbankdateien auswählen und
