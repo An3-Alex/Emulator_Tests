@@ -43,7 +43,7 @@ import hashlib, json, pathlib, sys
 image, bundle = map(pathlib.Path, sys.argv[1:3])
 receipt = pathlib.Path(str(image) + '.qemu3dfx.json')
 if receipt.is_symlink(): raise SystemExit('Symlink receipt refused')
-value = dict(version=1, backend='qemu3dfx-hybrid', image=sys.argv[3],
+value = dict(version=1, backend=json.loads((bundle/'manifest.json').read_text())['backend'], image=sys.argv[3],
              bundle_sha256=hashlib.sha256((bundle/'manifest.json').read_bytes()).hexdigest())
 temporary = receipt.with_suffix(receipt.suffix + '.new')
 if temporary.exists() or temporary.is_symlink(): raise SystemExit('Unfinished receipt')

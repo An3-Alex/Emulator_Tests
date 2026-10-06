@@ -27,8 +27,9 @@ Downloadquelle für QXL und Auswahl im Starter.
 
 Windows 10/11, die im Starter angezeigten Abhängigkeiten und ausreichend freier
 Speicherplatz für die Arbeitskopie werden benötigt. Der Grafikpfad ist wählbar:
-SwiftShader oder QEMU-3dfx. Bei QEMU-3dfx nutzt der untere Spielbildschirm die
-Host-Grafikkarte; der obere bleibt bei SwiftShader.
+SwiftShader oder QEMU-3dfx. Bei QEMU-3dfx nutzen beide Bildschirme die
+Host-Grafikkarte, mit getrennten Fenstern für unten und oben. Das Bedienfeld
+zeigt weiterhin den unteren Spielbildschirm.
 
 Der Start kann mehrere Minuten dauern. Grafik, Ton und Geräteanbindung sind
 noch nicht vollständig nachgebildet. Andere Spielepakete benötigen passende

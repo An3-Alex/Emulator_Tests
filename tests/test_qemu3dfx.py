@@ -70,7 +70,7 @@ class ImageMigrationTests(unittest.TestCase):
             path.write_bytes(("new-" + name).encode())
             files[f"guest/{name}"] = digest(path.read_bytes())
         (self.bundle / "manifest.json").write_text("fixture")
-        self.manifest = {"files": files}
+        self.manifest = {"backend": "qemu3dfx-dual", "files": files}
         self.patchers = [
             patch.object(image_module, "PROXY_HASH", digest(b"standard-proxy")),
             patch.object(image_module, "GAME_HASH", digest(b"game")),

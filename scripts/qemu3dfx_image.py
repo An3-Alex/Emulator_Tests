@@ -16,8 +16,10 @@ SYSTEM = "WINDOWS/system32/config/SYSTEM"
 DRIVER = "WINDOWS/system32/drivers/fxptl.sys"
 DRIVER_PATH = r"\SystemRoot\system32\drivers\fxptl.sys"
 LEGACY_DRIVER_PATH = r"%SystemRoot%\system32\drivers\fxptl.sys"
-LEGACY_OPENGL_HASHES = {"385115486db927790080371dac45204a5cf809aba00cbd72c52c647020f51c8b"}
+LEGACY_OPENGL_HASHES = {"385115486db927790080371dac45204a5cf809aba00cbd72c52c647020f51c8b",
+                        "67318a811a84c9742a90622ff674f13cf65dcb7d76cd98740dd5246bed0abc65"}
 LEGACY_WINE_HASHES = {
+    "d3d9.dll": {"50338a4b5ce53d3b7ab6e04f639b37c76edf2acf85f31f15b31c8ca2672f99bf"},
     "wined3d.dll": {"40140e6c87562a3288ea52840270a9446e9cdaae2680a049e405ea3e2fcd5220",
                     "f4a7f12b1c802db676dd1766e55ce02a0fb7afa465633d194f7fdc3c3a23ac18"},
     "wined3d_d3d9.dll": {"baa7f96adb69d1413c76a5c0d12a759db0377ed3627d4263025b5aaf9f051aac",
@@ -59,6 +61,7 @@ def update_guest_dlls(root: Path, bundle: Path, state: dict, entries: list[dict]
             changed.append(entry)
             entry["replacement"] = sha256(target)
         state["bundle_sha256"] = sha256(bundle / "manifest.json")
+        state["backend"] = manifest["backend"]
         next_marker.write_text(json.dumps(state, indent=2) + "\n")
         next_marker.replace(marker)
     except Exception:
@@ -251,7 +254,7 @@ def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
         if target.with_name(target.name + ".gpu-new").exists():
             raise ValueError(f"Unfinished migration file: {relative}")
         entries.append(entry)
-    state = dict(version=1, state="backed-up", backend="qemu3dfx-hybrid",
+    state = dict(version=1, state="backed-up", backend=manifest["backend"],
                  bundle_sha256=sha256(bundle / "manifest.json"), files=entries)
     marker.write_text(json.dumps(state, indent=2) + "\n")
     replaced = []

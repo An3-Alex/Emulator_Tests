@@ -81,6 +81,16 @@ class SnapshotTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             capture_gpu_present('unknown revision')
 
+    def test_windows_present_is_instrumented_as_well_as_sdl(self):
+        fixed = capture_gpu_present('''int MGLSwapBuffers(void)
+{
+    MesaBlitScale();
+    return SwapBuffers(hDC);
+}
+''')
+        self.assertIn('m90_gpu_snapshot();', fixed)
+        self.assertIn('M90_GPU_PRESENT output=%u', fixed)
+
 
 if __name__ == '__main__':
     unittest.main()

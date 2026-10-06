@@ -123,8 +123,8 @@ def build(checkout: Path, runtime: Path, wine: Path, proxy: Path, destination: P
         if not re.search(r"^QEMU emulator version 11\.1\.0(?:\s|$)", version) or (
                 "featuring qemu-3dfx@920661f-" not in version):
             raise ValueError("Packaged executable does not match the modern GPU host")
-    manifest = dict(version=1, backend="qemu3dfx-hybrid", qemu_revision=REVISION,
-                    wine_revision=WINE_REVISION, gpu_adapter=0, cpu_adapter=1, memory_layout="m90-dual-qxl-v1",
+    manifest = dict(version=1, backend="qemu3dfx-dual", qemu_revision=REVISION,
+                    wine_revision=WINE_REVISION, gpu_adapters=[0, 1], cpu_adapters=[], memory_layout="m90-dual-qxl-v1",
                     files={name: sha256(destination / name) for name in files})
     if host_source is not None:
         manifest.update(host_revision=HOST_REVISION, host_version=HOST_VERSION)
@@ -139,9 +139,12 @@ def validate(root: Path) -> dict:
         raise ValueError("QEMU-3dfx-Laufzeitpaket fehlt oder ist unvollständig: "
                          "Die aktuelle Starter-EXE erneut ausführen, um die enthaltene Laufzeit bereitzustellen.")
     manifest = json.loads(manifest_path.read_text())
-    if (manifest.get("version") != 1 or manifest.get("backend") != "qemu3dfx-hybrid"
+    topology = ((manifest.get('backend') == 'qemu3dfx-dual' and
+                 manifest.get('gpu_adapters') == [0, 1] and manifest.get('cpu_adapters') == []) or
+                (manifest.get('backend') == 'qemu3dfx-hybrid' and
+                 manifest.get('gpu_adapter') == 0 and manifest.get('cpu_adapter') == 1))
+    if (manifest.get("version") != 1 or not topology
             or manifest.get("qemu_revision") != REVISION or manifest.get("wine_revision") != WINE_REVISION
-            or manifest.get("gpu_adapter") != 0 or manifest.get("cpu_adapter") != 1
             or manifest.get("memory_layout") != "m90-dual-qxl-v1"):
         raise ValueError("Unknown GPU runtime manifest")
     if ("host_revision" in manifest or "host_version" in manifest) and (
@@ -184,7 +187,7 @@ def verify_launch(image: Path, qemu: Path) -> None:
         raise ValueError("GPU-Arbeitskopie noch nicht eingerichtet: im Starter ‚Frisches Image einrichten‘ "
                          "ausführen oder eine bereits vorbereitete getrennte Arbeitskopie starten.")
     receipt = json.loads(receipt_path.read_text())
-    if (receipt.get("version") != 1 or receipt.get("backend") != "qemu3dfx-hybrid"
+    if (receipt.get("version") != 1 or receipt.get("backend") not in ("qemu3dfx-hybrid", "qemu3dfx-dual")
             or receipt.get("bundle_sha256") != sha256(root / "manifest.json")
             or Path(receipt.get("image", "")).resolve() != image.resolve()):
         raise ValueError("No matching offline GPU preparation receipt")

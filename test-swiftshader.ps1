@@ -66,7 +66,7 @@ $launchPlan = [ordered]@{
     cabinet_lower_device = 'lower'
     graphics_backend = $GraphicsBackend
     display_backend = if ($GraphicsBackend -eq 'qemu3dfx') { 'sdl' } else { 'gtk' }
-    gpu_adapters = @($(if ($GraphicsBackend -eq 'qemu3dfx') { 0 }))
+    gpu_adapters = @($(if ($GraphicsBackend -eq 'qemu3dfx') { 0; 1 }))
     guest_pointer = if ($UsbTablet) { 'USB tablet (absolute coordinates)' } else { 'PS/2 mouse' }
     guest_reboots_allowed = $true
 }

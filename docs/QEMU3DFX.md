@@ -8,6 +8,12 @@ Für das D3D9-Spiel ist der Pfad:
 
 `D3D9 → WineD3D → OpenGL-Gastwrapper → QEMU mesapt → Host-Grafikkarte`.
 
+Beide Gastanzeigen verwenden diesen Pfad. Der Gast-Monitor des jeweiligen
+Fensters bestimmt den GPU-Ausgang: unten/primär ist Ausgang 0, oben ist Ausgang 1.
+Fenster, Basiskontexte, Bereitschaft und Skalierung bleiben je Ausgang getrennt.
+Der 3dfx-Modus lädt zur Darstellung keine SwiftShader-DLL; diese bleibt für den
+separat wählbaren Softwaremodus verfügbar.
+
 Ein bloßer Austausch der QEMU-EXE aktiviert keine D3D9-Beschleunigung. Die
 zusammengehörigen Gast-DLLs und der XP-Treiber `fxptl.sys` werden ebenfalls
 benötigt. Die Vorbereitung registriert seinen MAPMEM-Dienst ausschließlich in
@@ -162,7 +168,7 @@ durch die Auswahl des anderen Grafikpfads verändert.
 `scripts/qemu3dfx_package.py build` bündelt den Host mit allen rekursiv
 benötigten Nicht-System-DLLs, den x86-BIOS-Dateien und den fünf Gastdateien.
 Die Parameter sind `--checkout`, `--runtime` (UCRT64-bin), `--wine`, `--proxy`
-(die hybride D3D9-Bridge) und `--destination` (ein noch nicht vorhandener Ordner).
+(die Dual-GPU-D3D9-Bridge) und `--destination` (ein noch nicht vorhandener Ordner).
 Für den aktuellen Host kommt `--host-source <QEMU-11.1.0-Checkout>` hinzu;
 dessen Build liegt unter `build-m90`. Das Manifest hält Host- und
 GPU-Transportrevision getrennt fest. Ältere Pakete bleiben lesbar.
@@ -173,7 +179,7 @@ Die WineD3D-Dateien entstehen im gepinnten Build-Checkout mit
 Importnamen mit dem dortigen `docker/strip_import_decorations.py` normalisiert.
 Die optionalen Win9x-PE-Headeränderungen werden für XP nicht angewendet. Das
 Gastpaket enthält `wined3d.dll`, dessen D3D9-Frontend als `wined3d_d3d9.dll`,
-`opengl32.dll`, die hybride `d3d9.dll` und `fxptl.sys`.
+`opengl32.dll`, die Dual-GPU-`d3d9.dll` und `fxptl.sys`.
 
 Für die Vorbereitung muss eine vollständig eingerichtete, separate Kopie
 vorliegen. `prepare-qemu3dfx.ps1 -SourceImage <bisherige-Kopie>

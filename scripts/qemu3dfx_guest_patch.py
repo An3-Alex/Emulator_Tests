@@ -1,6 +1,7 @@
 """Apply the pinned OpenGL wrapper's XP-safe diagnostic output fix."""
 from pathlib import Path
 import sys
+from qemu3dfx_dual_output import patch_guest
 
 
 def patch_debug_output(source: str) -> str:
@@ -28,7 +29,8 @@ def patch_debug_output(source: str) -> str:
 def apply(checkout: Path) -> None:
     paths = [checkout / "wrappers/mesa/src/wrapgl32.c",
              checkout / "wrappers/fxlib/fxhook.c"]
-    updates = [(path, patch_debug_output(path.read_text())) for path in paths]
+    updates = [(path, patch_guest(patch_debug_output(path.read_text())) if path.name == 'wrapgl32.c'
+                else patch_debug_output(path.read_text())) for path in paths]
     for path, value in updates:
         path.write_text(value)
 

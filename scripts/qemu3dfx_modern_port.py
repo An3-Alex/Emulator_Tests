@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+from qemu3dfx_dual_output import patch_sdl, patch_transport, patch_wgl, patch_blit
 
 HOST_REVISION = "84f07211cc5b4fc6a371559bf8a5de4fb068e648"
 GPU_REVISION = "920661f3b48bd278b93acd9cf9ff8c968afb02c9"
@@ -51,9 +52,15 @@ void qemu_console_set_gpu_snapshot(QemuConsole *con, pixman_image_t *image)
 GPU_SNAPSHOT = '''/* Snapshot only on QMP demand, before the window scaler. BQL is held. */
 static void m90_gpu_snapshot(void)
 {
-    QemuConsole *con = qemu_console_lookup_by_index(0);
+    QemuConsole *con = qemu_console_lookup_by_index(mesa_current_output());
     MESA_PFN(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer);
     MESA_PFN(PFNGLBINDBUFFERPROC, glBindBuffer);
+    /* The WGL host links no GL import library: resolve GL 1.x entry points
+     * through the transport table like the rest of hw/mesa does. */
+    MESA_PFN(PFNGLGETINTEGERVPROC, glGetIntegerv);
+    MESA_PFN(PFNGLPIXELSTOREIPROC, glPixelStorei);
+    MESA_PFN(PFNGLREADBUFFERPROC, glReadBuffer);
+    MESA_PFN(PFNGLREADPIXELSPROC, glReadPixels);
     GLint framebuffer, read_buffer, default_buffer, pbo, pack[4];
     const GLenum pack_names[] = { GL_PACK_ALIGNMENT, GL_PACK_ROW_LENGTH,
                                  GL_PACK_SKIP_ROWS, GL_PACK_SKIP_PIXELS };
@@ -62,7 +69,8 @@ static void m90_gpu_snapshot(void)
     pixman_image_t *image;
 
     if (!qemu_console_gpu_snapshot_requested(con) ||
-        !p_glBindFramebuffer || !p_glBindBuffer) {
+        !p_glBindFramebuffer || !p_glBindBuffer || !p_glGetIntegerv ||
+        !p_glPixelStorei || !p_glReadBuffer || !p_glReadPixels) {
         return;
     }
     mesa_gui_fullscreen(v);
@@ -78,24 +86,24 @@ static void m90_gpu_snapshot(void)
     }
     data = (uint8_t *)pixman_image_get_data(image);
     stride = pixman_image_get_stride(image);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+    PFN_CALL(glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer));
+    PFN_CALL(glGetIntegerv(GL_READ_BUFFER, &read_buffer));
+    PFN_CALL(glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo));
     for (int i = 0; i < 4; i++) {
-        glGetIntegerv(pack_names[i], &pack[i]);
-        glPixelStorei(pack_names[i], i == 0 ? 4 : 0);
+        PFN_CALL(glGetIntegerv(pack_names[i], &pack[i]));
+        PFN_CALL(glPixelStorei(pack_names[i], i == 0 ? 4 : 0));
     }
     PFN_CALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
     PFN_CALL(glBindFramebuffer(GL_READ_FRAMEBUFFER, 0));
-    glGetIntegerv(GL_READ_BUFFER, &default_buffer);
-    glReadBuffer(GL_BACK);
-    glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, data);
-    glReadBuffer(default_buffer);
+    PFN_CALL(glGetIntegerv(GL_READ_BUFFER, &default_buffer));
+    PFN_CALL(glReadBuffer(GL_BACK));
+    PFN_CALL(glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_BYTE, data));
+    PFN_CALL(glReadBuffer(default_buffer));
     PFN_CALL(glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer));
-    glReadBuffer(read_buffer);
+    PFN_CALL(glReadBuffer(read_buffer));
     PFN_CALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo));
     for (int i = 0; i < 4; i++) {
-        glPixelStorei(pack_names[i], pack[i]);
+        PFN_CALL(glPixelStorei(pack_names[i], pack[i]));
     }
     /* OpenGL rows run bottom-up; QMP/Tk images run top-down. */
     row = g_malloc(stride);
@@ -118,22 +126,29 @@ def capture_gpu_present(source: str) -> str:
                           GPU_SNAPSHOT + 'int MGLSwapBuffers(void)\n')
     source = replace_once(source, '    MesaBlitScale();\n',
                         '    m90_gpu_snapshot();\n    MesaBlitScale();\n')
-    return replace_once(source, '    SDL_GL_SwapWindow(window);\n',
-        '    SDL_GL_SwapWindow(window);\n'
+    statistics = (
         '    /* Low-rate performance data, not per-call tracing. */\n'
         '    {\n'
-        '        static int64_t last;\n'
-        '        static unsigned frames;\n'
+        '        static int64_t last_by_output[2];\n'
+        '        static unsigned frames_by_output[2];\n'
+        '        unsigned output = mesa_current_output();\n'
+        '        int64_t *last = &last_by_output[output];\n'
+        '        unsigned *frames = &frames_by_output[output];\n'
         '        int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);\n'
-        '        if (!last) { last = now; }\n'
-        '        frames++;\n'
-        '        if (now - last >= 10000000000LL) {\n'
-        '            fprintf(stderr, "M90_GPU_PRESENT fps=%.2f frames=%u seconds=%.2f\\n",\n'
-        '                    frames * 1e9 / (now - last), frames, (now - last) / 1e9);\n'
-        '            frames = 0;\n'
-        '            last = now;\n'
+        '        if (!*last) { *last = now; }\n'
+        '        (*frames)++;\n'
+        '        if (now - *last >= 10000000000LL) {\n'
+        '            fprintf(stderr, "M90_GPU_PRESENT output=%u fps=%.2f frames=%u seconds=%.2f\\n",\n'
+        '                    output, *frames * 1e9 / (now - *last), *frames, (now - *last) / 1e9);\n'
+        '            *frames = 0;\n'
+        '            *last = now;\n'
         '        }\n'
         '    }\n')
+    if '    return SwapBuffers(hDC);\n' in source:
+        return replace_once(source, '    return SwapBuffers(hDC);\n',
+                            statistics + '    return SwapBuffers(hDC);\n')
+    return replace_once(source, '    SDL_GL_SwapWindow(window);\n',
+                        '    SDL_GL_SwapWindow(window);\n' + statistics)
 
 
 def capture_qmp_gpu(source: str) -> str:
@@ -278,7 +293,8 @@ def apply(host: Path, gpu: Path) -> None:
     if revision(host) != HOST_REVISION or revision(gpu) != GPU_REVISION:
         raise ValueError("Unexpected host/GPU source revision")
     marker = host / "m90-gpu-port.json"
-    recipe = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    recipe = hashlib.sha256(Path(__file__).read_bytes() +
+                            Path(__file__).with_name('qemu3dfx_dual_output.py').read_bytes()).hexdigest()
     previous_port = marker.exists()
     owned_files = set()
     if marker.exists():
@@ -357,7 +373,8 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
          "bool qemu_console_is_passthrough(const QemuConsole *con);\n"
          "pixman_image_t *qemu_console_get_gpu_snapshot(QemuConsole *con);\n"
          "bool qemu_console_gpu_snapshot_requested(QemuConsole *con);\n"
-         "void qemu_console_set_gpu_snapshot(QemuConsole *con, pixman_image_t *image);\n" + prototypes))
+         "void qemu_console_set_gpu_snapshot(QemuConsole *con, pixman_image_t *image);\n"
+         "unsigned mesa_current_output(void);\nvoid mesa_select_output(unsigned output);\n" + prototypes))
     # Rendering ownership is internal state, not a replaceable UI-info field.
     # RESIZED supplies only width/height and must never re-enable QXL painting.
     edit("ui/console-priv.h", lambda s: replace_once(s, "    QemuUIInfo ui_info;",
@@ -398,7 +415,8 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
         s = replace_once(s, "    case SDL_WINDOWEVENT_FOCUS_GAINED:", "    case SDL_WINDOWEVENT_FOCUS_GAINED:\n        fxui_focus_gained(scon);")
         s = replace_once(s, "        if (gui_grab && !gui_fullscreen) {", "        if (!fxui_focus_lost() && gui_grab && !gui_fullscreen) {\n            fxui_grab_val(0x80 | gui_grab);")
         s = replace_once(s, "static const DisplayChangeListenerOps dcl_2d_ops", windows + "static const DisplayChangeListenerOps dcl_2d_ops")
-        return replace_once(s, "        SDL_SetWindowIcon(sdl2_console[0].real_window, icon);", "        SDL_SetWindowIcon(sdl2_console[0].real_window, icon);\n        scon_cb.icon = icon;")
+        s = replace_once(s, "        SDL_SetWindowIcon(sdl2_console[0].real_window, icon);", "        SDL_SetWindowIcon(sdl2_console[0].real_window, icon);\n        scon_cbs[0].icon = scon_cbs[1].icon = icon;")
+        return patch_sdl(s)
     edit("ui/sdl2.c", sdl)
     edit("meson.build", lambda s: replace_once(s, "  subdir('target')", "  subdir('target')\n  subdir('hw/3dfx')\n  subdir('hw/mesa')"))
     feature = additions(patch, "system/vl.c").replace("                feature();\n", "")
@@ -416,7 +434,11 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
                              ("0xefffe000", "0x9fffe000"), ("(0xE0U << 24)", "(0x90U << 24)")):
                 s = s.replace(old, new)
             if target == 'hw/mesa/mesagl_blit.c':
-                s = protect_scaler_state(protect_blit_bounds(s))
+                s = patch_blit(protect_scaler_state(protect_blit_bounds(s)))
+            if target == 'hw/mesa/mesapt_mm.c':
+                s = patch_transport(s)
+            if target == 'hw/mesa/mglcntx_mingw.c':
+                s = capture_gpu_present(patch_wgl(s))
             if target == 'hw/mesa/mglcntx_sdlgl.c':
                 s = capture_gpu_present(s)
             updates[target] = s

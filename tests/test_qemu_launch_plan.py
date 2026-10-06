@@ -63,7 +63,7 @@ class QemuLaunchPlanTests(unittest.TestCase):
             visible = plan.get("visible_qemu") or plan.get("runtime", {}).get("visible_qemu") or plan
             self.assertEqual(visible["graphics_backend"], "qemu3dfx")
             self.assertEqual(visible["display_backend"], "sdl")
-            self.assertEqual(visible["gpu_adapters"], [0])
+            self.assertEqual(visible["gpu_adapters"], [0, 1])
             self.assertIn("-name M90-3dfx -display sdl,gl=off", visible["arguments"])
             self.assertIn('-L "D:/GPU Runtime/host/pc-bios"', visible["arguments"])
             self.assertNotIn("-display gtk", visible["arguments"])

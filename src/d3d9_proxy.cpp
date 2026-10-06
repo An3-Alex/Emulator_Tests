@@ -262,9 +262,9 @@ class Direct3D9Proxy : public IDirect3D9 {
     IDirect3D9 *inner_;
 #ifdef M90_QEMU3DFX
     IDirect3D9 *gpu_;
-    IDirect3D9 *engine(UINT adapter) const
+    IDirect3D9 *engine(UINT) const
     {
-        return adapter == 0 ? gpu_ : inner_;
+        return gpu_;
 #define M90_ENGINE(adapter) engine(adapter)
     }
 #else
@@ -301,7 +301,7 @@ public:
         if (!refs) delete this;
         return refs;
     }
-    HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void *init) { return inner_->RegisterSoftwareDevice(init); }
+    HRESULT STDMETHODCALLTYPE RegisterSoftwareDevice(void *init) { return M90_ENGINE(0)->RegisterSoftwareDevice(init); }
     UINT STDMETHODCALLTYPE GetAdapterCount()
     {
         UINT count = cabinet_monitor(1, NULL, NULL) ? 2 :
@@ -388,7 +388,7 @@ public:
             log_text("CreateDevice: separate monitor, non-exclusive windowed mode\r\n");
         }
 #ifdef M90_QEMU3DFX
-        log_text(a == 0 ? "CreateDevice backend=QEMU3DFX\r\n" : "CreateDevice backend=SwiftShader\r\n");
+        log_text("CreateDevice backend=QEMU3DFX\r\n");
 #endif
         HRESULT hr = M90_ENGINE(a)->CreateDevice(map_adapter(a), t, w, flags, effective, device);
         log_hex("CreateDevice result=", (DWORD)hr, "\r\n");
@@ -432,6 +432,7 @@ extern "C" __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
     }
     log_text("QEMU3DFX OpenGL ready\r\n");
 #endif
+#ifndef M90_QEMU3DFX
     const char real_name[] = "swiftshader_d3d9.dll";
     DWORD i = 0;
     while (real_name[i] && length + i + 1 < MAX_PATH) { path[length + i] = real_name[i]; ++i; }
@@ -443,9 +444,10 @@ extern "C" __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
     IDirect3D9 *inner = create(sdk);
     log_hex("real Direct3DCreate9 -> ", (DWORD)(ULONG_PTR)inner, "\r\n");
     if (!inner) return NULL;
+#endif
 #ifdef M90_QEMU3DFX
     const char gpu_name[] = "wined3d_d3d9.dll";
-    i = 0;
+    DWORD i = 0;
     while (gpu_name[i] && length + i + 1 < MAX_PATH) { path[length + i] = gpu_name[i]; ++i; }
     path[length + i] = 0;
     HMODULE gpu_module = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
@@ -454,18 +456,17 @@ extern "C" __declspec(dllexport) IDirect3D9 *WINAPI Direct3DCreate9(UINT sdk)
         log_text("QEMU3DFX backend missing\r\n");
         log_text("QEMU3DFX DLL path="); log_text(path); log_text("\r\n");
         log_hex("QEMU3DFX LoadLibrary error=", error, "\r\n");
-        inner->Release();
         return NULL;
     }
     PFN_Direct3DCreate9 gpu_create = (PFN_Direct3DCreate9)GetProcAddress(gpu_module, "Direct3DCreate9");
     IDirect3D9 *gpu = gpu_create ? gpu_create(sdk) : NULL;
-    if (!gpu) { inner->Release(); log_text("QEMU3DFX creation failed\r\n"); return NULL; }
-    Direct3D9Proxy *proxy = new Direct3D9Proxy(inner, gpu);
+    if (!gpu) { log_text("QEMU3DFX creation failed\r\n"); return NULL; }
+    Direct3D9Proxy *proxy = new Direct3D9Proxy(NULL, gpu);
     if (!proxy) gpu->Release();
 #else
     Direct3D9Proxy *proxy = new Direct3D9Proxy(inner);
-#endif
     if (!proxy) { inner->Release(); log_text("proxy allocation failed\r\n"); }
+#endif
     return proxy;
 }
 

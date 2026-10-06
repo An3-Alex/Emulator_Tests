@@ -15,6 +15,7 @@ enum { GL_READ_FRAMEBUFFER_BINDING, GL_READ_BUFFER, GL_PIXEL_PACK_BUFFER_BINDING
 static int framebuffer = 9, pbo = 17, buffers[10] = {55,0,0,0,0,0,0,0,0,77};
 static int pack[4] = {8,13,3,5}, reads, valid_size = 1;
 static QemuConsole console;
+static unsigned mesa_current_output(void) { return 0; }
 #define MESA_PFN(type, name) void *p_##name = (void *)1
 #define PFN_CALL(call) call
 #define g_malloc malloc

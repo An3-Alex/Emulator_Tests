@@ -71,8 +71,9 @@ ist kein bereits unterstützter Ersatz.
 ## Auswahl des Grafikpfads
 
 Bei „SwiftShader“ werden beide Anzeigen in Software gerendert. Bei „QEMU-3dfx“
-nutzt der untere Spielbildschirm die Host-GPU, während der obere weiterhin
-SwiftShader verwendet. Die SwiftShader-DLL wird daher für beide Optionen benötigt.
+nutzen beide Bildschirme die Host-GPU. Die Vorbereitung hält die eigene
+SwiftShader-DLL als Grundlage für den separat wählbaren Softwaremodus vor;
+im 3dfx-Spielbetrieb wird sie nicht geladen.
 
 Die Einstellung „QXL-Framebuffer je Anzeige“ ist nicht der Grafikspeicher der
 Host-GPU. Sie setzt QEMUs `vgamem_mb`. QEMU reserviert dafür je QXL-Gerät einen
@@ -87,7 +88,7 @@ Erhöhung auf den zuvor funktionierenden Wert zurückgehen.
 
 QEMU-3dfx ersetzt nicht sämtliche emulierte Hardware durch native Hardware.
 Auch mit GPU-Rendering können die Gast-CPU, Grafikaufrufe durch die
-Virtualisierungsgrenze und das Software-Rendering der oberen Anzeige bremsen.
+Virtualisierungsgrenze und die Synchronisation mit der Datenbank bremsen.
 Die Grafikpfad-Auswahl allein belegt deshalb keinen bestimmten Engpass.
 
 Die Spiel-PC-Beschleunigung sollte auf WHPX stehen, sofern diese auf dem Host

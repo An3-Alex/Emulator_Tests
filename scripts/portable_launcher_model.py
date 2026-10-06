@@ -23,7 +23,7 @@ EMULATION_FIELDS = (
     ("guest_ram_mib", "Spiel-PC", "RAM (MiB)", int, (512, 3072), "Standard: 2048; mehr RAM beschleunigt die CPU nicht."),
     ("guest_vcpus", "Spiel-PC", "Virtuelle CPUs", int, (1, 2), "Standard: 1; XP/Image-Kompatibilität bei Änderungen beachten."),
     ("acceleration", "Spiel-PC", "Beschleunigung", str, ("whpx", "tcg"), "WHPX: Windows-Hypervisor; TCG: Software-Emulation, langsamer."),
-    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("swiftshader", "qemu3dfx"), "QEMU-3dfx und seine Gastdateien werden automatisch bereitgestellt. Unterer Ausgang über GPU, oberer über SwiftShader; Primäranzeige wird automatisch gewählt. Bedienfeld-Vorschau wird alle 2 Sekunden aktualisiert."),
+    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("swiftshader", "qemu3dfx"), "QEMU-3dfx und seine Gastdateien werden automatisch bereitgestellt. Beide Ausgänge über GPU; der untere Bildschirm ist die Primäranzeige. Bedienfeld-Vorschau wird alle 2 Sekunden aktualisiert."),
     ("qxl_vram_mib", "Spiel-PC", "QXL-Framebuffer je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; nicht der VRAM der Host-GPU. QEMU reserviert mindestens das Doppelte je QXL-PCI-RAM-Bereich. 256 MiB vergrößert diese Bereiche auf je 512 MiB und kann mit alten XP-Treibern Probleme verursachen."),
     ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
     ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
