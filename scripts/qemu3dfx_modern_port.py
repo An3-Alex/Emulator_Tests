@@ -5,7 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
-from qemu3dfx_dual_output import patch_sdl, patch_transport, patch_wgl, patch_blit
+from qemu3dfx_dual_output import patch_sdl, patch_transport, patch_wgl, patch_blit, patch_slots
 
 HOST_REVISION = "84f07211cc5b4fc6a371559bf8a5de4fb068e648"
 GPU_REVISION = "920661f3b48bd278b93acd9cf9ff8c968afb02c9"
@@ -437,6 +437,8 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
                 s = patch_blit(protect_scaler_state(protect_blit_bounds(s)))
             if target == 'hw/mesa/mesapt_mm.c':
                 s = patch_transport(s)
+            if target == 'hw/mesa/mglfuncs.h':
+                s = patch_slots(s)
             if target == 'hw/mesa/mglcntx_mingw.c':
                 s = capture_gpu_present(patch_wgl(s))
             if target == 'hw/mesa/mglcntx_sdlgl.c':

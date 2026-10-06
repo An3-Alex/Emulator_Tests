@@ -26,45 +26,25 @@ from m68k_database_bridge import (
 
 
 class CabinetDisplayTests(unittest.TestCase):
-    def test_calibration_dialog_sends_one_command_only_after_two_liftoffs(self):
-        from types import SimpleNamespace
+    def test_calibration_reset_asks_first_and_sends_reset_only_after_yes(self):
         panel = ControlPanel.__new__(ControlPanel)
         panel.root = MagicMock()
-        panel.calibration_window = None
-        panel.pad_touch = panel.qemu_touch = None
-        panel.held_buttons = set()
         panel._send = MagicMock(return_value=True)
-        canvas = MagicMock()
-        with patch.object(panel_module.tk, "Toplevel") as top, \
-             patch.object(panel_module.tk, "Canvas", return_value=canvas), \
-             patch.object(panel_module.ttk, "Label"), patch.object(panel_module.ttk, "Button"):
-            panel._calibrate_touch()
-            bindings = {call.args[0]: call.args[1] for call in canvas.bind.call_args_list}
-            press, release = bindings["<ButtonPress-1>"], bindings["<ButtonRelease-1>"]
-            release(SimpleNamespace(x=100, y=525))
+        with patch.object(panel_module.messagebox, "askyesno", return_value=False) as ask:
+            panel._reset_touch_calibration()
+            ask.assert_called_once()
             panel._send.assert_not_called()
-            press(SimpleNamespace(x=100, y=525))
-            press(SimpleNamespace(x=100, y=525))
-            release(SimpleNamespace(x=100, y=525))
-            panel._send.assert_not_called()
-            press(SimpleNamespace(x=700, y=75))
-            release(SimpleNamespace(x=700, y=75))
-            panel._send.assert_called_once_with({"type": "touch_calibration", "points": [[100, 525], [700, 75]]})
-            self.assertIsNone(panel.calibration_window)
-            top.return_value.destroy.assert_called_once()
+        with patch.object(panel_module.messagebox, "askyesno", return_value=True):
+            panel._reset_touch_calibration()
+        panel._send.assert_called_once_with({"type": "touch_calibration_reset"})
 
-    def test_calibration_cancel_sends_no_input_and_retains_previous_settings(self):
-        panel = ControlPanel.__new__(ControlPanel)
-        panel.root = MagicMock(); panel.calibration_window = None
-        panel.pad_touch = panel.qemu_touch = None; panel.held_buttons = set()
-        panel._send = MagicMock()
-        with patch.object(panel_module.tk, "Toplevel") as top, \
-             patch.object(panel_module.tk, "Canvas"), patch.object(panel_module.ttk, "Label"), \
-             patch.object(panel_module.ttk, "Button") as button:
-            panel._calibrate_touch()
-            button.call_args.kwargs["command"]()
-            panel._send.assert_not_called()
-            self.assertIsNone(panel.calibration_window)
+    def test_panel_no_longer_accepts_free_calibration_points(self):
+        with self.assertRaises(ValueError):
+            validate_command({"type": "touch_calibration", "points": [[100, 525], [700, 75]]})
+        with self.assertRaises(ValueError):
+            validate_command({"type": "touch_calibration_reset", "points": None})
+        self.assertEqual(validate_command({"type": "touch_calibration_reset"}),
+                         {"type": "touch_calibration_reset"})
 
     def test_preview_captures_cabinet_lower_device_not_boot_primary(self) -> None:
         stream = MagicMock()

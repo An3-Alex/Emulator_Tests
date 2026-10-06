@@ -17,7 +17,11 @@ DRIVER = "WINDOWS/system32/drivers/fxptl.sys"
 DRIVER_PATH = r"\SystemRoot\system32\drivers\fxptl.sys"
 LEGACY_DRIVER_PATH = r"%SystemRoot%\system32\drivers\fxptl.sys"
 LEGACY_OPENGL_HASHES = {"385115486db927790080371dac45204a5cf809aba00cbd72c52c647020f51c8b",
-                        "67318a811a84c9742a90622ff674f13cf65dcb7d76cd98740dd5246bed0abc65"}
+                        "67318a811a84c9742a90622ff674f13cf65dcb7d76cd98740dd5246bed0abc65",
+                        "d6722aa9583ceb7384c8bc51675ed45e6f920fd04f6b7fe2d74b846fbc47559e",
+                        "d4955e298ec0f0c2ec1697e1ef5f205782d3eb9f80436f5129de4b8cb8b40b51",
+                        "b4d5c55e8acf33a6e48da68ad56044c42072a1ec0509b5e3a612ceecefc6bb9d",
+                        "988a3aa09c09c9f0977bd03f7f46c0ab847115b4f6944e09f1d8876555e92da9"}
 LEGACY_WINE_HASHES = {
     "d3d9.dll": {"50338a4b5ce53d3b7ab6e04f639b37c76edf2acf85f31f15b31c8ca2672f99bf"},
     "wined3d.dll": {"40140e6c87562a3288ea52840270a9446e9cdaae2680a049e405ea3e2fcd5220",

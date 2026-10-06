@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from qemu3dfx_modern_port import GPU_REVISION, pinned_file, capture_gpu_present, GPU_SNAPSHOT
-from qemu3dfx_dual_output import patch_guest, patch_wgl, patch_transport, patch_sdl, patch_blit
+from qemu3dfx_dual_output import patch_guest, patch_wgl, patch_transport, patch_sdl, patch_blit, patch_slots
 
 
 def function(source, signature):
@@ -35,9 +35,12 @@ class DualOutputTests(unittest.TestCase):
         cls.blit = patch_blit(pinned_file(checkout, GPU_REVISION, 'qemu-1/hw/mesa/mesagl_blit.c'))
         cls.definitions = pinned_file(checkout, GPU_REVISION, 'qemu-1/hw/mesa/mglfuncs.h')
 
-    def test_six_protocol_slots_fit_both_base_contexts(self):
-        magic = int(re.search(r'#define MESAGL_MAGIC\s+(0x[0-9a-f]+)', self.definitions)[1], 16)
-        self.assertEqual((magic & 15) + 1, 6)
+    def test_sixteen_protocol_slots_fit_both_base_contexts(self):
+        # WineD3D needs one context per swapchain and rendering thread.
+        definitions = patch_slots(self.definitions)
+        self.assertEqual(patch_slots(definitions), definitions)
+        magic = int(re.search(r'#define MESAGL_MAGIC\s+(0x[0-9a-f]+)', definitions)[1], 16)
+        self.assertEqual((magic & 15) + 1, 16)
         self.assertIn('mesa_current_output() * 3', self.wgl)
         self.assertNotIn('mesa_current_output() * 8', self.wgl)
         for slot in (0, 3):
@@ -104,6 +107,120 @@ class DualOutputTests(unittest.TestCase):
             result = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('DUAL_GPU_CONTEXTS_OK', result.stdout)
+
+    def test_client_state_follows_the_current_context_on_both_sides(self):
+        # Both displays alternate contexts every frame. One binding tracker per
+        # device made buffer offsets of one context read as guest memory.
+        write = function(self.transport, 'static void mesapt_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)\n{')
+        for call in ('s->mglCntxCurrent = MGLMakeCurrent(ptVer[0], level)', '                        MGLMakeCurrent(ptVer[0], level);'):
+            before = write[:write.index(call)]
+            self.assertTrue(before.rstrip().endswith('m90_client_switch(s, ptVer[0], level);'), call)
+        self.assertLess(write.index('m90_client_created(s, argsp[1]);'), write.index('ContextCreateCommon(s);\n                        }\n                        DPRINTF_COND'))
+        self.assertIn('m90_client_created(s, cntxRC[1]);', write)
+        self.assertIn('(0 == NumPbuffer()) && (level % 3))', write)
+        host_switch = function(self.guest, 'static void m90_host_switch(uint32_t dc, uint32_t rc)\n{')
+        self.assertIn('if (rc) { m90_client_switch(MESAGL_MAGIC - rc); }', host_switch)
+        self.assertIn('m90_client_created(level);', function(self.guest, 'wglCreateContextAttribsARB(HDC hDC,'))
+        self.assertIn('m90_client_created(cntxDC[1]);', function(self.guest, 'uint32_t PT_CALL COMPACT\nmglCreateContext (uint32_t arg0)'))
+        compiler = os.environ.get('M90_TEST_CC') or shutil.which('gcc')
+        if not compiler:
+            self.skipTest('C compiler not available')
+        start = self.transport.index('typedef struct {\n    vtxarry_t Color, EdgeFlag, Normal, Index')
+        end = self.transport.index('static void mesapt_write(')
+        code = (Path(__file__).with_name('fixtures') / 'host_client_state_mock.c').read_text()
+        with tempfile.TemporaryDirectory(prefix='gpu-client-') as directory:
+            source = Path(directory) / 'client.c'
+            source.write_text(code.replace('/*M90_HOST_CODE*/', self.transport[start:end]))
+            binary = source.with_suffix('.exe' if os.name == 'nt' else '')
+            result = subprocess.run([compiler, '-std=c11', '-Wall', '-Werror', str(source), '-o', str(binary)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('HOST_CLIENT_STATE_OK', result.stdout)
+
+    def test_only_the_lower_display_waits_for_vblank(self):
+        make_current = function(self.wgl, 'int MGLMakeCurrent(uint32_t cntxRC, int level)')
+        self.assertIn('if (mesa_current_output() && wglFuncs.SwapIntervalEXT', make_current)
+        self.assertIn('if (mesa_current_output()) { argsp[0] = 0; }', self.wgl)
+
+    def test_current_context_is_per_thread_and_host_follows_lazily(self):
+        # Two cabinet devices are driven from several game threads. A global
+        # current context made WineD3D save/restore on every call.
+        for name in ('pt', 'mfifo', 'mdata'):
+            self.assertIn(f'#define {name} (*m90_shm(&m90_raw_{name}))', self.guest)
+        self.assertIn('#define currGLRC (m90_thread()->rc)', self.guest)
+        self.assertNotIn('static uint32_t currDC, currGLRC;', self.guest)
+        for signature in ('int WINAPI wglSwapBuffers (HDC hdc)\n{',
+                          'int WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR *ppfd)\n{',
+                          'wglSetPixelFormat(HDC hdc, int format, const PIXELFORMATDESCRIPTOR *ppfd)\n{'):
+            body = function(self.guest, signature)
+            self.assertLess(body.index('m90_dispatch();'), body.index('m90_select_output(hdc);'), signature)
+        create = function(self.guest, 'wglCreateContextAttribsARB(HDC hDC,')
+        self.assertLess(create.index('m90_dispatch();'), create.index('m90_select_output(hDC);'))
+        self.assertLess(create.index('m90_reclaim_slot();'), create.index('WGL_FUNCP("wglCreateContextAttribsARB")'))
+        self.assertIn('m90_host_rc = 0;', create)
+        self.assertIn('m90_host_rc = 0;', function(self.guest, 'uint32_t PT_CALL COMPACT\nmglCreateContext (uint32_t arg0)'))
+        self.assertIn('m90_host_rc = 0;', function(self.guest, 'uint32_t PT_CALL COMPACT\nmglDeleteContext (uint32_t arg0)'))
+        make_current = function(self.guest, 'uint32_t PT_CALL COMPACT\nmglMakeCurrent (uint32_t arg0, uint32_t arg1)')
+        self.assertIn('if (!m90_any_dc && !mglCreateContext(arg0))', make_current)
+        self.assertLess(make_current.index('currGLRC = arg1;'), make_current.index('m90_host_switch(arg0, arg1);'))
+        self.assertLess(make_current.index('m90_host_switch(arg0, arg1);'), make_current.index('m90_configure(arg1);'))
+        self.assertIn('M90_CONTEXT_SWITCHES', self.transport)
+        compiler = os.environ.get('M90_TEST_CC') or shutil.which('gcc')
+        if not compiler or os.name != 'nt':
+            self.skipTest('Windows C compiler not available')
+        state_start = self.guest.index('static volatile uint32_t *pt0;\n/* M90: WGL')
+        state_end = self.guest.index('#define currGLRC (m90_thread()->rc)\n') + len('#define currGLRC (m90_thread()->rc)\n')
+        slots_start = self.guest.index('\n/* M90: WineD3D destroys the contexts of exited threads')
+        slots_end = self.guest.index('static void m90_reclaim_slot(void)')
+        slots = self.guest[slots_start:slots_end] + function(self.guest, 'static void m90_reclaim_slot(void)')
+        code = (Path(__file__).with_name('fixtures') / 'guest_threads_mock.c').read_text()
+        code = code.replace('/*M90_THREAD_STATE*/', self.guest[state_start:state_end])
+        code = code.replace('/*M90_THREAD_SLOTS*/', slots)
+        with tempfile.TemporaryDirectory(prefix='gpu-threads-') as directory:
+            source = Path(directory) / 'threads.c'
+            source.write_text(code)
+            binary = source.with_suffix('.exe')
+            result = subprocess.run([compiler, '-std=gnu11', '-Wall', '-Werror', str(source), '-o', str(binary)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('GUEST_THREADS_OK', result.stdout)
+
+    def test_second_output_window_exists_before_its_first_context(self):
+        # WineD3D never calls ChoosePixelFormat for the second monitor's window;
+        # without this handshake the host creates that output's context on DC 0.
+        select = function(self.guest, 'static void m90_select_output(HDC dc)\n{')
+        self.assertIn('if (!m90_output_window[output] && !m90_output_init)', select)
+        self.assertLess(select.index('ptm[0xFB4 >> 2] = output'), select.index('wglChoosePixelFormat(dc, &pfd)'))
+        self.assertLess(select.index('m90_output_init = 1'), select.index('wglChoosePixelFormat(dc, &pfd)'))
+        choose = function(self.guest, 'int WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR *ppfd)\n{')
+        self.assertLess(choose.index('m90_select_output(hdc)'), choose.index('ptm[0xFB8 >> 2]'))
+        self.assertLess(self.guest.index('int WINAPI wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR *ppfd);'),
+                        self.guest.index('static void m90_select_output(HDC dc)\n{'))
+
+    def test_guest_slot_is_released_by_its_last_handle(self):
+        # WineD3D replaces its probe context on the same slot (same handle) and
+        # then deletes the probe; that must not destroy the live replacement.
+        self.assertIn('m90_slot_refs[level]++', function(self.guest, 'wglCreateContextAttribsARB(HDC hDC,'))
+        self.assertIn('m90_slot_refs[cntxDC[1]]++', function(self.guest, 'uint32_t PT_CALL COMPACT\nmglCreateContext (uint32_t arg0)'))
+        compiler = os.environ.get('M90_TEST_CC') or shutil.which('gcc')
+        if not compiler:
+            self.skipTest('C compiler not available')
+        code = (Path(__file__).with_name('fixtures') / 'guest_slot_refs_mock.c').read_text()
+        delete = function(self.guest, 'uint32_t PT_CALL COMPACT\nmglDeleteContext (uint32_t arg0)')
+        with tempfile.TemporaryDirectory(prefix='gpu-refs-') as directory:
+            source = Path(directory) / 'refs.c'
+            source.write_text(code.replace('DELETE_FUNCTION', delete))
+            binary = source.with_suffix('.exe' if os.name == 'nt' else '')
+            result = subprocess.run([compiler, '-std=c11', '-Wall', '-Werror', str(source), '-o', str(binary)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('GUEST_SLOT_REFS_OK', result.stdout)
 
 
 class SdlRoutingTests(unittest.TestCase):

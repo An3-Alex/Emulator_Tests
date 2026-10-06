@@ -33,33 +33,35 @@ class MemoryRsp:
 
 
 class VirtualTouchTests(unittest.TestCase):
-    def test_panel_calibration_is_validated_persisted_and_applied(self):
+    def test_panel_reset_restores_exact_mapping_and_persists(self):
         from cabinet_controls import validate_command, CabinetControlServer, send_command
         with tempfile.TemporaryDirectory() as directory:
             controller = VirtualTouchController(Path(directory) / "work.img.touch.json")
-            event = validate_command({"type": "touch_calibration", "points": [[120, 500], [680, 100]]})
+            self.calibrate(controller, (120, 500), (680, 100))
+            self.assertEqual(controller.screen_point(120, 500), TARGETS[0])
             server = CabinetControlServer(port=0)
             try:
-                send_command(event, server._socket.getsockname()[1])
-                queued = server.events.pop_types({"touch_calibration"})
+                send_command(validate_command({"type": "touch_calibration_reset"}),
+                             server._socket.getsockname()[1])
+                queued = server.events.pop_types({"touch_calibration_reset"})
             finally:
                 server.close()
-            controller.apply_panel_calibration(queued["points"])
-            self.assertEqual(controller.screen_point(120, 500), TARGETS[0])
-            self.assertEqual(VirtualTouchController(controller.state_path).points, controller.points)
-            controller.command(b"\x01CX\r")
-            with self.assertRaisesRegex(ValueError, "active"):
-                controller.apply_panel_calibration([[100, 525], [700, 75]])
-            self.assertEqual(controller.points, ((120, 500), (680, 100)))
-
-    def test_invalid_panel_calibration_does_not_replace_values(self):
-        from cabinet_controls import validate_command
-        controller = VirtualTouchController()
-        for points in (None, [], [[0, 0], [0, 0]], [[True, 525], [700, 75]], [[-1, 525], [700, 75]]):
-            with self.assertRaises(ValueError):
-                validate_command({"type": "touch_calibration", "points": points})
-            with self.assertRaises(ValueError): controller.apply_panel_calibration(points)
+            self.assertEqual(queued, {"type": "touch_calibration_reset"})
+            controller.reset_calibration()
             self.assertIsNone(controller.points)
+            for point in ((0, 0), (400, 300), (799, 599), TARGETS[0], TARGETS[1]):
+                self.assertEqual(controller.screen_point(*point), point)
+            reloaded = VirtualTouchController(controller.state_path)
+            self.assertIsNone(reloaded.points)
+            self.assertIn("DB_TOUCH_CALIBRATION_RESET source=control_panel", controller.events)
+
+    def test_panel_reset_cannot_interrupt_native_service_calibration(self):
+        controller = VirtualTouchController()
+        self.calibrate(controller, (120, 500), (680, 100))
+        controller.command(b"\x01CX\r")
+        with self.assertRaisesRegex(ValueError, "active"):
+            controller.reset_calibration()
+        self.assertEqual(controller.points, ((120, 500), (680, 100)))
 
     def calibrate(self, controller, first=TARGETS[0], second=TARGETS[1]):
         self.assertEqual(controller.command(b"\x01CX\r"), ACK)

@@ -481,6 +481,34 @@ class DatabaseBridgeTests(unittest.TestCase):
         self.assertFalse(device.pairing_frame_gap)
         self.assertIsNone(device.last_pairing_gap)
 
+    def test_pairing_counter_read_ahead_on_second_command_byte(self) -> None:
+        # Captured with both displays on the GPU: the second write (27) was
+        # reported with the third write's counter. The frame was dropped and
+        # the firmware failed the challenge (expected 9AB3, no reply).
+        frame = bytes.fromhex("7F 27 0A 7D 6E AA 27 A2 0E")
+        observed_remaining = (9, 7, 7, 6, 5, 4, 3, 2, 1)
+        device = bridge.VirtualCoinValidator()
+        for value, remaining in zip(frame[:-1], observed_remaining[:-1]):
+            self.assertIsNone(device.observe_tx(value, remaining))
+        self.assertEqual(device.observe_tx(frame[-1], 1), bytes(4))
+        self.assertEqual(device.last_tx_frame, frame)
+        self.assertTrue(device.challenge_pending)
+        self.assertFalse(device.pairing_frame_gap)
+
+        # A genuinely missed 27 is still recovered from the checksum.
+        missed = bridge.VirtualCoinValidator()
+        for value, remaining in zip(frame[:1] + frame[2:-1], (9, 7, 6, 5, 4, 3, 2)):
+            missed.observe_tx(value, remaining)
+        self.assertEqual(missed.observe_tx(frame[-1], 1), bytes(4))
+        self.assertEqual(missed.last_tx_frame, frame)
+
+        # Only a challenge that started at counter 9 is treated this way.
+        other = bridge.VirtualCoinValidator()
+        for value, remaining in ((0x7F, 5), (0x27, 3), (0x0A, 3)):
+            other.observe_tx(value, remaining)
+        self.assertFalse(other.challenge_pending)
+        self.assertFalse(other.pairing_frame_gap)
+
     def test_pairing_gap_log_survives_gap_clearing_on_next_frame(self) -> None:
         device = bridge.VirtualCoinValidator()
         for value, remaining in ((0x7F, 9), (0x27, 8), (0x04, 6)):

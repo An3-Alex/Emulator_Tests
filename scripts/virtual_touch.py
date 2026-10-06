@@ -64,11 +64,16 @@ class VirtualTouchController:
             return None
         return validate_calibration_points(points)
 
-    def apply_panel_calibration(self, points) -> None:
+    def reset_calibration(self) -> None:
+        """Return to the exact 1:1 mapping of the 800x600 input surface.
+
+        Host input is already geometrically exact; only the native service
+        calibration (CX) stores points, like the original controller.
+        """
         if self.calibration_session:
             raise ValueError("native service calibration is active")
-        self.points = validate_calibration_points(points)
-        self.events.append("DB_TOUCH_CALIBRATION_COMPLETED source=control_panel")
+        self.points = None
+        self.events.append("DB_TOUCH_CALIBRATION_RESET source=control_panel")
         self._save()
 
     def _save(self) -> None:

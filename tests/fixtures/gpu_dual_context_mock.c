@@ -20,13 +20,17 @@ static HGLRC create(HDC dc) { assert(dc == hDC); return ++sequence; }
 static bool bind(HDC dc, HGLRC rc) { if (rc) assert(dc == hDC); current = rc; return true; }
 static bool destroy(HGLRC rc) { assert(rc < 128); deleted[rc]++; return true; }
 static HGLRC get(void) { return current; }
+static int interval[2] = {1, 1};
+static bool swap_set(int value) { interval[output] = value; return true; }
+static int swap_get(void) { return interval[output]; }
 static struct {
     HGLRC (*CreateContext)(HDC);
     bool (*MakeCurrent)(HDC,HGLRC);
     bool (*DeleteContext)(HGLRC);
     HGLRC (*GetCurrentContext)(void);
     bool (*SwapIntervalEXT)(int);
-} wglFuncs = {create, bind, destroy, get, NULL};
+    int (*GetSwapIntervalEXT)(void);
+} wglFuncs = {create, bind, destroy, get, swap_set, swap_get};
 static void InitMesaGLExt(void) {}
 static int ContextUseSRGB(void) { return 0; }
 static int ContextVsyncOff(void) { return 0; }
@@ -47,6 +51,7 @@ int main(void) {
     output = 0;
     MGLMakeCurrent(MESAGL_MAGIC,0);
     assert(current == lower && DrawableContext());
+    assert(interval[1] == 0 && interval[0] == 1); /* only the lower display waits for vblank */
     MGLDeleteContext(0);
     assert(!hRC[0] && hRC[3] == upper && !deleted[upper]);
     assert(deleted[lower] == 1 && freed[0] == 1 && !freed[1]);

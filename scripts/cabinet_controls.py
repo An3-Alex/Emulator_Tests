@@ -38,9 +38,8 @@ def validate_command(value: Any) -> dict[str, Any]:
     kind = value.get("type")
     if kind == "ping" and set(value) == {"type"}:
         return {"type": "ping"}
-    if kind == "touch_calibration" and set(value) == {"type", "points"}:
-        points = validate_calibration_points(value["points"])
-        return {"type": kind, "points": [list(point) for point in points]}
+    if kind == "touch_calibration_reset" and set(value) == {"type"}:
+        return {"type": kind}
     if kind == "door" and set(value) == {"type", "open"}:
         if type(value["open"]) is not bool:
             raise ValueError("door.open must be boolean")

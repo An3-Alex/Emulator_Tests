@@ -1,7 +1,7 @@
 """Apply the pinned OpenGL wrapper's XP-safe diagnostic output fix."""
 from pathlib import Path
 import sys
-from qemu3dfx_dual_output import patch_guest
+from qemu3dfx_dual_output import patch_guest, patch_slots
 
 
 def patch_debug_output(source: str) -> str:
@@ -33,6 +33,9 @@ def apply(checkout: Path) -> None:
                 else patch_debug_output(path.read_text())) for path in paths]
     for path, value in updates:
         path.write_text(value)
+    # Guest and host must agree on the context-slot count (see patch_slots).
+    header = checkout / "qemu-1/hw/mesa/mglfuncs.h"
+    header.write_text(patch_slots(header.read_text()))
 
 
 if __name__ == "__main__":

@@ -333,6 +333,7 @@ class BridgeLogParser:
                 "DB_TOUCH_CALIBRATION_STARTED": "Touch-Kalibrierung gestartet: unten links, dann oben rechts",
                 "DB_TOUCH_CALIBRATION_POINT": "Kalibrierpunkt beim Loslassen bestätigt",
                 "DB_TOUCH_CALIBRATION_COMPLETED": "Touch-Kalibrierung abgeschlossen",
+                "DB_TOUCH_CALIBRATION_RESET": "Touch-Kalibrierung zurückgesetzt (exakt 1:1)",
                 "DB_TOUCH_CALIBRATION_CANCELLED": "Touch-Kalibrierung abgebrochen",
                 "DB_TOUCH_CALIBRATION_LOADED": "Gespeicherte Touch-Kalibrierung geladen",
                 "DB_TOUCH_CALIBRATION_SAVED": "Touch-Kalibrierung gespeichert",

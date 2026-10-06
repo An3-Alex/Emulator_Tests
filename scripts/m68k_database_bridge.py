@@ -591,7 +591,9 @@ class VirtualCoinValidator:
             self.last_pairing_count_lag = False
         if remaining != self._next_remaining:
             if (
-                self._tx.startswith(self.PAIRING_CHALLENGE_COMMAND)
+                (self._tx.startswith(self.PAIRING_CHALLENGE_COMMAND)
+                 # The counter can also run ahead on the command's second byte.
+                 or (self._tx == self.PAIRING_CHALLENGE_COMMAND[:1] and self._next_remaining == 8))
                 and remaining == self._next_remaining - 1
                 and not self.pairing_frame_gap
             ):
@@ -620,17 +622,19 @@ class VirtualCoinValidator:
             self.pairing_frame_gap
             and self.last_pairing_gap is not None
             and len(frame) == 8
-            and frame.startswith(self.PAIRING_CHALLENGE_COMMAND)
+            and frame[:1] == self.PAIRING_CHALLENGE_COMMAND[:1]
         ):
             # One SCC data-write watchpoint was missed. The final byte is an
             # additive checksum, so recover the one missing payload byte and
             # answer the actual complete challenge instead of dropping it.
             missing_at = 9 - self.last_pairing_gap[0]
             missing_value = (frame[-1] - sum(frame[:-1])) & 0xFF
-            frame = (
+            repaired = (
                 frame[:missing_at] + bytes([missing_value])
                 + frame[missing_at:]
             )
+            if repaired.startswith(self.PAIRING_CHALLENGE_COMMAND):
+                frame = repaired
         self.last_tx_frame = frame
         self._tx.clear()
         self._next_remaining = 0
@@ -2212,16 +2216,16 @@ def run_bridge(args: argparse.Namespace) -> int:
                 ensure_com3_receiver_alive(receiver_errors)
                 for _ in range(32):
                     try:
-                        input_types = {"door", "coin", "touch_calibration"}
+                        input_types = {"door", "coin", "touch_calibration_reset"}
                         if touch_packets.can_accept_contact():
                             input_types.add("touch")
                         control_event = controls.events.pop_types(input_types)
                     except queue.Empty:
                         break
                     event_type = control_event["type"]
-                    if event_type == "touch_calibration":
+                    if event_type == "touch_calibration_reset":
                         try:
-                            touch_controller.apply_panel_calibration(control_event["points"])
+                            touch_controller.reset_calibration()
                         except ValueError as exc:
                             print(f"DB_TOUCH_CALIBRATION_REJECTED source=control_panel reason={exc}", flush=True)
                         log_touch_controller_events(touch_controller)

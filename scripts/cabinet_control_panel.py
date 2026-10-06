@@ -12,10 +12,9 @@ import socket
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from cabinet_controls import CONTROL_PORT, TOUCH_HEIGHT, TOUCH_WIDTH, send_command
-from virtual_touch import TARGETS
 
 
 BUTTONS = (
@@ -148,7 +147,6 @@ class ControlPanel:
         self.pad_touch: tuple[int, int] | None = None
         self.qemu_touch: tuple[int, int] | None = None
         self.previous_left_down = False
-        self.calibration_window: tk.Toplevel | None = None
 
         root.title("M90 Emulator – Bedienfeld")
         root.resizable(False, False)
@@ -176,8 +174,8 @@ class ControlPanel:
 
         ttk.Button(frame, text="+1 € (MP)", width=15,
                    command=self._coin).grid(row=3, column=2, padx=2, pady=3)
-        ttk.Button(frame, text="Touch kalibrieren", width=18,
-                   command=self._calibrate_touch).grid(row=3, column=3, columnspan=2, padx=2, pady=3)
+        ttk.Button(frame, text="Touch-Kalibrierung zurücksetzen", width=30,
+                   command=self._reset_touch_calibration).grid(row=3, column=3, columnspan=2, padx=2, pady=3)
 
         ttk.Checkbutton(frame, text="Tür offen", variable=self.door_open,
                         command=self._door).grid(row=4, column=0, columnspan=2,
@@ -203,8 +201,8 @@ class ControlPanel:
             self.status.set(
                 "1 € beim virtuellen MP vorgemerkt – Ergebnis im Live-Protokoll"
                 if command["type"] == "coin" else
-                "Touch-Kalibrierung vorgemerkt – Bestätigung im Live-Protokoll"
-                if command["type"] == "touch_calibration" else
+                "Touch-Kalibrierung wird zurückgesetzt – Bestätigung im Live-Protokoll"
+                if command["type"] == "touch_calibration_reset" else
                 "Datenbank verbunden – Eingabe vorgemerkt"
             )
             return True
@@ -212,67 +210,17 @@ class ControlPanel:
             self.status.set(f"Eingabe nicht gesendet: {exc}")
             return False
 
-    def _calibrate_touch(self) -> None:
-        if self.calibration_window is not None:
-            self.calibration_window.lift()
+    def _reset_touch_calibration(self) -> None:
+        # Preview and QEMU-window input already map exactly onto 800x600;
+        # only the native service calibration stores points.
+        if not messagebox.askyesno(
+            "Touch-Kalibrierung zurücksetzen",
+            "Touch wieder exakt 1:1 umrechnen? Eine im Servicemenü durchgeführte "
+            "Kalibrierung dieses Arbeitsimages wird dabei verworfen.",
+            parent=self.root,
+        ):
             return
-        # Release existing contacts before the modal surface intercepts input.
-        self._release_pad_if_button_up(False)
-        if self.qemu_touch is not None:
-            x, y = self.qemu_touch
-            self.qemu_touch = None
-            self._send({"type": "touch", "x": x, "y": y, "down": False})
-        for name in tuple(self.held_buttons):
-            self._button(name, False)
-        window = self.calibration_window = tk.Toplevel(self.root)
-        window.title("Virtuellen Touch kalibrieren")
-        window.resizable(False, False)
-        window.transient(self.root)
-        instruction = ttk.Label(window, text="Ziel 1 von 2 anklicken und loslassen (unten links).", padding=10)
-        instruction.pack()
-        canvas = tk.Canvas(window, width=800, height=600, bg="#11131a", highlightthickness=0)
-        canvas.pack()
-        ttk.Label(window, text="Gilt für dieses Arbeitsimage. Abbrechen behält die bisherigen Werte.", padding=8).pack()
-        points: list[tuple[int, int]] = []
-        contact: list[tuple[int, int]] = []
-        def close():
-            self.calibration_window = None
-            window.grab_release()
-            window.destroy()
-        def draw_target():
-            canvas.delete("target")
-            x, y = TARGETS[len(points)]
-            canvas.create_oval(x - 18, y - 18, x + 18, y + 18, outline="#ffcc33", width=2, tags="target")
-            canvas.create_line(x - 30, y, x + 30, y, fill="white", tags="target")
-            canvas.create_line(x, y - 30, x, y + 30, fill="white", tags="target")
-        def press(event):
-            if not contact: contact.append((event.x, event.y))
-        def move(event):
-            if contact: contact[0] = (event.x, event.y)
-        def release(event):
-            if not contact: return
-            point = contact.pop()
-            x, y = TARGETS[len(points)]
-            if abs(point[0] - x) > 80 or abs(point[1] - y) > 60:
-                instruction.configure(text="Bitte direkt das Fadenkreuz anklicken und loslassen.")
-                return
-            points.append(point)
-            if len(points) == 2:
-                if self._send({"type": "touch_calibration", "points": [list(p) for p in points]}):
-                    close()
-                else:
-                    points.clear(); draw_target()
-                    instruction.configure(text="Nicht verbunden. Bitte neu versuchen oder abbrechen.")
-            else:
-                instruction.configure(text="Ziel 2 von 2 anklicken und loslassen (oben rechts).")
-                draw_target()
-        canvas.bind("<ButtonPress-1>", press)
-        canvas.bind("<B1-Motion>", move)
-        canvas.bind("<ButtonRelease-1>", release)
-        ttk.Button(window, text="Abbrechen", command=close).pack(pady=8)
-        window.protocol("WM_DELETE_WINDOW", close)
-        window.grab_set()
-        draw_target()
+        self._send({"type": "touch_calibration_reset"})
 
     def _button(self, name: str, down: bool) -> None:
         if down:
@@ -328,7 +276,6 @@ class ControlPanel:
 
     def _poll_qemu_touch(self, left_down: bool, point: tuple[int, int] | None,
                          enabled: bool) -> None:
-        enabled = enabled and getattr(self, "calibration_window", None) is None
         if self.qemu_touch is not None and (not left_down or not enabled):
             x, y = self.qemu_touch
             self.qemu_touch = None
