@@ -118,6 +118,21 @@ class ImageSetupTests(unittest.TestCase):
                 self.assertEqual(
                     image_setup.check_preparation(fresh, root, require_wsl=False, resume=True), [],
                 )
+                # SwiftShader is only required for the software graphics path.
+                without = dict(common, swiftshader="")
+                gpu = Selection(image=str(root / "gpu.img"), graphics_backend="qemu3dfx", **without)
+                self.assertEqual(image_setup.check_preparation(gpu, root, require_wsl=False), [])
+                software = Selection(image=str(root / "soft.img"), graphics_backend="swiftshader", **without)
+                self.assertTrue(any("SwiftShader" in issue for issue in
+                                    image_setup.check_preparation(software, root, require_wsl=False)))
+
+    def test_stage_command_marks_missing_swiftshader(self) -> None:
+        selection = Selection(original_image="source.img", image="work.img", swiftshader="",
+                              qxl_driver_dir="qxl", graphics_backend="qemu3dfx")
+        with mock.patch.object(image_setup, "wsl_path", side_effect=lambda path: "/w/" + path.name):
+            command = image_setup.stage_command(selection, PROJECT)
+        self.assertEqual(command[-2:], ["-", "/w/qxl"])
+        self.assertEqual(len(command), 5 + 11)  # bash + script + ten arguments
 
     def test_qemu_paths_with_spaces_remain_single_arguments(self) -> None:
         command = qemu_command(

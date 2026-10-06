@@ -18,8 +18,8 @@ COMPONENTS = {
     "qxl_installer": ("build/qxl-installer.exe", "96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a"),
     "display_verify": ("build/display-verify.exe", "81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349"),
     "d3d9": ("build/d3d9-proxy/d3d9.dll", "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737"),
-    "fbwf": ("build/sram-compat/FBWFLIB.dll", "31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6"),
-    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7"),
+    "fbwf": ("build/sram-compat/FBWFLIB.dll", "4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608"),
+    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "5c296f4514c09adcff07a89b6372529263dec5c0c3c13282a117f6954d0fdf89"),
 }
 QXL_HASHES = {
     "qxl.inf": "2c2ce985936c87406313d68ba54b1c36f42aec97ee357d894e3238aecda776fa",
@@ -61,7 +61,9 @@ def check_preparation(
         if output.with_name(output.name + ".m90-partial").exists():
             issues.append("Unvollständige Kopie vorhanden; bitte zuerst prüfen")
     if not selection.swiftshader:
-        issues.append("SwiftShader-DLL: Datei auswählen")
+        # QEMU-3dfx never loads SwiftShader; only the software path needs it.
+        if selection.graphics_backend != "qemu3dfx":
+            issues.append("SwiftShader-DLL: Datei auswählen (nur für den Grafikpfad SwiftShader nötig)")
     else:
         problem = check_file(Path(selection.swiftshader), SWIFTSHADER_HASH, "SwiftShader-DLL")
         if problem:
@@ -155,9 +157,12 @@ def stage_command(selection: Selection, project: Path) -> list[str]:
         Path(selection.original_image), Path(selection.image),
         *(project / COMPONENTS[name][0] for name in
           ("shim", "bootstrap", "qxl_installer", "d3d9", "fbwf", "irrklang")),
-        Path(selection.swiftshader), Path(selection.qxl_driver_dir),
     ]
-    return ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
+    arguments = [wsl_path(path) for path in paths]
+    # "-": no SwiftShader selected (QEMU-3dfx only).
+    arguments.append(wsl_path(Path(selection.swiftshader)) if selection.swiftshader else "-")
+    arguments.append(wsl_path(Path(selection.qxl_driver_dir)))
+    return ["wsl.exe", "--user", "root", "--exec", "bash", *arguments]
 
 
 def stage_check_command(image: Path, project: Path) -> list[str]:
@@ -165,7 +170,7 @@ def stage_check_command(image: Path, project: Path) -> list[str]:
             wsl_path(project / "scripts/check_image_stage.sh"), wsl_path(image)]
 
 
-def graphics_update_command(selection: Selection, project: Path) -> list[str]:
+def graphics_update_command(selection: Selection, project: Path, *, gpu: bool = False) -> list[str]:
     if not selection.original_image or not Path(selection.original_image).is_file():
         raise ValueError("Original-CF-Image auswählen, damit das Laufzeit-Update nur die Arbeitskopie ändert")
     if Path(selection.original_image).resolve() == Path(selection.image).resolve():
@@ -176,7 +181,9 @@ def graphics_update_command(selection: Selection, project: Path) -> list[str]:
              Path(selection.original_image), Path(selection.image),
              project / COMPONENTS["bootstrap"][0], project / COMPONENTS["d3d9"][0],
              project / COMPONENTS["irrklang"][0], project / COMPONENTS["fbwf"][0]]
-    return ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
+    command = ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
+    # GPU copies keep their QEMU-3dfx d3d9.dll; audio, SRAM and service still update.
+    return command + ["--gpu"] if gpu else command
 
 
 def loader_idle_setup_command(selection: Selection, project: Path) -> list[str]:

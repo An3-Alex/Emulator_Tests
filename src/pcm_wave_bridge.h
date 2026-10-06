@@ -27,8 +27,43 @@ struct PcmOutput {
     volatile LONG stop, failed;
     PcmBlock *first, *last;
     DWORD queued_bytes, queued_count, sequence;
+    int adpcm_index;
 };
 static const DWORD PCM_MAGIC = 0x394D5742;
+
+/* Every UART byte is a VM exit on the game PC's only vCPU: 44.1 kHz mono
+   PCM16 cost ~88,000 exits/s. IMA ADPCM sends 4 bits per sample instead.
+   Block: u32 sample count, s16 first sample, u8 step index, u8 0, then the
+   codes of samples 1..count-1, low nibble first. Each block decodes alone. */
+static const short pcm_adpcm_steps[89] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+    50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+    253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+    1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+    3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767};
+static const signed char pcm_adpcm_index_change[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
+static const DWORD PCM_ADPCM_HEADER = 8;
+
+static BYTE pcm_adpcm_code(int sample, int *predictor, int *index) {
+    int step = pcm_adpcm_steps[*index], diff = sample - *predictor, delta = step >> 3;
+    BYTE code = 0;
+    if (diff < 0) { code = 8; diff = -diff; }
+    if (diff >= step) { code |= 4; diff -= step; delta += step; }
+    step >>= 1;
+    if (diff >= step) { code |= 2; diff -= step; delta += step; }
+    step >>= 1;
+    if (diff >= step) { code |= 1; delta += step; }
+    *predictor += (code & 8) ? -delta : delta;
+    if (*predictor > 32767) *predictor = 32767;
+    if (*predictor < -32768) *predictor = -32768;
+    *index += pcm_adpcm_index_change[code];
+    if (*index < 0) *index = 0;
+    if (*index > 88) *index = 88;
+    return code;
+}
 static void pcm_socket_cleanup(void) {
 #ifdef PCM_USE_TCP
     WSACleanup();
@@ -175,8 +210,8 @@ static BOOL pcm_connect(PcmOutput *output) {
 #endif
     /* Original cabinet: one speaker. Mix before the UART rather than sending
        stereo and discarding half of it on the host. */
-    DWORD hello[4] = {0x3141394D, output->format.nSamplesPerSec,
-        1, output->format.wBitsPerSample}; /* M9A1 */
+    DWORD hello[4] = {0x3241394D, output->format.nSamplesPerSec,
+        1, output->format.wBitsPerSample}; /* M9A2: mono IMA ADPCM blocks */
     DWORD ack = 0;
 #ifdef PCM_USE_TCP
     output->socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -331,13 +366,15 @@ static MMRESULT WINAPI pcm_write(HWAVEOUT handle, LPWAVEHDR header, UINT size) {
     if (header->dwFlags & (WHDR_BEGINLOOP | WHDR_ENDLOOP)) return MMSYSERR_NOTSUPPORTED;
     if (InterlockedCompareExchange(&output->failed, 0, 0) ||
         InterlockedCompareExchange(&output->stop, 0, 0)) return MMSYSERR_ERROR;
-    DWORD wire_size = header->dwBufferLength / output->format.nChannels;
+    DWORD count = header->dwBufferLength / output->format.nBlockAlign;
+    DWORD wire_size = PCM_ADPCM_HEADER + count / 2;
     PcmBlock *block = (PcmBlock *)HeapAlloc(GetProcessHeap(), 0, sizeof(PcmBlock) + wire_size);
     if (!block) return MMSYSERR_NOMEM;
     block->next = NULL; block->header = header; block->size = header->dwBufferLength;
     block->wire_size = wire_size;
     block->silence = TRUE;
-    for (DWORD i = 0; i < wire_size / 2; ++i) {
+    int predictor = 0, index = output->adpcm_index;
+    for (DWORD i = 0; i < count; ++i) {
         /* Explicit little endian reads also accept unaligned WAVEHDR data. */
         DWORD offset = i * output->format.nBlockAlign;
         const BYTE *input = (const BYTE *)header->lpData + offset;
@@ -346,10 +383,20 @@ static MMRESULT WINAPI pcm_write(HWAVEOUT handle, LPWAVEHDR header, UINT size) {
             int sum = value + (short)(input[2] | (input[3] << 8));
             value = sum >= 0 ? sum / 2 : (sum - 1) / 2;
         }
-        block->data[i*2] = (BYTE)value;
-        block->data[i*2+1] = (BYTE)(value >> 8);
         if (value) block->silence = FALSE;
+        if (!i) {
+            predictor = value;
+            block->data[0] = (BYTE)count; block->data[1] = (BYTE)(count >> 8);
+            block->data[2] = (BYTE)(count >> 16); block->data[3] = (BYTE)(count >> 24);
+            block->data[4] = (BYTE)value; block->data[5] = (BYTE)(value >> 8);
+            block->data[6] = (BYTE)index; block->data[7] = 0;
+            continue;
+        }
+        BYTE code = pcm_adpcm_code(value, &predictor, &index);
+        BYTE *slot = &block->data[PCM_ADPCM_HEADER + (i - 1) / 2];
+        if ((i - 1) & 1) *slot |= (BYTE)(code << 4); else *slot = code;
     }
+    output->adpcm_index = index;
     EnterCriticalSection(&output->lock);
     if (InterlockedCompareExchange(&output->stop, 0, 0) ||
         InterlockedCompareExchange(&output->failed, 0, 0) || output->queued_count >= 32 ||

@@ -5,14 +5,15 @@ Es startet den virtuellen Spiel-PC und die Datenbank, richtet eine Arbeitskopie
 des CF-Images ein und bietet ein Bedienfenster für Touch, Tasten, Türschalter,
 Service und Spielgeldeinwurf. Ton und ein optionales Live-Protokoll sind enthalten.
 
-[Emulator herunterladen](https://github.com/An3-Alex/Emulator_Tests/releases/latest)
+[Emulator herunterladen](https://github.com/An3-Alex/Merkur_Emulator/releases/latest)
 
 ## Starten
 
 1. `M90-Emulator.exe` öffnen und die benötigten Abhängigkeiten über den Starter einrichten.
 2. Eigenes CF-Image, einen getrennten Arbeitskopie-Pfad und die passenden
    Datenbankdateien auswählen: Loader, Factory, Konfiguration und Spielepaket.
-   Zulassungskarten-EEPROM, SwiftShader-DLL und QXL-Treiber werden ebenfalls benötigt.
+   Zulassungskarten-EEPROM und QXL-Treiber werden ebenfalls benötigt, die
+   SwiftShader-DLL nur für den Grafikpfad SwiftShader.
 3. Beim ersten Mal „Frisches Image einrichten“ verwenden. Danach „Emulator starten“.
    Eine bereits eingerichtete Arbeitskopie kann direkt gestartet werden.
 

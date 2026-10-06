@@ -2,6 +2,7 @@
 
 Wire protocol (little endian): M9A1/rate/channels/bits, then DATA/sequence/size
 and PCM bytes. OPEN and DONE/sequence acknowledge device open and playback.
+M9A2 announces mono IMA ADPCM DATA blocks (see adpcm_decode) instead of PCM.
 Disconnect cancels queued output; no guest-supplied paths or commands exist.
 """
 from __future__ import annotations
@@ -46,6 +47,53 @@ def mono_pcm(data: bytes, channels: int) -> bytes:
     if sys.byteorder != 'little':
         mono.byteswap()
     return mono.tobytes()
+
+
+ADPCM_HEADER = struct.Struct('<IhBx')
+ADPCM_STEPS = (
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+    50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+    253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+    1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+    3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767)
+ADPCM_INDEX_CHANGE = (-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8)
+
+
+def adpcm_decode(block: bytes) -> bytes:
+    """Decode one guest block: u32 count, s16 first sample, u8 index, u8 0,
+    then 4-bit codes of samples 1..count-1, low nibble first."""
+    if len(block) < ADPCM_HEADER.size:
+        raise ValueError('Short ADPCM block')
+    count, predictor, index = ADPCM_HEADER.unpack_from(block)
+    if not count or index > 88 or len(block) != ADPCM_HEADER.size + count // 2:
+        raise ValueError('Invalid ADPCM block')
+    steps, changes = ADPCM_STEPS, ADPCM_INDEX_CHANGE
+    out = array.array('h', [predictor])
+    append = out.append
+    remaining = count - 1
+    for byte in memoryview(block)[ADPCM_HEADER.size:]:
+        for code in (byte & 15, byte >> 4):
+            if not remaining:
+                break
+            remaining -= 1
+            step = steps[index]
+            delta = step >> 3
+            if code & 4:
+                delta += step
+            if code & 2:
+                delta += step >> 1
+            if code & 1:
+                delta += step >> 2
+            predictor = predictor - delta if code & 8 else predictor + delta
+            predictor = -32768 if predictor < -32768 else 32767 if predictor > 32767 else predictor
+            index += changes[code]
+            index = 0 if index < 0 else 88 if index > 88 else index
+            append(predictor)
+    if sys.byteorder != 'little':
+        out.byteswap()
+    return out.tobytes()
 
 
 def recv_exact(connection: socket.socket, length: int, stop: threading.Event) -> bytes:
@@ -216,11 +264,15 @@ class AudioBridge:
         device = None
         try:
             magic, rate, channels, bits = HELLO.unpack(recv_exact(connection, HELLO.size, self.stop))
-            if magic != b'M9A1':
+            if magic not in (b'M9A1', b'M9A2'):
                 raise ValueError('Unsupported audio protocol')
+            adpcm = magic == b'M9A2'
+            if adpcm and channels != 1:
+                raise ValueError('ADPCM stream must be mono')
             align = validate_format(rate, channels, bits)
             device, latency = self.output.open(rate)
-            self.log('AUDIO_STREAM_OPEN', stream=number, rate=rate, channels=channels, bits=bits)
+            self.log('AUDIO_STREAM_OPEN', stream=number, rate=rate, channels=channels, bits=bits,
+                     codec='ima-adpcm' if adpcm else 'pcm')
             connection.sendall(b'OPEN')
             pending = deque()
             submitted = 0
@@ -235,13 +287,23 @@ class AudioBridge:
                         connection.sendall(b'SHUT')
                         self.log('AUDIO_SESSION_CLOSED', stream=number, cancelled_blocks=len(pending))
                         return
-                    if (magic not in (b'DATA', b'ZERO') or not size or size % align or size > rate * align * 2
-                            or sequence <= last_sequence or len(pending) >= 32):
+                    if adpcm:
+                        # Header plus at most two seconds of 4-bit codes.
+                        invalid = magic != b'DATA' or not ADPCM_HEADER.size <= size <= ADPCM_HEADER.size + rate
+                    else:
+                        invalid = (magic not in (b'DATA', b'ZERO') or not size or size % align
+                                   or size > rate * align * 2)
+                    if invalid or sequence <= last_sequence or len(pending) >= 32:
                         raise ValueError('Invalid, oversized or out-of-order audio block')
-                    if self.output.queued(device) + size // channels > rate * 2 * 3:
-                        raise ValueError('Audio queue exceeds three seconds')
                     compressed_silence = magic == b'ZERO'
-                    data = bytes(size // channels) if compressed_silence else mono_pcm(recv_exact(connection, size, self.stop), channels)
+                    if adpcm:
+                        data = adpcm_decode(recv_exact(connection, size, self.stop))
+                    elif compressed_silence:
+                        data = bytes(size // channels)
+                    else:
+                        data = mono_pcm(recv_exact(connection, size, self.stop), channels)
+                    if self.output.queued(device) + len(data) > rate * 2 * 3:
+                        raise ValueError('Audio queue exceeds three seconds')
                     samples = array.array('h')
                     samples.frombytes(data)
                     if sys.byteorder != 'little':
@@ -249,7 +311,7 @@ class AudioBridge:
                     self.output.queue(device, data)
                     submitted += len(data)
                     last_sequence = sequence
-                    pending.append([sequence, size, submitted, time.monotonic(), None,
+                    pending.append([sequence, len(data), submitted, time.monotonic(), None,
                                     sum(value != 0 for value in samples), max(map(abs, samples), default=0),
                                     BLOCK.size if compressed_silence else BLOCK.size + size])
                 played = submitted - self.output.queued(device)

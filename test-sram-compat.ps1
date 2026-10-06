@@ -32,4 +32,10 @@ try {
     & (Join-Path $out 'GGSG_Servic.exe')
     if ($LASTEXITCODE -ne 0) { throw "Service loader harness failed: $LASTEXITCODE" }
     Write-Output 'SERVICE_LOADER_PASS real PE import, DLL initialization, ANSI IAT, shared SRAM'
+    # XP may start the service through another path spelling (e.g. 8.3); it is
+    # then recognized by its SramCompatInitialize import, not the file name.
+    Copy-Item -LiteralPath (Join-Path $out 'GGSG_Servic.exe') -Destination (Join-Path $out 'SERVICE2.EXE') -Force
+    & (Join-Path $out 'SERVICE2.EXE')
+    if ($LASTEXITCODE -ne 0) { throw "Service harness under another name failed: $LASTEXITCODE" }
+    Write-Output 'SERVICE_RENAMED_PASS service recognized by its SRAM import'
 } finally { Pop-Location }

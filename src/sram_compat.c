@@ -317,12 +317,13 @@ static HANDLE WINAPI hook_create_file_w(LPCWSTR name, DWORD access, DWORD share,
     (void)creation;
     (void)attributes;
     (void)template_file;
-    log_wide_path(name);
+    /* Every guest log line is a write to the emulated CF card: record only
+     * the SRAM device, not each game file. */
     if (!name || lstrcmpW(name, g_fake_device_path) != 0) {
-        log_text("CreateFileW: path did not match SRAM sentinel\r\n");
         return CreateFileW(name, access, share, security, creation, attributes,
                            template_file);
     }
+    log_wide_path(name);
     return open_sram();
 }
 
@@ -382,7 +383,14 @@ static BOOL WINAPI hook_device_io_control(HANDLE device, DWORD code,
     UnlockFileEx(device, 0, SRAM_SIZE, 0, &range);
     LeaveCriticalSection(&g_sram_lock);
     if (result && bytes_returned) *bytes_returned = code == SRAM_IOCTL_READ ? length : 0;
-    if (result) log_text(code == SRAM_IOCTL_READ ? "DeviceIoControl: SRAM read\r\n" : "DeviceIoControl: SRAM write\r\n");
+    if (result) {
+        /* Log the first access of each kind per process only. */
+        static LONG logged_read, logged_write;
+        LONG *logged = code == SRAM_IOCTL_READ ? &logged_read : &logged_write;
+        if (!InterlockedExchange(logged, 1))
+            log_text(code == SRAM_IOCTL_READ ? "DeviceIoControl: first SRAM read\r\n"
+                                             : "DeviceIoControl: first SRAM write\r\n");
+    }
     SetLastError(error);
     return result;
 }
@@ -469,6 +477,26 @@ static BOOL install_service_hooks(unsigned char *base) {
 
 __declspec(dllexport) DWORD WINAPI SramCompatInitialize(void) { return ERROR_SUCCESS; }
 
+/* The patched service imports SramCompatInitialize; game.exe does not. Its
+ * imports are bound before this DllMain runs, so compare resolved addresses:
+ * independent of the file name spelling, name/ordinal imports and Borland
+ * images without a separate name table. */
+static BOOL imports_sram_initialize(unsigned char *base) {
+    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)base;
+    IMAGE_NT_HEADERS32 *nt = (IMAGE_NT_HEADERS32 *)(base + dos->e_lfanew);
+    DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    IMAGE_IMPORT_DESCRIPTOR *descriptor;
+    if (!rva) return FALSE;
+    for (descriptor = (IMAGE_IMPORT_DESCRIPTOR *)(base + rva); descriptor->Name; ++descriptor) {
+        IMAGE_THUNK_DATA32 *slot;
+        if (lstrcmpiA((const char *)(base + descriptor->Name), "FBWFLIB.dll")) continue;
+        for (slot = (IMAGE_THUNK_DATA32 *)(base + descriptor->FirstThunk); slot->u1.Function; ++slot) {
+            if ((FARPROC)(ULONG_PTR)slot->u1.Function == (FARPROC)SramCompatInitialize) return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 static FARPROC real_fbwf_export(const char *name) {
     if (!g_real_fbwf) g_real_fbwf = LoadLibraryW(g_real_fbwf_path);
     if (!g_real_fbwf) return NULL;
@@ -499,12 +527,19 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls(instance);
         InitializeCriticalSection(&g_sram_lock);
         if (!GetModuleFileNameA(NULL, path, sizeof(path))) return FALSE;
+        /* XP may start a program through its 8.3 path (GGSG_S~1.EXE). An
+         * unrecognized service got no SRAM device and crashed on a nil object. */
+        GetLongPathNameA(path, path, sizeof(path));
         for (index = 0; path[index]; ++index) if (path[index] == '\\' || path[index] == '/') name = path + index + 1;
-        if (lstrcmpiA(name, "GGSG_Servic.exe") == 0) {
+        if (lstrcmpiA(name, "GGSG_Servic.exe") == 0 || imports_sram_initialize(base)) {
             if (!install_service_hooks(base)) return FALSE;
         } else if (lstrcmpiA(name, "game.exe") == 0) {
             install_game_hooks();
             if (!install_named_hook(base, "KERNEL32.DLL", "CloseHandle", hook_close_handle, NULL)) return FALSE;
+        } else {
+            log_text("DllMain: SRAM hooks not installed for process ");
+            log_text(name);
+            log_text("\r\n");
         }
     } else if (reason == DLL_PROCESS_DETACH && g_log != INVALID_HANDLE_VALUE) {
         CloseHandle(g_log);

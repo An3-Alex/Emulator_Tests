@@ -2,7 +2,9 @@
 # Update only the selected prepared copy, with guest-file backups. No VM boot.
 set -euo pipefail
 source "$(dirname -- "$0")/image_partition.sh"
-[[ $# -ge 4 && $# -le 6 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO [SRAM]]' >&2; exit 2; }
+gpu_args=()
+if [[ $# -ge 1 && ${!#} == --gpu ]]; then gpu_args=(--gpu); set -- "${@:1:$(($# - 1))}"; fi
+[[ $# -ge 4 && $# -le 6 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO [SRAM]] [--gpu]' >&2; exit 2; }
 audio_args=()
 if [[ $# -ge 5 ]]; then audio_args=(--audio "$5"); fi
 if [[ $# -eq 6 ]]; then audio_args+=(--sram "$6"); fi
@@ -33,7 +35,7 @@ mount_image() {
   mounted=1
 }
 mount_image ro
-result=$(python3 "$script_dir/graphics_update.py" "$mount_dir" "$3" "$4" "${audio_args[@]}" --check-only)
+result=$(python3 "$script_dir/graphics_update.py" "$mount_dir" "$3" "$4" "${audio_args[@]}" "${gpu_args[@]}" --check-only)
 echo "$result"
 [[ "$result" != 'Graphics already current' && "$result" != 'Runtime already current' ]] || exit 0
 umount "$mount_dir"
@@ -42,5 +44,5 @@ losetup -d "$loop_device"
 loop_device=
 mount_image rw
 # Revalidate after remount, before any write, and preserve old versions first.
-python3 "$script_dir/graphics_update.py" "$mount_dir" "$3" "$4" "${audio_args[@]}"
+python3 "$script_dir/graphics_update.py" "$mount_dir" "$3" "$4" "${audio_args[@]}" "${gpu_args[@]}"
 sync

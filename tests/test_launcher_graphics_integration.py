@@ -14,9 +14,11 @@ from portable_launcher_model import Selection
 
 class LauncherGraphicsTests(unittest.TestCase):
     def test_gpu_initial_install_and_repeat_start_are_automatic(self):
-        for marker, commands in (("REQUIRED", [["graphics"], ["audio"], ["gpu"], ["idle"]]),
-                                 ("CURRENT", [["gpu"], ["idle"]]),
-                                 ("UPDATE_REQUIRED", [["gpu"], ["idle"]])):
+        # A GPU copy keeps its audio/SRAM/service files current on every start
+        # (graphics_update in GPU mode), not only when it is first switched.
+        for marker, commands in (("REQUIRED", [["graphics", "--gpu"], ["audio"], ["gpu"], ["idle"]]),
+                                 ("CURRENT", [["gpu"], ["graphics", "--gpu"], ["idle"]]),
+                                 ("UPDATE_REQUIRED", [["gpu"], ["graphics", "--gpu"], ["idle"]])):
             with self.subTest(marker=marker):
                 target = SimpleNamespace(events=queue.Queue(), _run_step=mock.Mock())
                 selection = Selection(image="work.img", graphics_backend="qemu3dfx")
@@ -24,7 +26,8 @@ class LauncherGraphicsTests(unittest.TestCase):
                         subprocess.CompletedProcess([], 0, "0\n", ""),
                         subprocess.CompletedProcess([], 0, "QEMU3DFX_IMAGE_" + marker + "\n", "")]), \
                      mock.patch.object(launcher, "gpu_stage_command", return_value=["gpu"]), \
-                     mock.patch.object(launcher, "graphics_update_command", return_value=["graphics"]), \
+                     mock.patch.object(launcher, "graphics_update_command",
+                                       side_effect=lambda *a, gpu=False: ["graphics", "--gpu"] if gpu else ["graphics"]), \
                      mock.patch.object(launcher, "audio_bridge_setup_command", return_value=["audio"]), \
                      mock.patch.object(launcher, "loader_idle_setup_command", return_value=["idle"]), \
                      mock.patch("qemu3dfx_package.verify_launch") as verify:

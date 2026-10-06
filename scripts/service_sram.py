@@ -12,8 +12,11 @@ from pathlib import Path
 import struct
 
 SERVICE_HASH = "d9d04e9b70bf0fc6ec3dd4e57624940b107881067b4d1952f581bfc12befa2c8"
-PREVIOUS_SRAM_HASH = "4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94"
-SRAM_HASH = "31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6"
+# Earlier shims: before the service import, and before the service was
+# recognized by its import (an 8.3-named service got no SRAM and crashed).
+PREVIOUS_SRAM_HASHES = {"4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94",
+                        "31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6"}
+SRAM_HASH = "4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608"
 SERVICE_PATH = "WorkDir/GGSG_Servic/GGSG_Servic.exe"
 
 
@@ -104,7 +107,7 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
     for target in targets:
         if target.exists():
             actual = digest(target.read_bytes())
-            if actual not in (SRAM_HASH, PREVIOUS_SRAM_HASH):
+            if actual != SRAM_HASH and actual not in PREVIOUS_SRAM_HASHES:
                 raise ValueError(f"Unrecognized SRAM DLL: {target}")
             changed |= actual != SRAM_HASH
         else:

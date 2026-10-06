@@ -189,6 +189,14 @@ class DualOutputTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('GUEST_THREADS_OK', result.stdout)
 
+    def test_rebinding_the_current_context_does_not_reach_the_host(self):
+        # Measured with fix7: ~400 same-context MakeCurrent/s, 1-3 fps.
+        make_current = function(self.guest, 'uint32_t PT_CALL COMPACT\nmglMakeCurrent (uint32_t arg0, uint32_t arg1)')
+        fast = make_current.index('arg1 == m90_host_rc && arg0 == m90_host_dc)')
+        self.assertLess(fast, make_current.index('m90_host_switch(arg0, arg1);'))
+        self.assertLess(fast, make_current.index('currGLRC = arg1;'))
+        self.assertEqual(patch_guest(self.guest), self.guest)
+
     def test_second_output_window_exists_before_its_first_context(self):
         # WineD3D never calls ChoosePixelFormat for the second monitor's window;
         # without this handshake the host creates that output's context on DC 0.

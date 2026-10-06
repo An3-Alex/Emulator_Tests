@@ -51,7 +51,7 @@ class ServiceSramTests(unittest.TestCase):
         self.sram_file.write_bytes(b"existing configuration")
         for name, value in (("SERVICE_HASH", sram.digest(self.original)),
                             ("SRAM_HASH", sram.digest(b"new-dll")),
-                            ("PREVIOUS_SRAM_HASH", sram.digest(b"old-dll"))):
+                            ("PREVIOUS_SRAM_HASHES", {sram.digest(b"old-dll")})):
             context = patch.object(sram, name, value)
             context.start(); self.addCleanup(context.stop)
 

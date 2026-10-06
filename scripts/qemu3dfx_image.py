@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import struct
 
-from graphics_update import (PROXY_HASH, GAME_HASH, SWIFTSHADER_HASH, CGOS_HASH,
+from graphics_update import (PROXY_HASH, PREVIOUS_PROXIES, GAME_HASH, SWIFTSHADER_HASH, CGOS_HASH,
                              inside, require_hash, sha256, durable_copy)
 from qemu3dfx_package import validate
 
@@ -21,7 +21,8 @@ LEGACY_OPENGL_HASHES = {"385115486db927790080371dac45204a5cf809aba00cbd72c52c647
                         "d6722aa9583ceb7384c8bc51675ed45e6f920fd04f6b7fe2d74b846fbc47559e",
                         "d4955e298ec0f0c2ec1697e1ef5f205782d3eb9f80436f5129de4b8cb8b40b51",
                         "b4d5c55e8acf33a6e48da68ad56044c42072a1ec0509b5e3a612ceecefc6bb9d",
-                        "988a3aa09c09c9f0977bd03f7f46c0ab847115b4f6944e09f1d8876555e92da9"}
+                        "988a3aa09c09c9f0977bd03f7f46c0ab847115b4f6944e09f1d8876555e92da9",
+                        "21f47fafa9896b9c8351970cc73a03910138cc7d8c21cbb480a0e03ecf2349a2"}
 LEGACY_WINE_HASHES = {
     "d3d9.dll": {"50338a4b5ce53d3b7ab6e04f639b37c76edf2acf85f31f15b31c8ca2672f99bf"},
     "wined3d.dll": {"40140e6c87562a3288ea52840270a9446e9cdaae2680a049e405ea3e2fcd5220",
@@ -220,8 +221,14 @@ def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
     targets = []
     for directory in ("NVRAM", "WorkDir"):
         require_hash(inside(root, f"{directory}/game.exe"), {GAME_HASH})
-        require_hash(inside(root, f"{directory}/swiftshader_d3d9.dll"), {SWIFTSHADER_HASH})
-        require_hash(inside(root, f"{directory}/d3d9.dll"), {PROXY_HASH})
+        # SwiftShader is optional (QEMU-3dfx never loads it); a present copy
+        # must still be the verified one.
+        swiftshader = inside(root, f"{directory}/swiftshader_d3d9.dll")
+        if swiftshader.exists():
+            require_hash(swiftshader, {SWIFTSHADER_HASH})
+        # The software proxy is backed up and replaced; older verified versions
+        # are as good as the current one here.
+        require_hash(inside(root, f"{directory}/d3d9.dll"), {PROXY_HASH, *PREVIOUS_PROXIES})
         for name in ("d3d9.dll", "wined3d_d3d9.dll", "wined3d.dll", "opengl32.dll"):
             relative = f"{directory}/{name}"
             target = inside(root, relative)

@@ -346,7 +346,7 @@ static void m90_select_output(HDC dc)
 def patch_guest(source):
     marker = '/* M90: output identity comes from'
     if marker in source:
-        return patch_guest_threads(patch_guest_client(patch_guest_window(patch_guest_refs(patch_guest_timing(source)))))
+        return patch_guest_fast_bind(patch_guest_threads(patch_guest_client(patch_guest_window(patch_guest_refs(patch_guest_timing(source))))))
     source = once(source, '  WGL_FUNCP("wglCreateContextAttribsARB");',
                   '  m90_select_output(hDC);\n  WGL_FUNCP("wglCreateContextAttribsARB");')
     source = once(source, 'static int level;',
@@ -400,7 +400,7 @@ def patch_guest(source):
         mglMakeCurrent(0, 0);
         mglDeleteContext(MESAGL_MAGIC);
     }''', '''    /* Setting a pixel format on the other monitor must not delete live contexts. */''')
-    return patch_guest_threads(patch_guest_client(patch_guest_window(patch_guest_refs(patch_guest_timing(source)))))
+    return patch_guest_fast_bind(patch_guest_threads(patch_guest_client(patch_guest_window(patch_guest_refs(patch_guest_timing(source))))))
 
 
 def patch_guest_timing(source):
@@ -639,6 +639,24 @@ mglMakeCurrent (uint32_t arg0, uint32_t arg1)
     m90_configure(arg1);
     return TRUE;
 }'''
+
+
+def patch_guest_fast_bind(source):
+    # wglGetPixelFormat reports one cached format for every window. When a
+    # context's own format differs, WineD3D re-binds that already current
+    # context on every D3D call; each host round trip drained the command FIFO
+    # and called the driver's MakeCurrent (measured: ~400/s, 1-3 fps).
+    marker = '/* M90: binding the context this thread already has on the host is a no-op. */'
+    if marker in source:
+        return source
+    return once(source, '''    if (!m90_any_dc && !mglCreateContext(arg0))
+        return 0;
+    if (arg0) { currDC = arg0; GLwnd = WindowFromDC((HDC)arg0); m90_any_dc = 1; }''', '''    if (!m90_any_dc && !mglCreateContext(arg0))
+        return 0;
+    ''' + marker + '''
+    if (arg1 && arg1 == currGLRC && arg0 == currDC && arg1 == m90_host_rc && arg0 == m90_host_dc)
+        return TRUE;
+    if (arg0) { currDC = arg0; GLwnd = WindowFromDC((HDC)arg0); m90_any_dc = 1; }''')
 
 
 def patch_guest_fifo_args(source):

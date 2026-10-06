@@ -100,6 +100,15 @@ class ImageMigrationTests(unittest.TestCase):
         self.assertFalse((self.root / image_module.DRIVER).exists())
         self.assertFalse((self.root / "WorkDir/wined3d.dll").exists())
 
+    def test_install_without_swiftshader_but_never_with_an_unknown_one(self):
+        (self.root / "WorkDir/swiftshader_d3d9.dll").write_bytes(b"some other d3d9")
+        with self.assertRaisesRegex(ValueError, "Unrecognized"):
+            image_module.install(self.root, self.bundle)
+        self.assertFalse((self.root / image_module.BACKUP).exists())
+        for directory in ("NVRAM", "WorkDir"):
+            (self.root / directory / "swiftshader_d3d9.dll").unlink()
+        self.assertEqual(image_module.install(self.root, self.bundle), "QEMU3DFX_IMAGE_INSTALLED")
+
     def test_unknown_existing_dll_is_never_overwritten(self):
         (self.root / "WorkDir/opengl32.dll").write_bytes(b"owned-by-somebody-else")
         with self.assertRaisesRegex(ValueError, "already exists"):

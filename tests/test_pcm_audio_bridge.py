@@ -1,14 +1,21 @@
+import array
 import io
+import math
+import os
 from pathlib import Path
+import shutil
 import socket
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from pcm_audio_bridge import AudioBridge, HELLO, BLOCK, ACK, mono_pcm, validate_format
+from pcm_audio_bridge import (AudioBridge, HELLO, BLOCK, ACK, ADPCM_HEADER, adpcm_decode,
+                              mono_pcm, validate_format)
 
 
 class Output:
@@ -68,6 +75,75 @@ class BridgeTests(unittest.TestCase):
         self.output.pending.clear()
         connection.settimeout(1)
         self.assertEqual(connection.recv(8), ACK.pack(b'DONE', 7))
+
+    def test_adpcm_stream_is_decoded_and_acknowledged(self):
+        self.client = socket.create_connection(('127.0.0.1', self.bridge.port), timeout=1)
+        self.client.sendall(HELLO.pack(b'M9A2', 44100, 1, 16))
+        self.assertEqual(self.client.recv(4), b'OPEN')
+        # Three samples: first stored exactly, two 4-bit codes in one byte.
+        block = ADPCM_HEADER.pack(3, 1000, 0) + bytes([0x47])
+        self.client.sendall(BLOCK.pack(b'DATA', 1, len(block)) + block)
+        self.assertTrue(self.output.queued_data.wait(1))
+        self.assertEqual(self.output.data, [adpcm_decode(block)])
+        self.assertEqual(len(self.output.data[0]), 6)
+        self.output.pending.clear()
+        self.assertEqual(self.client.recv(8), ACK.pack(b'DONE', 1))
+        self.assertIn('ima-adpcm', self.report.getvalue())
+
+    def test_adpcm_rejects_inconsistent_block(self):
+        for block in (ADPCM_HEADER.pack(4, 0, 0) + b'\0',      # 4 samples need 2 code bytes
+                      ADPCM_HEADER.pack(0, 0, 0),              # empty
+                      ADPCM_HEADER.pack(1, 0, 89)):            # step index out of range
+            with self.assertRaises(ValueError):
+                adpcm_decode(block)
+
+    def test_guest_encoder_round_trips_through_host_decoder(self):
+        compiler = os.environ.get('M90_TEST_CC') or shutil.which('gcc')
+        if not compiler:
+            self.skipTest('C compiler not available')
+        header = (Path(__file__).resolve().parents[1] / 'src/pcm_wave_bridge.h').read_text()
+        start = header.index('static const short pcm_adpcm_steps[89]')
+        end = header.index('\n}\n', header.index('static BYTE pcm_adpcm_code(')) + 3
+        program = '''#include <stdio.h>
+#include <math.h>
+typedef unsigned char BYTE;
+typedef unsigned long DWORD;
+''' + header[start:end] + '''
+int main(void) {
+    int predictor = 0, index = 0, count = 2000, i;
+    short samples[2000];
+    BYTE codes[1000] = {0};
+    (void)PCM_ADPCM_HEADER;
+    for (i = 0; i < count; ++i) samples[i] = (short)(12000 * sin(i * 0.05) + 3000 * sin(i * 0.31));
+    predictor = samples[0];
+    for (i = 1; i < count; ++i) {
+        BYTE code = pcm_adpcm_code(samples[i], &predictor, &index);
+        if ((i - 1) & 1) codes[(i - 1) / 2] |= (BYTE)(code << 4); else codes[(i - 1) / 2] = code;
+    }
+    for (i = 0; i < count; ++i) printf("%d ", samples[i]);
+    printf("\\n");
+    for (i = 0; i < count / 2; ++i) printf("%02x", codes[i]);
+    printf("\\n");
+    return 0;
+}
+'''
+        with tempfile.TemporaryDirectory(prefix='adpcm-') as directory:
+            source = Path(directory) / 'adpcm.c'
+            source.write_text(program)
+            binary = source.with_suffix('.exe' if os.name == 'nt' else '')
+            result = subprocess.run([compiler, '-std=c11', '-Wall', '-Werror', str(source), '-o', str(binary), '-lm'],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+        original_line, codes_line = result.stdout.split('\n')[:2]
+        original = [int(value) for value in original_line.split()]
+        block = ADPCM_HEADER.pack(len(original), original[0], 0) + bytes.fromhex(codes_line)
+        decoded = array.array('h', adpcm_decode(block))
+        self.assertEqual(len(decoded), len(original))
+        signal = sum(value * value for value in original)
+        noise = sum((a - b) ** 2 for a, b in zip(original, decoded))
+        self.assertGreater(10 * math.log10(signal / noise), 25)  # dB
+        self.assertLess(len(block) * 4, len(original) * 2 + 64)   # ~4x fewer UART bytes
 
     def test_disconnect_cancels_playback(self):
         connection = self.connect()

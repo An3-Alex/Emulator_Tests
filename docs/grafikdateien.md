@@ -26,7 +26,11 @@ Ein Downloadlink allein ersetzt nicht die Lizenzpflichten einer eigenen Verteilu
 
 ## SwiftShader-DLL
 
-Der aktuelle Starter benötigt **SwiftShader Build 5003, Direct3D 9, x86/32 Bit,
+Nur für den Grafikpfad „SwiftShader“ nötig. Mit „QEMU-3dfx“ bleibt das Feld
+leer; die Einrichtung kommt dann ohne SwiftShader aus. Ein späterer Wechsel
+auf „SwiftShader“ erfordert die Datei und eine neu eingerichtete Arbeitskopie.
+
+Unterstützt wird **SwiftShader Build 5003, Direct3D 9, x86/32 Bit,
 Windows XP**. Eine beliebige Datei namens `d3d9.dll` reicht nicht aus.
 
 1. Das Paket beschaffen: SwiftShader 3.0 war früher als kostenlose Demo von
@@ -79,9 +83,8 @@ ist kein bereits unterstützter Ersatz.
 ## Auswahl des Grafikpfads
 
 Bei „SwiftShader“ werden beide Anzeigen in Software gerendert. Bei „QEMU-3dfx“
-nutzen beide Bildschirme die Host-GPU. Die Vorbereitung hält die eigene
-SwiftShader-DLL als Grundlage für den separat wählbaren Softwaremodus vor;
-im 3dfx-Spielbetrieb wird sie nicht geladen.
+nutzen beide Bildschirme die Host-GPU; SwiftShader wird dabei nicht geladen
+und muss nicht ausgewählt werden.
 
 Die Einstellung „QXL-Framebuffer je Anzeige“ ist nicht der Grafikspeicher der
 Host-GPU. Sie setzt QEMUs `vgamem_mb`. QEMU reserviert dafür je QXL-Gerät einen

@@ -248,7 +248,8 @@ class VirtualTouchTests(unittest.TestCase):
             stream.request(*point, True)
             stream.request(*point, False)
             self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream)[3])
-            delivered = bridge.deliver_touch_packet(rsp, controller, stream)
+            delivered = bridge.deliver_touch_packet(rsp, controller, stream,
+                                                    bridge.TouchPacketStream.MIN_HOLD_TICKS)
             self.assertEqual(delivered[3], POINT_ACK)
             self.assertTrue(delivered[5])
             self.assertIsNone(delivered[4])
@@ -271,8 +272,39 @@ class VirtualTouchTests(unittest.TestCase):
             self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream))
         self.assertIsNone(controller.first_point)
         rsp.consume()
-        self.assertEqual(bridge.deliver_touch_packet(rsp, controller, stream)[3], POINT_ACK)
+        self.assertEqual(bridge.deliver_touch_packet(rsp, controller, stream,
+                                                     bridge.TouchPacketStream.MIN_HOLD_TICKS)[3], POINT_ACK)
         self.assertEqual(sum("CALIBRATION_POINT" in event for event in controller.events), 1)
+
+    def test_short_click_is_held_long_enough_for_the_firmware(self):
+        # A mouse click queues down and up together. The firmware debounces
+        # contacts, so the release waits for firmware time to pass.
+        controller = VirtualTouchController()
+        rsp = MemoryRsp()
+        stream = bridge.TouchPacketStream()
+        stream.request(400, 300, True)
+        stream.request(400, 300, False)
+        down = bridge.deliver_touch_packet(rsp, controller, stream, 1000)
+        self.assertTrue(down[2])
+        rsp.consume()
+        hold = bridge.TouchPacketStream.MIN_HOLD_TICKS
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold - 1))
+        self.assertEqual(len(stream.packets), 1)
+        release = bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold)
+        self.assertFalse(release[2])
+        self.assertEqual(decode_native(release[3]), (400, 300))
+        # A drag delivers its moves immediately; only the release is held,
+        # and the hold counts from the first contact sample.
+        rsp.consume()
+        stream.request(100, 300, True)
+        stream.request(300, 300, True)
+        stream.request(300, 300, False)
+        self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 5000)[2])
+        rsp.consume()
+        self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 5001)[2])
+        rsp.consume()
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 5002))
+        self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 5000 + hold)[2])
 
     def test_coordinate_fallback_uses_calibrated_screen_point_once(self):
         controller = VirtualTouchController()

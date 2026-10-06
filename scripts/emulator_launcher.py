@@ -48,7 +48,7 @@ DATABASE_FILES = {
 FIELDS = (
     ("original_image", "Frisches Original-CF-Image"),
     ("image", "Neue Arbeitskopie / Start-Image"),
-    ("swiftshader", "SwiftShader-DLL (eigene Datei)"),
+    ("swiftshader", "SwiftShader-DLL (nur Softwaremodus)"),
     ("qxl_driver_dir", "QXL-Treiberordner"),
     ("database", "Datenbank (M90)"),
     ("loader", "Loader"),
@@ -184,7 +184,7 @@ class Launcher(tk.Tk):
             guide,
             text="1. QEMU, Python und WSL/NTFS-Werkzeuge prüfen oder installieren.\n"
                  "2. Original-CF-Image, neuen Dateinamen für die Arbeitskopie, M90-Dateien, "
-                 "Zulassungskarten-EEPROM, SwiftShader und QXL auswählen.\n"
+                 "Zulassungskarten-EEPROM und QXL auswählen; SwiftShader nur für den Grafikpfad SwiftShader.\n"
                  "3. „Frisches Image einrichten“ abwarten; das Original bleibt unverändert.\n"
                  "4. „Dateien und Programme prüfen“, dann „Emulator starten“. "
                  "Das Live-Protokoll ist optional.",
@@ -559,12 +559,23 @@ class Launcher(tk.Tk):
             if status.returncode != 0 or marker not in ("CURRENT", "REQUIRED", "UPDATE_REQUIRED"):
                 raise RuntimeError(f"GPU-Arbeitskopie konnte nicht geprüft werden: {status.stderr.strip()}")
             if marker == "REQUIRED":
-                self._run_step(graphics_update_command(selection, PROJECT),
+                # GPU mode: works without SwiftShader; qemu3dfx_image replaces
+                # the software d3d9.dll next.
+                self._run_step(graphics_update_command(selection, PROJECT, gpu=True),
                                "Grafik- und SRAM-Dateien werden vorbereitet")
                 self._run_step(audio_bridge_setup_command(selection, PROJECT),
                                "Audio-Ausgabe der Arbeitskopie wird eingestellt")
             self._run_step(gpu_stage_command(selection, PROJECT),
                            "QEMU-3dfx-Gastdateien werden automatisch eingerichtet")
+            if marker != "REQUIRED":
+                # graphics_update ran only when this copy was first switched to
+                # GPU; keep its audio, SRAM and service files current as well.
+                try:
+                    self._run_step(graphics_update_command(selection, PROJECT, gpu=True),
+                                   "Ton-, SRAM- und Service-Dateien werden aktualisiert")
+                except (RuntimeError, ValueError) as exc:
+                    # Unknown guest files stay untouched; the game itself still starts.
+                    self.events.put(("line", f"Warnung: Laufzeitdateien nicht aktualisiert: {exc}\n"))
             verify_launch(Path(selection.image), Path(selection.qemu_x86))
             self._run_step(loader_idle_setup_command(selection, PROJECT),
                            "CPU-Leerlaufwartezeit des Loaders wird auf 5 Sekunden begrenzt")

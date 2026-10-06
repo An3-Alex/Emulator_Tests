@@ -67,6 +67,18 @@ class GraphicsUpdateTests(unittest.TestCase):
         for relative, data in self.before.items():
             self.assertEqual((self.guest / relative).read_bytes(), data)
 
+    def test_gpu_copy_keeps_its_d3d9_and_needs_no_swiftshader(self):
+        for directory in ("NVRAM", "WorkDir"):
+            (self.guest / directory / "d3d9.dll").write_bytes(b"gpu-proxy")
+            (self.guest / directory / "swiftshader_d3d9.dll").unlink()
+        self.assertIn("Graphics updated", self.run_update(gpu=True))
+        self.assertEqual((self.guest / "WINDOWS/explorer.exe").read_bytes(), b"new-bootstrap")
+        for directory in ("NVRAM", "WorkDir"):
+            self.assertEqual((self.guest / directory / "d3d9.dll").read_bytes(), b"gpu-proxy")
+        self.assertEqual(self.run_update(gpu=True), "Graphics already current")
+        with self.assertRaises(FileNotFoundError):
+            self.run_update()  # the software path still requires SwiftShader
+
     def test_read_only_validation_makes_no_backup_or_writes(self):
         self.assertEqual(self.run_update(check_only=True), "Graphics update required")
         self.assert_original_files()

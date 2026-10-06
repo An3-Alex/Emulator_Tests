@@ -23,8 +23,9 @@ PREVIOUS_PROXIES = {
 SWIFTSHADER_HASH = "fc5994b209a57a77275e5ecee1904cd9139a344c69e221e54f05af90580a90c9"
 GAME_HASH = "27c4553927397b1e8443d6caea12e5b4e7282e4948b67b85c80c4db0d1d0427d"
 CGOS_HASH = "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"
-AUDIO_HASH = "11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7"
+AUDIO_HASH = "5c296f4514c09adcff07a89b6372529263dec5c0c3c13282a117f6954d0fdf89"
 PREVIOUS_AUDIO = {
+    "11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7",  # PCM over the UART (before IMA ADPCM)
     "de093818dcaf76f38ecfe416551404076e5542cbdd560fd3d02f9dbb0a0df170",
     "d7834a46632c3936823e9b0052b514b50755de7b8c01f5ca6b1df8a9b7e03c9f",
     "8efc687d626c56fa995e084fa462a187446d238f871abab6c622b13a9bbbd7c8",
@@ -70,7 +71,10 @@ def durable_copy(source: Path, destination: Path) -> None:
 
 def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = None,
            sram: Path | None = None,
-           check_only: bool = False) -> str:
+           check_only: bool = False, gpu: bool = False) -> str:
+    """gpu: the copy runs QEMU-3dfx. Its d3d9.dll belongs to qemu3dfx_image and
+    SwiftShader is not loaded, so neither is required or touched here; audio,
+    SRAM and bootstrap files are still kept current."""
     root = root.resolve()
     require_hash(bootstrap, {BOOTSTRAP_HASH})
     require_hash(proxy, {PROXY_HASH})
@@ -95,9 +99,10 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
                 {BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP})]
     for directory in ("NVRAM", "WorkDir"):
         require_hash(inside(root, f"{directory}/game.exe"), {GAME_HASH})
-        require_hash(inside(root, f"{directory}/swiftshader_d3d9.dll"), {SWIFTSHADER_HASH})
-        targets.append((f"{directory}/d3d9.dll", proxy, PROXY_HASH,
-                        {PROXY_HASH, *PREVIOUS_PROXIES}))
+        if not gpu:
+            require_hash(inside(root, f"{directory}/swiftshader_d3d9.dll"), {SWIFTSHADER_HASH})
+            targets.append((f"{directory}/d3d9.dll", proxy, PROXY_HASH,
+                            {PROXY_HASH, *PREVIOUS_PROXIES}))
         if audio is not None:
             targets.append((f"{directory}/irrKlang.dll", audio, AUDIO_HASH,
                             {AUDIO_HASH, *PREVIOUS_AUDIO}))
@@ -171,7 +176,8 @@ if __name__ == "__main__":
     parser.add_argument("--audio", type=Path)
     parser.add_argument("--sram", type=Path)
     parser.add_argument("--check-only", action="store_true")
+    parser.add_argument("--gpu", action="store_true")
     options = parser.parse_args()
     print(update(options.root, options.bootstrap, options.proxy, audio=options.audio,
                  sram=options.sram,
-                 check_only=options.check_only))
+                 check_only=options.check_only, gpu=options.gpu))

@@ -1592,7 +1592,7 @@ def service_touch_command(rsp: RspClient, controller: VirtualTouchController,
 
 
 def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
-                         stream: "TouchPacketStream") -> tuple | None:
+                         stream: "TouchPacketStream", ticks: int = 0) -> tuple | None:
     """Consume one input only at an empty native RX ring; never replay a point."""
     if not stream.packets:
         return None
@@ -1600,12 +1600,15 @@ def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
         # After point 2/failure, wait for native calibration teardown. It
         # reinitializes the receiver; do not leak tablet packets into its ACKs.
         return None
+    if not stream.packets[0][2] and not stream.release_due(ticks):
+        return None
     status = rsp.read_memory(TOUCH_UART_RX_COUNT, 2)
     if status[0] != 0:
         return None
     if status[1] >= TOUCH_UART_RX_BUFFER_SIZE:
         raise RuntimeError("touch-controller RX index outside ring")
     x, y, down, _queued_packet = stream.packets[0]
+    stream.delivered(down, ticks)
     wide = rsp.read_memory(TOUCH_WIDE_MODE_ADDRESS, 1)[0] == 1
     calibration_input = controller.calibrating
     response = controller.touch(x, y, down, wide=wide)
@@ -1729,10 +1732,25 @@ class TouchPacketStream:
     """One contact edge, real drag positions, then immediate queued release."""
 
     MAX_PACKETS = 64
+    # The firmware debounces contacts: a mouse click delivered its down and up
+    # edges a few milliseconds apart and was ignored ("only long presses
+    # work"). Keep each delivered contact down for this many DUART timer
+    # interrupts (about 1 ms of firmware time each) before releasing it.
+    MIN_HOLD_TICKS = 150
 
     def __init__(self) -> None:
         self.packets: deque[tuple[int, int, bool, bytes]] = deque()
         self.active_point: tuple[int, int] | None = None
+        self.down_since: int | None = None
+
+    def release_due(self, ticks: int) -> bool:
+        return self.down_since is None or ticks - self.down_since >= self.MIN_HOLD_TICKS
+
+    def delivered(self, down: bool, ticks: int) -> None:
+        if not down:
+            self.down_since = None
+        elif self.down_since is None:
+            self.down_since = ticks
 
     def _append(self, x: int, y: int, down: bool) -> None:
         self.packets.append((x, y, down, format_tablet_packet(x, y, down)))
@@ -2294,7 +2312,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 touch_response_latch = request
                     if ((touch_state != TOUCH_WAITING_FOR_REPLY or touch_controller.calibrating)
                             and touch_packets.packets):
-                        delivered = deliver_touch_packet(rsp, touch_controller, touch_packets)
+                        delivered = deliver_touch_packet(rsp, touch_controller, touch_packets,
+                                                         timer_injections)
                         if delivered is not None:
                             x, y, down, packet, point, calibration_input = delivered
                             if down and point is not None:
