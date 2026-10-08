@@ -15,8 +15,9 @@ SERVICE_HASH = "d9d04e9b70bf0fc6ec3dd4e57624940b107881067b4d1952f581bfc12befa2c8
 # Earlier shims: before the service import, and before the service was
 # recognized by its import (an 8.3-named service got no SRAM and crashed).
 PREVIOUS_SRAM_HASHES = {"4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea640b3aa94",
-                        "31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6"}
-SRAM_HASH = "4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608"
+                        "31cac0b2141d2c8896e9dcf5cc2bd19ea0e3e0e1196625b9a79645d1edc6c9d6",
+                        "4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608"}  # before the 10-MB guest log limit
+SRAM_HASH = "555f2a7b6e886e9476b7f83ecee89c3cfa369c823f82f5bdf4c6181c7ce41dd2"
 SERVICE_PATH = "WorkDir/GGSG_Servic/GGSG_Servic.exe"
 
 
@@ -24,7 +25,10 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def patch_service(source: bytes) -> bytes:
+def patch_service(source: bytes, *, writable_iat: bool = True) -> bytes:
+    """writable_iat=False reproduces the earlier patch, which XP cannot load: its
+    loader unprotects only the section holding the import directory while
+    binding, so the Borland IATs in read-only .idata faulted (0xC0000005)."""
     if digest(source) != SERVICE_HASH:
         raise ValueError("Unrecognized service executable; original must remain unchanged")
     data = bytearray(source)
@@ -55,6 +59,15 @@ def patch_service(source: bytes) -> bytes:
             raise ValueError("Invalid import descriptors")
         descriptors += data[cursor:cursor + 20]
         cursor += 20
+    if writable_iat:
+        # The moved import directory no longer marks the original IATs for
+        # the XP loader; their sections must allow writes during binding.
+        thunks = {struct.unpack_from("<I", descriptors, index + 16)[0]
+                  for index in range(0, len(descriptors), 20)}
+        for index, (va, virtual, _, size) in enumerate(sections):
+            if any(va <= thunk < va + max(virtual, size) for thunk in thunks):
+                flags = table + index * 40 + 36
+                struct.pack_into("<I", data, flags, u32(flags) | 0x80000000)
     align = lambda number, unit: (number + unit - 1) // unit * unit
     section_alignment, file_alignment = u32(opt + 32), u32(opt + 36)
     rva = align(max(va + max(size, virtual) for va, virtual, _, size in sections), section_alignment)
@@ -97,9 +110,9 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
     current = service.read_bytes()
     original = backup.read_bytes() if backup.exists() else current
     patched = patch_service(original)
-    if current not in (original, patched):
+    if current not in (original, patched, patch_service(original, writable_iat=False)):
         raise ValueError("Service differs from original and verified SRAM version")
-    if current == patched and not backup.exists():
+    if current != original and not backup.exists():
         raise ValueError("Original service backup missing")
     targets = [inside(root, "NVRAM/FBWFLIB.dll"), inside(root, "WorkDir/FBWFLIB.dll"),
                service.with_name("FBWFLIB.dll")]

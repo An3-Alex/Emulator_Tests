@@ -20,6 +20,8 @@ import sys
 import threading
 import time
 
+from capped_log import CappedTextLog, retire_previous
+
 HELLO = struct.Struct('<4sIII')
 BLOCK = struct.Struct('<4sII')
 ACK = struct.Struct('<4sI')
@@ -370,8 +372,8 @@ def main():
     parser.add_argument('--ready-file', type=Path)
     parser.add_argument('--muted', action='store_true')
     args = parser.parse_args()
-    args.log.parent.mkdir(parents=True, exist_ok=True)
-    with args.log.open('a', encoding='utf-8') as report:
+    retire_previous(args.log)
+    with CappedTextLog(args.log) as report:
         output = SilentOutput() if args.muted else SDLOutput(args.sdl)
         bridge = AudioBridge(output, report=report)
         try:

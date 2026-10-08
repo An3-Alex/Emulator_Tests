@@ -6,7 +6,7 @@ database files remain outside the bundled application.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import os
 import json
 import ctypes
@@ -29,16 +29,21 @@ from image_setup import (
     retry_qxl_command, stage_display_verify_command,
     stage_check_command, stage_command,
 )
+from database_key import KeyCache, resolve_key
 from portable_launcher_model import (
-    EMULATION_FIELDS, Selection, check_runtime, launch_command, validate_emulation, graphics_selection,
+    EMULATION_FIELDS, Selection, check_runtime, file_sha256, launch_command, validate_emulation,
+    graphics_selection,
 )
 from runtime_bundle import (
-    OWN_BINARIES, REQUIRED_PYTHON_FILES, SHELL_FILES, project_for_launcher,
+    OWN_BINARIES, REQUIRED_PYTHON_FILES, SHELL_FILES, project_for_launcher, runtime_root,
 )
+from uninstall import emulator_folders, remove, working_copy_files
 
 
 PROJECT = project_for_launcher()
 SETTINGS = Path(os.environ.get("APPDATA", str(Path.home()))) / "M90 Emulator" / "settings.json"
+# Database keys found by the automatic search, by SHA-256 of the database file.
+KEY_CACHE = SETTINGS.with_name("database-keys.json")
 DATABASE_FILES = {
     "database": "Magie_90_CC4.bin",
     "loader": "Loader_61640403_L5.0b_2MB.bin",
@@ -135,6 +140,7 @@ class Launcher(tk.Tk):
         self.preparing = False
         self.prepare_started_at: float | None = None
         self.prepare_phase = ""
+        self.key_search: subprocess.Popen | None = None
 
         try:
             saved = Selection.from_json(SETTINGS)
@@ -298,6 +304,43 @@ class Launcher(tk.Tk):
             "Sound verwendet die PCM-Bridge über COM1; der Münzprüfer hat keine separat konfigurierbare Emulation. "
             "Es gibt kein Windows-CPU-Prozentlimit. Ungeeignete Werte können Bootfehler oder Abstürze verursachen."
         )).pack(anchor="w", pady=8)
+        removal = ttk.LabelFrame(form, text="Deinstallation", padding=10)
+        removal.pack(fill="x", pady=(8, 8))
+        ttk.Label(removal, wraplength=760, text=(
+            "Entfernt Laufzeitordner, Protokolle, Einstellungen und gespeicherte Datenbank-Schlüssel; "
+            "die Arbeitskopie nur nach eigener Rückfrage. Original-CF-Image, Datenbankdateien und "
+            "installierte Programme (QEMU, Python, WSL) bleiben erhalten."
+        )).pack(anchor="w")
+        ttk.Button(removal, text="Emulator deinstallieren…", command=self._uninstall).pack(anchor="w", pady=(6, 0))
+
+    def _uninstall(self) -> None:
+        if self.checking or self.preparing or self.process_group is not None:
+            messagebox.showwarning("Deinstallieren", "Zuerst den Emulator bzw. die laufende Einrichtung beenden.")
+            return
+        folders = emulator_folders(SETTINGS.parent, runtime_root(), frozen=getattr(sys, "frozen", False))
+        listing = "\n".join(f"• {path}" for path in folders) or "• (keine Emulator-Ordner gefunden)"
+        if not messagebox.askyesno(
+            "Emulator deinstallieren",
+            f"Folgendes wird gelöscht:\n{listing}\n\nOriginal-CF-Image, Datenbankdateien und installierte "
+            "Programme bleiben erhalten. Fortfahren?", icon="warning",
+        ):
+            return
+        targets = list(folders)
+        copy = working_copy_files(self.variables["image"].get().strip(),
+                                  self.variables["original_image"].get().strip())
+        if copy and messagebox.askyesno(
+            "Arbeitskopie löschen",
+            f"Auch die Arbeitskopie löschen?\n{copy[0]}\n\nSie enthält Spielstände und Einstellungen "
+            "des Spiel-PCs und kann nur über „Frisches Image einrichten“ neu erstellt werden.",
+            icon="warning",
+        ):
+            targets.extend(copy)
+        errors = remove(targets)
+        if errors:
+            messagebox.showerror("Deinstallieren", "Nicht alles konnte gelöscht werden:\n" + "\n".join(errors[:8]))
+        else:
+            messagebox.showinfo("Deinstallieren", "Emulator-Daten entfernt. Die EXE-Datei selbst kann jetzt gelöscht werden.")
+        self.destroy()
 
     def _save_options(self) -> None:
         selection = self._read_selection()
@@ -537,9 +580,45 @@ class Launcher(tk.Tk):
                     )
                 if start and not issues:
                     self._update_graphics(selection)
+                    selection = self._resolve_database_key(selection)
+                    self._report_database_version(selection)
         except Exception as exc:
             issues = [f"Prüfung fehlgeschlagen: {exc}"]
         self.events.put(("checked", (selection, start, issues)))
+
+    def _resolve_database_key(self, selection: Selection) -> Selection:
+        """Return the selection with the verified D3 key of its database."""
+        def progress(fraction: float) -> None:
+            self.events.put(("status", f"Datenbank-Schlüssel wird gesucht … {fraction * 100:.0f} %"))
+
+        def started(process: subprocess.Popen) -> None:
+            self.key_search = process
+
+        self.events.put(("status", "Datenbank-Schlüssel wird geprüft…"))
+        try:
+            key = resolve_key(
+                Path(selection.database), selection.db_key, KeyCache(KEY_CACHE),
+                PROJECT / "build/recover-d3/recover_database_d3.exe",
+                progress, lambda text: self.events.put(("line", text + "\n")), started,
+            )
+        finally:
+            self.key_search = None
+        return replace(selection, db_key=f"{key:08X}")
+
+    def _report_database_version(self, selection: Selection) -> None:
+        """Warn, without refusing, when the bridge's fixed addresses do not fit."""
+        from m68k_database_bridge import database_hook_mismatches
+        from owner_database_runtime import prepare_runtime
+        database = Path(selection.database)
+        runtime, _report = prepare_runtime(database, file_sha256(database),
+                                           d3=int(selection.db_key, 16))
+        mismatches = database_hook_mismatches(runtime, Path(selection.loader).read_bytes())
+        if mismatches:
+            self.events.put(("line", (
+                "Hinweis: Diese Datenbank-/Loader-Version ist nicht verifiziert. Abweichend: "
+                + ", ".join(name for _, name in mismatches)
+                + ". Der Start wird trotzdem versucht; diese Funktionen können falsch reagieren.\n"
+            )))
 
     def _update_graphics(self, selection: Selection) -> None:
         # Refuse to mount a working image while any QEMU instance may own it.
@@ -894,6 +973,9 @@ class Launcher(tk.Tk):
             self.close_after_stop = True
             self._stop_all()
             return
+        search = self.key_search
+        if search is not None and search.poll() is None:
+            search.kill()
         self.destroy()
 
 

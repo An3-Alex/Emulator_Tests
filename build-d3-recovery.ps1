@@ -11,7 +11,7 @@ New-Item -ItemType Directory -Force -Path $output | Out-Null
 $source = Join-Path $project 'src\recover_database_d3.cpp'
 $exe = Join-Path $output 'recover_database_d3.exe'
 $command = '"' + $devcmd + '" -no_logo -arch=x64 -host_arch=x64 && ' +
-    'cl /nologo /O2 /EHsc /std:c++17 /W4 /Fe:"' + $exe + '" "' + $source + '"'
+    'cl /nologo /O2 /MT /EHsc /std:c++17 /W4 /Fo:"' + $output + '\\" /Fe:"' + $exe + '" "' + $source + '"'
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
 Write-Output "Built $exe"

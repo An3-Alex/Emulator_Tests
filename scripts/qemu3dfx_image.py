@@ -7,6 +7,7 @@ from pathlib import Path
 import struct
 
 from graphics_update import (PROXY_HASH, PREVIOUS_PROXIES, GAME_HASH, SWIFTSHADER_HASH, CGOS_HASH,
+                             PREVIOUS_CGOS,
                              inside, require_hash, sha256, durable_copy)
 from qemu3dfx_package import validate
 
@@ -24,7 +25,8 @@ LEGACY_OPENGL_HASHES = {"385115486db927790080371dac45204a5cf809aba00cbd72c52c647
                         "988a3aa09c09c9f0977bd03f7f46c0ab847115b4f6944e09f1d8876555e92da9",
                         "21f47fafa9896b9c8351970cc73a03910138cc7d8c21cbb480a0e03ecf2349a2"}
 LEGACY_WINE_HASHES = {
-    "d3d9.dll": {"50338a4b5ce53d3b7ab6e04f639b37c76edf2acf85f31f15b31c8ca2672f99bf"},
+    "d3d9.dll": {"50338a4b5ce53d3b7ab6e04f639b37c76edf2acf85f31f15b31c8ca2672f99bf",
+                 "1f20631663df203ae597e788ab34c34b65a83249c70117bd8f30481ee8cb4b59"},  # before the 10-MB guest log limit
     "wined3d.dll": {"40140e6c87562a3288ea52840270a9446e9cdaae2680a049e405ea3e2fcd5220",
                     "f4a7f12b1c802db676dd1766e55ce02a0fb7afa465633d194f7fdc3c3a23ac18"},
     "wined3d_d3d9.dll": {"baa7f96adb69d1413c76a5c0d12a759db0377ed3627d4263025b5aaf9f051aac",
@@ -215,7 +217,7 @@ def install(root: Path, bundle: Path, *, check_only: bool = False) -> str:
             temporary.write_text(json.dumps(state, indent=2) + "\n")
             temporary.replace(marker)
         return "QEMU3DFX_IMAGE_CURRENT"
-    require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH})
+    require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH, *PREVIOUS_CGOS})
     if inside(root, "NVRAM/m90_setup_stage.txt").read_text().strip() != "stage=ready":
         raise ValueError("The image must be completely prepared first")
     targets = []

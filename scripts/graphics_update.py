@@ -14,17 +14,20 @@ import shutil
 import uuid
 
 BOOTSTRAP_HASH = "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"
-PROXY_HASH = "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737"
+PROXY_HASH = "aeb4bd283bdcd362b0226ced63a8f46582733ae3430293a1dc3db881f7f81793"
 PREVIOUS_BOOTSTRAP = "ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6"
 PREVIOUS_PROXIES = {
+    "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737",  # before the 10-MB guest log limit
     "31d2d484d4821ef34dd764e68a66338ed638926c66b73b14078d360713f4987f",
     "801eb42c6af73542ecb290f4844bf6ddab5a9a5daf2c3a963a66583188fd06d3",
 }
 SWIFTSHADER_HASH = "fc5994b209a57a77275e5ecee1904cd9139a344c69e221e54f05af90580a90c9"
 GAME_HASH = "27c4553927397b1e8443d6caea12e5b4e7282e4948b67b85c80c4db0d1d0427d"
-CGOS_HASH = "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"
-AUDIO_HASH = "5c296f4514c09adcff07a89b6372529263dec5c0c3c13282a117f6954d0fdf89"
+CGOS_HASH = "ea6843b6f7927dad09d31dfe297b57ad727320c4e81f213b27ac8408f566af57"
+PREVIOUS_CGOS = {"16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"}  # before the 10-MB guest log limit
+AUDIO_HASH = "bc815b845c86d40f289d903b895ec7a082e67a37b379af01ae6207508edd6426"
 PREVIOUS_AUDIO = {
+    "5c296f4514c09adcff07a89b6372529263dec5c0c3c13282a117f6954d0fdf89",  # before the 10-MB guest log limit
     "11db62d22889c3ac8368f464e24463b0653bb23be8d116b78cc73fc8f30c6ba7",  # PCM over the UART (before IMA ADPCM)
     "de093818dcaf76f38ecfe416551404076e5542cbdd560fd3d02f9dbb0a0df170",
     "d7834a46632c3936823e9b0052b514b50755de7b8c01f5ca6b1df8a9b7e03c9f",
@@ -70,7 +73,7 @@ def durable_copy(source: Path, destination: Path) -> None:
 
 
 def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = None,
-           sram: Path | None = None,
+           sram: Path | None = None, cgos: Path | None = None,
            check_only: bool = False, gpu: bool = False) -> str:
     """gpu: the copy runs QEMU-3dfx. Its d3d9.dll belongs to qemu3dfx_image and
     SwiftShader is not loaded, so neither is required or touched here; audio,
@@ -91,12 +94,15 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
             for relative in ("WINDOWS/INF/realtekac97.inf", "WINDOWS/system32/drivers/ALCXWDM.SYS"):
                 if not inside(root, relative).is_file():
                     raise ValueError(f"AC97 driver file missing: {relative}")
-    require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH})
+    require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH, *PREVIOUS_CGOS})
     marker = inside(root, "NVRAM/m90_setup_stage.txt")
     if marker.exists() and marker.read_text().strip() != "stage=ready":
         raise ValueError("Image is not in ready stage")
     targets = [("WINDOWS/explorer.exe", bootstrap, BOOTSTRAP_HASH,
                 {BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP})]
+    if cgos is not None:
+        require_hash(cgos, {CGOS_HASH})
+        targets.append(("WINDOWS/system32/Cgos.dll", cgos, CGOS_HASH, {CGOS_HASH, *PREVIOUS_CGOS}))
     for directory in ("NVRAM", "WorkDir"):
         require_hash(inside(root, f"{directory}/game.exe"), {GAME_HASH})
         if not gpu:
@@ -175,9 +181,10 @@ if __name__ == "__main__":
     parser.add_argument("proxy", type=Path)
     parser.add_argument("--audio", type=Path)
     parser.add_argument("--sram", type=Path)
+    parser.add_argument("--cgos", type=Path)
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--gpu", action="store_true")
     options = parser.parse_args()
     print(update(options.root, options.bootstrap, options.proxy, audio=options.audio,
-                 sram=options.sram,
+                 sram=options.sram, cgos=options.cgos,
                  check_only=options.check_only, gpu=options.gpu))

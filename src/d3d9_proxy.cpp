@@ -5,6 +5,7 @@
 #undef Direct3DCreate9
 #include <stddef.h>
 #include "display_policy.h"
+#include "guest_log_limit.h"
 #ifdef M90_QEMU3DFX
 #include <winsvc.h>
 #endif
@@ -25,12 +26,14 @@ static void zero_memory(void *memory, size_t size)
 
 static void log_text(const char *text)
 {
+    DWORD length = 0;
+    while (text[length]) ++length;
+    m90_limit_log_before_write(D3D9_PROXY_LOG, length);
     HANDLE file = CreateFileA(D3D9_PROXY_LOG, FILE_APPEND_DATA,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
         FILE_ATTRIBUTE_NORMAL, NULL);
     if (file != INVALID_HANDLE_VALUE) {
-        DWORD length = 0, written;
-        while (text[length]) ++length;
+        DWORD written;
         WriteFile(file, text, length, &written, NULL);
         CloseHandle(file);
     }

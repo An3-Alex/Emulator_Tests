@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 
 from admission_card import inspect_eeprom
+from database_key import parse_key
 
 
 # One schema for the form, saved values and start validation. No free-form
@@ -34,6 +35,7 @@ EMULATION_FIELDS = (
     ("duart_x1_hz", "Datenbank", "DUART-Eingangstakt (Hz)", int, (1, 10000000), "Standard: 3686400 (angenommen); nicht der 16-MHz-CPU-Takt. Änderung beeinflusst Timer."),
     ("db_connect_timeout", "Datenbank", "Verbindungs-Wartezeit (Sekunden)", float, (10, 600), "Standard: 120; Zeitlimit für die Verbindung zum Spiel-PC."),
     ("database_date", "Datenbank", "Startdatum/Uhrzeit (Programmer und RTC)", str, (), "Format: JJJJ-MM-TTThh:mm:ss. Programmer, RTC und INITVIDEO verwenden diesen Wert; die RTC läuft danach weiter."),
+    ("db_key", "Datenbank", "Datenbank-Schlüssel (D3)", str, (), "auto: gespeicherter bzw. bekannter Schlüssel wird geprüft; passt keiner, sucht der Starter den Schlüssel der gewählten Datenbank einmalig (je nach CPU bis etwa 20 Minuten) und merkt ihn sich. Alternativ 8 Hex-Ziffern eintragen."),
     ("door_open", "Datenbank", "Tür beim Start offen", bool, (), "Standard: geschlossen; kann den Servicebetrieb auslösen."),
     ("trace_diagnostics", "Protokoll und Bedienung", "Zusätzliche Diagnose-Watchpoints", bool, (), "Standard: aus; kann die Datenbank deutlich verlangsamen."),
     ("show_live_log", "Protokoll und Bedienung", "Live-Protokoll öffnen", bool, (), "Die Logdatei wird auch ohne sichtbares Fenster geschrieben."),
@@ -60,6 +62,11 @@ def validate_emulation(selection: Selection) -> list[str]:
                 date = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S")
                 valid = 2000 <= date.year <= 2099 and date.strftime("%Y-%m-%dT%H:%M:%S") == value
             except (ValueError, TypeError):
+                valid = False
+        elif key == "db_key":
+            try:
+                valid = isinstance(value, str) and (value == "auto" or parse_key(value) is not None)
+            except ValueError:
                 valid = False
         else:
             valid = isinstance(value, str) and value in limits
@@ -104,6 +111,7 @@ class Selection:
     duart_x1_hz: int = 3686400
     db_connect_timeout: float = 120.0
     database_date: str = "2012-02-01T22:14:00"
+    db_key: str = "auto"
     door_open: bool = False
     trace_diagnostics: bool = False
     show_control_window: bool = True
@@ -260,6 +268,11 @@ def launch_command(selection: Selection, project: Path) -> list[str]:
         "-DbConnectTimeout", str(selection.db_connect_timeout),
         "-DatabaseDate", selection.database_date,
     ]
+    # "auto" is resolved by the launcher before the start; a key written here
+    # is passed as decimal so PowerShell binds it to its uint32 parameter.
+    key = parse_key(selection.db_key)
+    if key is not None:
+        command.extend(("-D3", str(key)))
     if not selection.safe_tb:
         command.append("-FastTb")
     if selection.usb_tablet:

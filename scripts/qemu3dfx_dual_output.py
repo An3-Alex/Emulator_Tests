@@ -32,7 +32,31 @@ void mesa_select_output(unsigned output)
         s->scon->winctx = SDL_GL_CreateContext(s->scon->real_window);''',
                   '    s->scon->winctx = SDL_GL_CreateContext(s->scon->real_window);')
     source = once(source, '    if (!s->opaque)', '    if (s->cwnd_fn)')
-    return source
+    return patch_sdl_game_mode(source)
+
+
+def patch_sdl_game_mode(source):
+    """Remember each output's game display mode when the GPU takes it over."""
+    source = once(source, '    int glide_on_mesa, gui_saved_res, render_pause;',
+                  '    int glide_on_mesa, gui_saved_res, render_pause, game_w, game_h;')
+    source = once(source, '    s->render_pause = 1;\n',
+                  '    /* M90: the game\'s XP display mode while the GPU owns this output. */\n'
+                  '    s->game_w = surface_width(s->scon->surface);\n'
+                  '    s->game_h = surface_height(s->scon->surface);\n'
+                  '    s->render_pause = 1;\n')
+    return once(source, 'void mesa_prepare_window(', '''/* M90: another program (the 1280x1024 service menu) changed the guest mode
+ * of this output. Its desktop is shown until the game's mode returns. */
+int mesa_gpu_mode_current(void)
+{
+    struct sdl_console_cb *s = &scon_cb;
+    DisplaySurface *surface = s->scon ? s->scon->surface : NULL;
+    if (!s->game_w || !surface || surface_is_placeholder(surface)) {
+        return 1;
+    }
+    return surface_width(surface) == s->game_w && surface_height(surface) == s->game_h;
+}
+
+void mesa_prepare_window(''')
 
 
 def patch_transport(source):
@@ -324,8 +348,23 @@ static HDC output_dc[2], hPBDC[MAX_PBUFFER];
             if (curr != argsp[0]) {''', '''            if (mesa_current_output()) { argsp[0] = 0; } /* M90: upper display never waits. */
             int curr = wglFuncs.GetSwapIntervalEXT();
             if (curr != argsp[0]) {''')
+    source = patch_wgl_game_mode(source)
     # The pinned protocol has six slots (MAGIC low nibble is 5).
     return source.replace('mesa_current_output() * 8', 'mesa_current_output() * 3').replace('!hRC[8]', '!hRC[3]')
+
+
+def patch_wgl_game_mode(source):
+    """GPU frames only in the game's display mode; else the guest desktop."""
+    # The game keeps presenting while the service program runs in front at
+    # 1280x1024. Each present would re-activate the GPU output over it.
+    source = once(source, 'void MGLActivateHandler(const int i, const int d)\n{\n',
+                  'void MGLActivateHandler(const int requested, const int d)\n{\n'
+                  '    const int i = requested && mesa_gpu_mode_current();\n')
+    return once(source, 'int MGLSwapBuffers(void)\n{\n    MGLActivateHandler(1, 0);\n',
+                'int MGLSwapBuffers(void)\n{\n    MGLActivateHandler(1, 0);\n'
+                '    if (!mesa_gpu_mode_current()) {\n'
+                '        return 1; /* The guest desktop owns this output: present nothing. */\n'
+                '    }\n')
 
 
 GUEST_SELECT = '''/* M90: output identity comes from the guest window's actual monitor. */

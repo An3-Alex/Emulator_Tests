@@ -15,6 +15,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <setupapi.h>
+#include "guest_log_limit.h"
 
 #define GAME_IAT_CREATEFILEW_RVA                    0x002FE11CUL
 #define GAME_IAT_DEVICEIOCONTROL_RVA                0x002FE120UL
@@ -86,13 +87,14 @@ static DWORD wide_length(const WCHAR *text) {
 static void log_text(const char *text) {
     DWORD length = 0;
     DWORD written;
+    while (text[length]) ++length;
+    m90_limit_log_before_write(SRAM_LOG_PATH, length);
     if (g_log == INVALID_HANDLE_VALUE) {
         g_log = CreateFileA(SRAM_LOG_PATH, FILE_APPEND_DATA,
                             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
                             FILE_ATTRIBUTE_NORMAL, NULL);
     }
     if (g_log == INVALID_HANDLE_VALUE) return;
-    while (text[length]) ++length;
     WriteFile(g_log, text, length, &written, NULL);
 }
 
@@ -118,6 +120,7 @@ static void log_wide_path(const WCHAR *text) {
         }
     }
     line[index++] = '\r'; line[index++] = '\n';
+    m90_limit_log_before_write(SRAM_LOG_PATH, index);
     WriteFile(g_log, line, index, &written, NULL);
 }
 
@@ -531,6 +534,10 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
          * unrecognized service got no SRAM device and crashed on a nil object. */
         GetLongPathNameA(path, path, sizeof(path));
         for (index = 0; path[index]; ++index) if (path[index] == '\\' || path[index] == '/') name = path + index + 1;
+        /* One line per loading process: shows whether the service loaded this DLL at all. */
+        log_text("DllMain: loaded by ");
+        log_text(path);
+        log_text("\r\n");
         if (lstrcmpiA(name, "GGSG_Servic.exe") == 0 || imports_sram_initialize(base)) {
             if (!install_service_hooks(base)) return FALSE;
         } else if (lstrcmpiA(name, "game.exe") == 0) {

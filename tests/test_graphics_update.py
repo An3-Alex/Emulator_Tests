@@ -98,6 +98,22 @@ class GraphicsUpdateTests(unittest.TestCase):
         self.assertEqual(self.run_update(), "Graphics already current")
         self.assertEqual(len(list((self.guest / "NVRAM/m90-graphics-backups").iterdir())), 1)
 
+    def test_board_shim_is_updated_with_backup(self):
+        shim = self.root / "new-cgos"
+        shim.write_bytes(b"new-cgos")
+        with mock.patch.object(graphics, "CGOS_HASH", digest(b"new-cgos")), \
+             mock.patch.object(graphics, "PREVIOUS_CGOS", {digest(b"cgos")}):
+            self.assertIn("Graphics updated", self.run_update(cgos=shim, gpu=True))
+            self.assertEqual((self.guest / "WINDOWS/system32/Cgos.dll").read_bytes(), b"new-cgos")
+            backup = next((self.guest / "NVRAM/m90-graphics-backups").iterdir())
+            self.assertEqual((backup / "WINDOWS/system32/Cgos.dll").read_bytes(), b"cgos")
+            self.assertEqual(self.run_update(cgos=shim, gpu=True), "Graphics already current")
+            # Without a replacement the already updated shim is still accepted.
+            self.assertEqual(self.run_update(gpu=True), "Graphics already current")
+            (self.guest / "WINDOWS/system32/Cgos.dll").write_bytes(b"foreign")
+            with self.assertRaisesRegex(ValueError, "Unrecognized"):
+                self.run_update(cgos=shim, gpu=True)
+
     def test_unknown_last_target_aborts_before_any_change(self):
         target = self.guest / "WorkDir/d3d9.dll"
         target.write_bytes(b"unknown")
@@ -214,6 +230,12 @@ class GraphicsPinsTests(unittest.TestCase):
         self.assertEqual(graphics.BOOTSTRAP_HASH, image_setup.COMPONENTS["bootstrap"][1])
         self.assertEqual(graphics.PROXY_HASH, image_setup.COMPONENTS["d3d9"][1])
         self.assertEqual(graphics.AUDIO_HASH, image_setup.COMPONENTS["irrklang"][1])
+        self.assertEqual(graphics.CGOS_HASH, image_setup.COMPONENTS["shim"][1])
+        self.assertNotIn(graphics.CGOS_HASH, graphics.PREVIOUS_CGOS)
+
+    def test_runtime_update_passes_the_board_shim(self):
+        command = (Path(__file__).resolve().parents[1] / "scripts/update_runtime_graphics.sh").read_text()
+        self.assertIn('audio_args+=(--cgos "$7")', command)
 
 
 if __name__ == "__main__":

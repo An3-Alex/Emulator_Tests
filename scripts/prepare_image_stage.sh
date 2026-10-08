@@ -47,12 +47,12 @@ verify_hash() {
 [[ ! -e "$output_image" && ! -e "$partial_image" ]] || {
   echo 'output or partial image already exists; refusing overwrite' >&2; exit 3;
 }
-verify_hash "$shim" 16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51
+verify_hash "$shim" ea6843b6f7927dad09d31dfe297b57ad727320c4e81f213b27ac8408f566af57
 verify_hash "$bootstrap" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
 verify_hash "$qxl_installer" 96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a
-verify_hash "$d3d9" cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737
-verify_hash "$fbwf" 4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608
-verify_hash "$irrklang" 5c296f4514c09adcff07a89b6372529263dec5c0c3c13282a117f6954d0fdf89
+verify_hash "$d3d9" aeb4bd283bdcd362b0226ced63a8f46582733ae3430293a1dc3db881f7f81793
+verify_hash "$fbwf" 555f2a7b6e886e9476b7f83ecee89c3cfa369c823f82f5bdf4c6181c7ce41dd2
+verify_hash "$irrklang" bc815b845c86d40f289d903b895ec7a082e67a37b379af01ae6207508edd6426
 # "-": no SwiftShader; only the QEMU-3dfx graphics path can then be used.
 if [[ "$swiftshader" != - ]]; then
   verify_hash "$swiftshader" fc5994b209a57a77275e5ecee1904cd9139a344c69e221e54f05af90580a90c9

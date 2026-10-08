@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <mmsystem.h>
+#include "guest_log_limit.h"
 
 namespace irrklang {
 class ISoundEngine;
@@ -34,6 +35,7 @@ static void log_line(const char *text)
     DWORD length = GetEnvironmentVariableA("M90_TEST_AUDIO_LOG", test_path, MAX_PATH);
     if (length && length < MAX_PATH) path = test_path;
 #endif
+    m90_limit_log_before_write(path, lstrlenA(text));
     file = CreateFileA(path, FILE_APPEND_DATA,
                        FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS,
                        FILE_ATTRIBUTE_NORMAL, 0);

@@ -1,6 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "cgos_abi.h"
+#include "guest_log_limit.h"
 
 /*
  * Phase 1 is a transparent logging forwarder. Phase 2 adds only the verified
@@ -144,6 +145,7 @@ static void write_log(LOGBUF *b) {
     HANDLE file;
     DWORD wrote;
     while (InterlockedCompareExchange(&g_log_lock, 1, 0) != 0) Sleep(0);
+    m90_limit_log_before_write("C:\\NVRAM\\cgos_shim.log", b->len);
     file = CreateFileA("C:\\NVRAM\\cgos_shim.log", FILE_APPEND_DATA,
                        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS,
                        FILE_ATTRIBUTE_NORMAL, NULL);

@@ -59,15 +59,34 @@ class LauncherGraphicsTests(unittest.TestCase):
     def test_only_start_updates_ready_working_copy(self):
         for start in (False, True):
             with self.subTest(start=start):
-                target = SimpleNamespace(events=queue.Queue(), _update_graphics=mock.Mock())
                 selection = Selection(image="working.img")
+                resolved = Selection(image="working.img", db_key="D27B7159")
+                target = SimpleNamespace(events=queue.Queue(), _update_graphics=mock.Mock(),
+                                         _resolve_database_key=mock.Mock(return_value=resolved),
+                                         _report_database_version=mock.Mock())
                 with mock.patch.object(launcher, "check_runtime", return_value=[]), \
                      mock.patch.object(launcher, "stage_check_command", return_value=["read-only"]), \
                      mock.patch.object(launcher.subprocess, "run", return_value=
                                        subprocess.CompletedProcess([], 0, "ready\n", "")):
                     launcher.Launcher._check_worker(target, selection, start)
                 self.assertEqual(target._update_graphics.call_count, int(start))
-                self.assertEqual(target.events.get(), ("checked", (selection, start, [])))
+                # Only a start resolves the database key; the launch uses the resolved key.
+                self.assertEqual(target._resolve_database_key.call_count, int(start))
+                self.assertEqual(target._report_database_version.call_count, int(start))
+                expected = resolved if start else selection
+                self.assertEqual(target.events.get(), ("checked", (expected, start, [])))
+
+    def test_key_search_failure_blocks_start(self):
+        target = SimpleNamespace(events=queue.Queue(), _update_graphics=mock.Mock(),
+                                 _resolve_database_key=mock.Mock(side_effect=ValueError("kein Schlüssel")),
+                                 _report_database_version=mock.Mock())
+        with mock.patch.object(launcher, "check_runtime", return_value=[]), \
+             mock.patch.object(launcher, "stage_check_command", return_value=["read-only"]), \
+             mock.patch.object(launcher.subprocess, "run", return_value=
+                               subprocess.CompletedProcess([], 0, "ready\n", "")):
+            launcher.Launcher._check_worker(target, Selection(image="working.img"), True)
+        self.assertEqual(target.events.get()[1][2], ["Prüfung fehlgeschlagen: kein Schlüssel"])
+        target._report_database_version.assert_not_called()
 
     def test_bad_stage_never_updates(self):
         target = SimpleNamespace(events=queue.Queue(), _update_graphics=mock.Mock())

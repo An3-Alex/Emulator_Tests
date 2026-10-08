@@ -7,7 +7,7 @@ SHIM_PATH=${2:?usage: install_shim.sh IMAGE_PATH SHIM_DLL}
 source "$(dirname -- "$0")/working_image_guard.sh"
 require_working_image "$IMAGE_PATH" || exit 3
 EXPECTED_ORIGINAL=480703586ea6f5bdc9ae3d8aa7bb47f03fa4d8234b48a3f2abc92356fb76a14e
-EXPECTED_SHIM=16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51
+EXPECTED_SHIM=ea6843b6f7927dad09d31dfe297b57ad727320c4e81f213b27ac8408f566af57
 MOUNT_PATH=/mnt/m90_rw
 LOOP_DEVICE=
 

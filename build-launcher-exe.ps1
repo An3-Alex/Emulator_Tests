@@ -40,7 +40,7 @@ try {
         'build\Cgos.dll', 'build\display-bootstrap.exe', 'build\qxl-installer.exe',
         'build\display-verify.exe',
         'build\d3d9-proxy\d3d9.dll', 'build\sram-compat\FBWFLIB.dll',
-        'build\irrklang-proxy\irrKlang.dll'
+        'build\irrklang-proxy\irrKlang.dll', 'build\recover-d3\recover_database_d3.exe'
     )) {
         $source = Join-Path $project $name
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {

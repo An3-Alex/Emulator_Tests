@@ -7,7 +7,7 @@ from pathlib import Path
 import struct
 
 from audio_driver_package import FILES, validate
-from graphics_update import BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP, CGOS_HASH, inside, require_hash, durable_copy, sha256
+from graphics_update import BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP, CGOS_HASH, PREVIOUS_CGOS, inside, require_hash, durable_copy, sha256
 from audio_legacy_driver import quarantine, validate_quarantine
 
 INSTALLER_HASH = "f1b73821f23db2f817b226c1a85c84398c6f6779100273d5d2c9123deeffb860"
@@ -83,7 +83,7 @@ def read_state(root: Path) -> dict | None:
 
 
 def status(root: Path) -> str:
-    require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH})
+    require_hash(inside(root, "WINDOWS/system32/Cgos.dll"), {CGOS_HASH, *PREVIOUS_CGOS})
     state = read_state(root)
     if state is None:
         require_hash(inside(root, "WINDOWS/explorer.exe"), {BOOTSTRAP_HASH, PREVIOUS_BOOTSTRAP})

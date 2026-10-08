@@ -98,6 +98,11 @@ Spiel-PC darf in diesem Grafikpfad höchstens 2048 MiB RAM erhalten, damit diese
 Bereich nicht mit Gast-RAM kollidiert. Beide Buildseiten und das Paketmanifest
 verwenden dieselbe Kennung `m90-dual-qxl-v1`.
 
+Einen eigenen Grafikspeicher-Grenzwert gibt es nicht. WineD3D 1.8.7 meldet dem
+Spiel einen Wert, den es aus dem Namen der Host-GPU ableitet; unbekannte
+neuere GPUs erhalten den einer Ersatzkarte (etwa Intel UHD → 1536 MiB,
+NVIDIA RTX → 1280 MiB). Den tatsächlichen Speicher verwaltet der Host-Treiber.
+
 ## Quellen und Build
 
 - [QEMU-3dfx](https://github.com/kjliew/qemu-3dfx), Revision
@@ -145,19 +150,25 @@ diese Dateien anhand der installierten Paketmetadaten.
 
 ## Bildschirme und Auswahl
 
-Der Starter verwendet standardmäßig SwiftShader und bietet QEMU-3dfx als
-separaten Grafikpfad an. Der gemeinsame
-Zeichenflächenzustand des Upstream-Passthroughs ist nicht gleichbedeutend
-mit zwei unabhängig präsentierbaren Monitoren.
+Der Starter verwendet standardmäßig SwiftShader; QEMU-3dfx ist unter
+„Emulationseinstellungen → Grafikpfad“ wählbar (Startparameter
+`-GraphicsBackend qemu3dfx`). Die EXE enthält die Laufzeit und richtet die
+Gastdateien automatisch ein.
 
-`build-d3d9-proxy.ps1 -Qemu3dfx` erzeugt eine getrennte Adapter-Bridge unter
-`build/d3d9-qemu3dfx`. Logischer Adapter 0 (Windows-Primäranzeige, im SDL-Lauf
-der untere Spielbildschirm) nutzt `wined3d_d3d9.dll`; Adapter 1 bleibt bei
-`swiftshader_d3d9.dll`. Der bisherige Build ohne Schalter bleibt unverändert.
-Die Variante ist über den expliziten Startparameter `-GraphicsBackend qemu3dfx`
-verfügbar. In der Starter-Oberfläche ist sie unter „Emulationseinstellungen →
-Grafikpfad“ wählbar. Die EXE enthält die Laufzeit und richtet die Gastdateien automatisch ein.
-Standard bleibt SwiftShader.
+`build-d3d9-proxy.ps1 -Qemu3dfx` erzeugt die Adapter-Bridge unter
+`build/d3d9-qemu3dfx`. Beide logischen Adapter (0 = Windows-Primäranzeige,
+unten; 1 = Sekundäranzeige, oben) nutzen `wined3d_d3d9.dll`; der Gast-Monitor
+des jeweiligen Fensters wählt den GPU-Ausgang. Der Build ohne Schalter ist
+die SwiftShader-Variante.
+
+## Andere Programme im Vordergrund
+
+Das Servicemenü (`GGSG_Servic.exe`) schaltet seine Anzeige auf 1280×1024,
+während das Spiel im Hintergrund weiter präsentiert. Weicht die XP-Auflösung
+eines Ausgangs von der Spielauflösung ab, mit der die GPU den Ausgang
+übernommen hat, zeigt der Host dort die normale Windows-Anzeige und
+präsentiert keine GPU-Bilder. Sobald die Spielauflösung zurückkehrt,
+übernimmt wieder die GPU. Der andere Ausgang bleibt davon unberührt.
 
 Die Migration erfolgt an einer getrennten Arbeitskopie. Original-CF,
 persistenter SRAM und die bisherige funktionierende Variante werden nicht

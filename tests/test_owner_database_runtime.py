@@ -46,7 +46,7 @@ class OwnerDatabaseRuntimeTests(unittest.TestCase):
     def test_wrong_d3_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             path, digest, _ = self.make_transport(Path(temp), 0x12345678)
-            with self.assertRaisesRegex(ValueError, "native_checksum"):
+            with self.assertRaisesRegex(ValueError, "Schlüssel D3=00000000 nicht entschlüsseln"):
                 prepare_runtime(path, digest, d3=0)
 
     def test_valid_runtime_dump_is_accepted(self):

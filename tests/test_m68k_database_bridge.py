@@ -1513,5 +1513,67 @@ class DatabaseBridgeTests(unittest.TestCase):
         )
 
 
+class DatabaseVersionTests(unittest.TestCase):
+    @staticmethod
+    def images():
+        runtime = bytes((index * 7 + 1) & 0xFF for index in range(0x1C3138))
+        loader = bytes((index * 5 + 2) & 0xFF for index in range(0xBC0))
+        return runtime, loader
+
+    @staticmethod
+    def groups_for(runtime, loader):
+        """The hook groups with digests of the given images instead of the owner's."""
+        import hashlib
+        groups = []
+        for group, name, source, addresses, _ in bridge.DATABASE_HOOK_GROUPS:
+            image, base = ((loader, bridge.LOADER_LOAD_ADDRESS) if source == "loader"
+                           else (runtime, bridge.DATABASE_RUNTIME_START))
+            digest = hashlib.sha256()
+            for address in addresses:
+                offset = address - base
+                digest.update(address.to_bytes(4, "big") + image[offset:offset + bridge.HOOK_WINDOW])
+            groups.append((group, name, source, addresses, digest.hexdigest()[:16]))
+        return tuple(groups)
+
+    def test_unknown_build_reports_every_group(self):
+        runtime, loader = self.images()
+        mismatches = bridge.database_hook_mismatches(runtime, loader)
+        self.assertEqual([group for group, _ in mismatches],
+                         [group for group, *_ in bridge.DATABASE_HOOK_GROUPS])
+
+    def test_changed_code_reports_only_its_group(self):
+        runtime, loader = self.images()
+        with mock.patch.object(bridge, "DATABASE_HOOK_GROUPS", self.groups_for(runtime, loader)):
+            self.assertEqual(bridge.database_hook_mismatches(runtime, loader), [])
+            changed = bytearray(runtime)
+            changed[bridge.TOUCH_CALIBRATION_FINISH_PC - bridge.DATABASE_RUNTIME_START] ^= 0xFF
+            self.assertEqual(bridge.database_hook_mismatches(bytes(changed), loader),
+                             [("touch", "Touch")])
+            other_loader = bytearray(loader)
+            other_loader[bridge.LOADER_IDLE_TX_STOP_PC - bridge.LOADER_LOAD_ADDRESS] ^= 1
+            self.assertEqual(bridge.database_hook_mismatches(runtime, bytes(other_loader)),
+                             [("loader", "Loader")])
+
+    def test_every_hooked_code_address_is_covered(self):
+        covered = {address for *_, addresses, _ in bridge.DATABASE_HOOK_GROUPS for address in addresses}
+        for address in (bridge.COIN_ENTRY_READ_PC, bridge.UART_INIT_ENTRY, bridge.RTC_FAULT_ENTRY,
+                        bridge.BOARD_TIMER_RTE_PC, bridge.VirtualCoinValidator.PAIRING_COMPARE_PC,
+                        *bridge.TX_STATUS_OVERLAP_STOP_PCS, *bridge.HOPPER_QUEUE_WAIT_PCS,
+                        *bridge.DEVICE_DISCOVERY_TIMER_WAIT_PCS, *bridge.BOARD_LATCH_FEEDBACK_BY_STOP_PC):
+            self.assertIn(address, covered)
+
+    def test_other_database_keeps_its_initvideo_identity(self):
+        frame = bytearray(bridge.INITVIDEO_PREFIX + bytes(34) + b"\x04")
+        frame[4:24] = bytes(range(20))
+        with self.assertRaisesRegex(ValueError, "identity/content fields changed"):
+            bridge.complete_initvideo_clock(bytes(frame), bridge.RTC_DEFAULT_TIME)
+        completed = bridge.complete_initvideo_board_profile(
+            bytes(frame), bridge.RTC_DEFAULT_TIME, strict=False)
+        self.assertEqual(completed[4:24], bytes(range(20)))
+        forwarder = bridge.InitvideoClockForwarder(lambda: bridge.RTC_DEFAULT_TIME, strict=False)
+        sent = b"".join(forwarder.feed(bytes([value]))[0] for value in frame)
+        self.assertEqual(sent[4:24], bytes(range(20)))
+
+
 if __name__ == "__main__":
     unittest.main()

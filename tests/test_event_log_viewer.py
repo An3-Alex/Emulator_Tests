@@ -21,6 +21,15 @@ class EventLogViewerTests(unittest.TestCase):
             self.assertEqual(event.details, line)
             self.assertEqual(event.level, level)
 
+    def test_database_version_check_is_visible(self) -> None:
+        line = "DB_VERSION_UNVERIFIED groups=touch,hopper names=Touch; Hopper"
+        event = viewer.BridgeLogParser().feed(line)[0]
+        self.assertEqual(event.level, "warning")
+        self.assertIn("nicht verifiziert", event.title)
+        self.assertIn("Touch; Hopper", event.title)
+        verified = viewer.BridgeLogParser().feed("DB_VERSION_HOOKS_VERIFIED known_runtime=True")[0]
+        self.assertEqual(verified.level, "normal")
+
     def test_rtc_fault_snapshot_is_visible_and_retains_native_values(self) -> None:
         line = ("DB_RTC_FAULT_SNAPSHOT rtc=2013-02-01T22:14:00 "
                 "source_return=0007A190 calendar=160E0001020D00 invalid_flag=01")

@@ -13,13 +13,13 @@ COMPONENTS = {
     "audio_software": ("build/audio-software.exe", "0393fe5c8cdeb593afa330a50003b06048c11bbc0f5a527a887598e98db9e7b9"),
     "audio_installer": ("build/audio-installer.exe", "f1b73821f23db2f817b226c1a85c84398c6f6779100273d5d2c9123deeffb860"),
     "audio_verify": ("build/audio-verify.exe", "b42498a87a02073ccd9f4e2d3b047f0f655b3598a6f018cd7a63a7df0b542909"),
-    "shim": ("build/Cgos.dll", "16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51"),
+    "shim": ("build/Cgos.dll", "ea6843b6f7927dad09d31dfe297b57ad727320c4e81f213b27ac8408f566af57"),
     "bootstrap": ("build/display-bootstrap.exe", "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"),
     "qxl_installer": ("build/qxl-installer.exe", "96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a"),
     "display_verify": ("build/display-verify.exe", "81e733743146b025d2f555ba476e1948be1d1515ba55465d8ba4418d4a193349"),
-    "d3d9": ("build/d3d9-proxy/d3d9.dll", "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737"),
-    "fbwf": ("build/sram-compat/FBWFLIB.dll", "4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608"),
-    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "5c296f4514c09adcff07a89b6372529263dec5c0c3c13282a117f6954d0fdf89"),
+    "d3d9": ("build/d3d9-proxy/d3d9.dll", "aeb4bd283bdcd362b0226ced63a8f46582733ae3430293a1dc3db881f7f81793"),
+    "fbwf": ("build/sram-compat/FBWFLIB.dll", "555f2a7b6e886e9476b7f83ecee89c3cfa369c823f82f5bdf4c6181c7ce41dd2"),
+    "irrklang": ("build/irrklang-proxy/irrKlang.dll", "bc815b845c86d40f289d903b895ec7a082e67a37b379af01ae6207508edd6426"),
 }
 QXL_HASHES = {
     "qxl.inf": "2c2ce985936c87406313d68ba54b1c36f42aec97ee357d894e3238aecda776fa",
@@ -180,7 +180,8 @@ def graphics_update_command(selection: Selection, project: Path, *, gpu: bool = 
     paths = [project / "scripts/update_runtime_graphics.sh",
              Path(selection.original_image), Path(selection.image),
              project / COMPONENTS["bootstrap"][0], project / COMPONENTS["d3d9"][0],
-             project / COMPONENTS["irrklang"][0], project / COMPONENTS["fbwf"][0]]
+             project / COMPONENTS["irrklang"][0], project / COMPONENTS["fbwf"][0],
+             project / COMPONENTS["shim"][0]]
     command = ["wsl.exe", "--user", "root", "--exec", "bash", *(wsl_path(path) for path in paths)]
     # GPU copies keep their QEMU-3dfx d3d9.dll; audio, SRAM and service still update.
     return command + ["--gpu"] if gpu else command

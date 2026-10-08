@@ -51,7 +51,7 @@ else
   if [[ -f "$cgos" && -f "$shell" ]]; then
     cgos_hash=$(sha256sum "$cgos" | cut -d' ' -f1)
     shell_hash=$(sha256sum "$shell" | cut -d' ' -f1)
-    if [[ "$cgos_hash" == 16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51 && \
+    if [[ ( "$cgos_hash" == ea6843b6f7927dad09d31dfe297b57ad727320c4e81f213b27ac8408f566af57 || "$cgos_hash" == 16c16aabce7f775be87ea12cc0dbc64637428f663ed8ce693e4e02e499b14d51 ) && \
           ( "$shell_hash" == ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6 ||
             "$shell_hash" == fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea ) ]]; then
       echo legacy-ready

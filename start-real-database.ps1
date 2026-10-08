@@ -146,16 +146,22 @@ foreach ($item in @(
     }
 }
 
+$logDirectory = Join-Path $PSScriptRoot 'logs'
+New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+# Each log kind uses one size-limited file. Earlier versions wrote new files
+# for every run; remove those once.
+Get-ChildItem -LiteralPath $logDirectory -File |
+    Where-Object { $_.Name -match '^(database-events-\d{8}-\d{6}\.log|audio-bridge-[0-9a-f]{32}\.(jsonl|ready))$' } |
+    Remove-Item -ErrorAction SilentlyContinue
+
 $audioReceiver = $null
 $audioReceiverStarted = $false
 try {
 if ($AudioBridge) {
     $pythonPath = (Get-Command $Python -ErrorAction Stop).Source
-    $audioLogDirectory = Join-Path $PSScriptRoot 'logs'
-    New-Item -ItemType Directory -Path $audioLogDirectory -Force | Out-Null
-    $stamp = [guid]::NewGuid().ToString('N')
-    $readyFile = Join-Path $audioLogDirectory "audio-bridge-$stamp.ready"
-    $audioLog = Join-Path $audioLogDirectory "audio-bridge-$stamp.jsonl"
+    $readyFile = Join-Path $logDirectory 'audio-bridge.ready'
+    $audioLog = Join-Path $logDirectory 'audio-bridge.jsonl'
+    Remove-Item -LiteralPath $readyFile -ErrorAction SilentlyContinue
     $audioScript = Join-Path $PSScriptRoot 'scripts\pcm_audio_bridge.py'
     $sdl = Join-Path (Split-Path $Qemu -Parent) 'SDL2.dll'
     if (-not $MuteAudio -and -not (Test-Path -LiteralPath $sdl -PathType Leaf)) {
@@ -190,9 +196,11 @@ $qemuPid = [int]($qemuPidLine -replace '^QEMU_PID=', '')
 
 Write-Output 'QEMU is visible with lower/upper tabs. The real owner database firmware is connected to guest COM3.'
 Write-Output 'Guest reboots remain enabled. UART traffic is written to the live event log.'
-$logDirectory = Join-Path $PSScriptRoot 'logs'
-New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-$eventLogPath = Join-Path $logDirectory ('database-events-{0:yyyyMMdd-HHmmss}.log' -f (Get-Date))
+$eventLogPath = Join-Path $logDirectory 'database-events.log'
+# Keep the previous run before the event window can open the log.
+if (Test-Path -LiteralPath $eventLogPath) {
+    Move-Item -LiteralPath $eventLogPath -Destination (Join-Path $logDirectory 'database-events.old.log') -Force -ErrorAction SilentlyContinue
+}
 $viewer = $null
 $controlPanel = $null
 if (-not $NoEventWindow -or -not $NoControlWindow) {

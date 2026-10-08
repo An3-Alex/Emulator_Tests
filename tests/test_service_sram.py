@@ -23,9 +23,10 @@ def fixture():
     struct.pack_into("<II", data, opt + 56, 0x3000, 0x200)
     struct.pack_into("<I", data, opt + 92, 16)
     struct.pack_into("<II", data, opt + 104, 0x1000, 40)
+    # Like the Borland service: imports and their IATs in a read-only .idata.
     for index, rva, raw in ((0, 0x1000, 0x200), (1, 0x2000, 0x400)):
         struct.pack_into("<8sIIIIIIHHI", data, 0x178 + index * 40,
-                         b".idata" if index == 0 else b".rsrc", 0x200, rva, 0x200, raw, 0, 0, 0, 0, 0xC0000040)
+                         b".idata" if index == 0 else b".rsrc", 0x200, rva, 0x200, raw, 0, 0, 0, 0, 0x40000040)
     struct.pack_into("<IIIII", data, 0x200, 0, 0, 0, 0x1040, 0x1060)
     data[0x240:0x24D] = b"SETUPAPI.DLL\0"
     data[0x400:0x409] = b"resources"
@@ -65,6 +66,23 @@ class ServiceSramTests(unittest.TestCase):
         self.assertIn(b"FBWFLIB.dll\0", output[0x600:])
         self.assertIn(b"\0\0SramCompatInitialize\0", output[0x600:])
         self.assertEqual(output, sram.patch_service(self.original))
+
+    def test_original_iat_section_stays_writable_for_the_xp_loader(self):
+        # XP unprotects only the section holding the moved import directory
+        # while binding; the original IATs must be writable on their own.
+        flags = lambda data, index: struct.unpack_from("<I", data, 0x178 + index * 40 + 36)[0]
+        output = sram.patch_service(self.original)
+        self.assertEqual(flags(output, 0), 0xC0000040)  # .idata with the IAT
+        self.assertEqual(flags(output, 1), 0x40000040)  # .rsrc unchanged
+        self.assertEqual(flags(output, 2), 0xC0000040)  # new import section
+        self.assertEqual(flags(sram.patch_service(self.original, writable_iat=False), 0), 0x40000040)
+
+    def test_earlier_unloadable_patch_is_replaced(self):
+        self.service.with_name(self.service.name + ".pre-m90-sram").write_bytes(self.original)
+        self.service.write_bytes(sram.patch_service(self.original, writable_iat=False))
+        self.assertIn("required", sram.update(self.root, self.proxy, check_only=True))
+        self.assertIn("updated", sram.update(self.root, self.proxy))
+        self.assertEqual(self.service.read_bytes(), sram.patch_service(self.original))
 
     def test_unknown_service_and_missing_header_space_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unrecognized"):

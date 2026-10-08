@@ -230,19 +230,31 @@ class DualOutputTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('GUEST_SLOT_REFS_OK', result.stdout)
 
+    def test_guest_desktop_outside_game_mode_is_never_covered(self):
+        # The service program switches its output to 1280x1024 while the game
+        # still presents: neither activation nor presentation may cover it.
+        handler = function(self.wgl, 'void MGLActivateHandler(const int requested, const int d)\n{')
+        self.assertIn('const int i = requested && mesa_gpu_mode_current();', handler)
+        swap = function(self.wgl, 'int MGLSwapBuffers(void)\n{')
+        self.assertLess(swap.index('if (!mesa_gpu_mode_current())'), swap.index('SwapBuffers(hDC)'))
+        self.assertLess(swap.index('if (!mesa_gpu_mode_current())'), swap.index('MesaBlitScale();'))
+
 
 class SdlRoutingTests(unittest.TestCase):
     def test_both_callbacks_fire_and_second_window_gets_its_own_context(self):
-        source = '''} scon_cb;
+        source = '''    int glide_on_mesa, gui_saved_res, render_pause;
+} scon_cb;
     s->scon = &sdl2_console[0];
     s->opaque = 0;
     s->cwnd_fn = (void (*)(void *, void *, void *))cwnd_fn;
     if (!SDL_GetHint(SDL_HINT_RENDER_DRIVER) || x) {}
+    s->render_pause = 1;
     s->scon->winctx = SDL_GL_GetCurrentContext();
     if (!s->scon->winctx)
         s->scon->winctx = SDL_GL_CreateContext(s->scon->real_window);
     if (!s->opaque)
         s->cwnd_fn(s->scon->real_window, s->hnwnd, s->opaque);
+void mesa_prepare_window(int msaa, int alpha, int scale_x, void *cwnd_fn)
 '''
         fixed = patch_sdl(source)
         self.assertIn('scon_cbs[2]', fixed)
@@ -250,6 +262,10 @@ class SdlRoutingTests(unittest.TestCase):
         self.assertIn('if (s->cwnd_fn)', fixed)
         self.assertNotIn('SDL_GL_GetCurrentContext()', fixed)
         self.assertIn('SDL_WINDOW_OPENGL', fixed)
+        # The game's mode is captured when the GPU takes over the output.
+        self.assertLess(fixed.index('s->game_w = surface_width(s->scon->surface);'),
+                        fixed.index('    s->render_pause = 1;'))
+        self.assertIn('int mesa_gpu_mode_current(void)', fixed)
 
 
 if __name__ == '__main__':

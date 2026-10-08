@@ -14,6 +14,7 @@ import struct
 from pathlib import Path
 
 from m68k_database_transform import transform_database
+from owner_database_runtime import EXPECTED_MODULE_FAMILY as MODULE_FAMILY, key_mismatch_message
 
 
 RAM_SIZE = 2 * 1024 * 1024
@@ -50,11 +51,12 @@ def prepare_factory_runtime(path: Path, expected_sha256: str, d3: int) -> tuple[
     decoded = transform_database(raw, d3)
     checksum, end, inverse, module_id = struct.unpack_from(">IIII", decoded)
     entry, entry_inverse = struct.unpack_from(">II", decoded, 0x4C)
+    if checksum != (sum(decoded[4:]) & 0xFFFFFFFF):
+        raise ValueError(key_mismatch_message("Factory-Modul", d3))
     if (
-        checksum != (sum(decoded[4:]) & 0xFFFFFFFF)
-        or end != 0x1000 + len(decoded) - 1
+        end != 0x1000 + len(decoded) - 1
         or inverse != (~end & 0xFFFFFFFF)
-        or module_id != CONFIG_MODULE_ID
+        or module_id & 0xFFFFFF00 != MODULE_FAMILY
         or entry != FACTORY_ENTRY
         or entry_inverse != (~entry & 0xFFFFFFFF)
         or decoded[0x500:] != FACTORY_ENTRY_CODE
@@ -75,10 +77,13 @@ def prepare_config_writes(
     decoded = transform_database(raw, d3)
     stored_checksum, end_address, _, module_id = struct.unpack_from(">IIII", decoded)
     entrypoint = struct.unpack_from(">I", decoded, 0x4C)[0]
+    if stored_checksum != (sum(decoded[4:]) & 0xFFFFFFFF):
+        raise ValueError(key_mismatch_message("Konfiguration", d3))
+    # Other configurations of the module family use the same RAM-copy entry;
+    # the copied bytes themselves are the configuration.
     if (
-        stored_checksum != (sum(decoded[4:]) & 0xFFFFFFFF)
-        or end_address != 0x1000 + len(decoded) - 1
-        or module_id != CONFIG_MODULE_ID
+        end_address != 0x1000 + len(decoded) - 1
+        or module_id & 0xFFFFFF00 != MODULE_FAMILY
         or entrypoint != CONFIG_ENTRY
         or decoded[0x500:0x508] != CONFIG_ENTRY_PREFIX
     ):

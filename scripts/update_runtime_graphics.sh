@@ -4,10 +4,11 @@ set -euo pipefail
 source "$(dirname -- "$0")/image_partition.sh"
 gpu_args=()
 if [[ $# -ge 1 && ${!#} == --gpu ]]; then gpu_args=(--gpu); set -- "${@:1:$(($# - 1))}"; fi
-[[ $# -ge 4 && $# -le 6 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO [SRAM]] [--gpu]' >&2; exit 2; }
+[[ $# -ge 4 && $# -le 7 ]] || { echo 'usage: update_runtime_graphics.sh ORIGINAL WORKING BOOTSTRAP D3D9 [AUDIO [SRAM [CGOS]]] [--gpu]' >&2; exit 2; }
 audio_args=()
 if [[ $# -ge 5 ]]; then audio_args=(--audio "$5"); fi
-if [[ $# -eq 6 ]]; then audio_args+=(--sram "$6"); fi
+if [[ $# -ge 6 ]]; then audio_args+=(--sram "$6"); fi
+if [[ $# -eq 7 ]]; then audio_args+=(--cgos "$7"); fi
 original=$(realpath "$1")
 image=$(realpath "$2")
 [[ -f "$original" && -f "$image" && "$original" != "$image" && ! "$original" -ef "$image" ]] || {

@@ -270,6 +270,13 @@ class BridgeLogParser:
             events.append(Event("Fehler", "F_UHR: Kalender und Firmware-Prüfwerte erfasst", line, "warning"))
         elif line.startswith("DB_CONFIG_RAM_PROGRAMMED"):
             events.append(Event("Board", "Las-Vegas-Config im 2-MB-RAM eingerichtet", line))
+        elif line.startswith("DB_VERSION_UNVERIFIED"):
+            names = re.search(r"\bnames=(.+)$", line)
+            suffix = f": {names.group(1)}" if names else ""
+            events.append(Event("Status", f"Datenbankversion nicht verifiziert, abweichend{suffix}",
+                                line, "warning"))
+        elif line.startswith("DB_VERSION_HOOKS_VERIFIED"):
+            events.append(Event("Status", "Datenbankversion passt zu den Bridge-Adressen", line))
         elif line.startswith("DB_AUX_TRANSACTION_START"):
             command = re.search(r"command=([0-9A-F]{2})", line)
             code = command.group(1) if command else "??"
@@ -478,6 +485,10 @@ def main() -> None:
                 source.seek(0)
                 status.configure(text="Live verbunden")
             if source is not None:
+                if args.log.stat().st_size < source.tell():
+                    # The bridge reuses its log after the size limit.
+                    source.seek(0)
+                    historical_until = 0
                 raw_batch: list[str] = []
                 for _ in range(1200):
                     line = source.readline()

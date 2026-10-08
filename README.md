@@ -19,7 +19,9 @@ Service und Spielgeldeinwurf. Ton und ein optionales Live-Protokoll sind enthalt
 
 Mit „Alles beenden“ werden die zum Emulator gehörenden Prozesse beendet.
 Dateipfade und Einstellungen bleiben für den nächsten Start gespeichert.
-Das Original-CF-Image wird nicht verändert.
+Das Original-CF-Image wird nicht verändert. „Emulator deinstallieren…“ ganz
+unten in den Einstellungen entfernt Laufzeitdaten, Protokolle und
+Einstellungen, auf Wunsch auch die Arbeitskopie.
 
 [SwiftShader und QXL vorbereiten](docs/grafikdateien.md): passende Dateien,
 Downloadquelle für QXL und Auswahl im Starter.
@@ -32,9 +34,22 @@ SwiftShader oder QEMU-3dfx. Bei QEMU-3dfx nutzen beide Bildschirme die
 Host-Grafikkarte, mit getrennten Fenstern für unten und oben. Das Bedienfeld
 zeigt weiterhin den unteren Spielbildschirm.
 
-Der Start kann mehrere Minuten dauern. Grafik, Ton und Geräteanbindung sind
-noch nicht vollständig nachgebildet. Andere Spielepakete benötigen passende
-Dateien; ihre Auswahl allein garantiert keine Kompatibilität.
+Der Start kann mehrere Minuten dauern.
+
+## Andere Datenbanken
+
+Unter „Emulationseinstellungen → Datenbank-Schlüssel (D3)“ steht standardmäßig
+`auto`: Ist der Schlüssel einer gewählten Datenbank unbekannt, sucht ihn der
+Starter einmalig (je nach CPU bis etwa 20 Minuten) und merkt ihn sich. Passt
+eine Datenbank nicht zu den Adressen, die die Bridge nachbildet, startet sie
+trotzdem; der Starter nennt dann die betroffenen Funktionen (z. B. Touch,
+Münzeingang). CF-Images mit anderer Spielversion werden nicht eingerichtet.
+
+## Protokolle
+
+Jede Logart nutzt eine feste Datei im Laufzeitordner `logs` (bzw. `NVRAM` im
+Gast). Ab 10 MB beginnt sie neu; der vorige Inhalt bzw. der letzte Lauf bleibt
+als `*.old.*` erhalten.
 
 CF-Images, Datenbank-Firmware und proprietäre Gastdateien werden nicht
 mitgeliefert. Die Quellen der enthaltenen Open-Source-Komponenten liegen beim

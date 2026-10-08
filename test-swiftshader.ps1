@@ -91,24 +91,40 @@ if ($GraphicsBackend -eq 'qemu3dfx') {
     if ($LASTEXITCODE -ne 0) { throw 'QEMU-3dfx-Paket oder Image-Vorbereitung ungültig.' }
 }
 
-function Assert-QemuStartup {
-    param($Process, [string]$StderrPath)
+function Wait-QemuStartup {
+    param($Relay, [string]$StatusPath, [string]$StderrPath, [int]$TimeoutSeconds = 30)
     # This catches immediate option/backend failures, not full guest readiness.
     # Never publish a dead PID or start its database/control sidecars.
-    if ($Process.WaitForExit(1500)) {
+    $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while (-not (Test-Path -LiteralPath $StatusPath -PathType Leaf)) {
+        if ($Relay.HasExited) { throw "QEMU-Protokollrelais beendet (Code $($Relay.ExitCode))." }
+        if ([datetime]::UtcNow -gt $deadline) { throw 'QEMU-Start meldet keinen Status.' }
+        Start-Sleep -Milliseconds 100
+    }
+    $status = Get-Content -LiteralPath $StatusPath -Raw | ConvertFrom-Json
+    if ($null -eq $status.pid) {
         $detail = if (Test-Path -LiteralPath $StderrPath -PathType Leaf) {
             (Get-Content -LiteralPath $StderrPath -Tail 20) -join [Environment]::NewLine
         } else { '' }
-        throw "QEMU-Start fehlgeschlagen (Code $($Process.ExitCode)).`n$detail"
+        throw "QEMU-Start fehlgeschlagen (Code $($status.exit)).`n$detail"
     }
+    return [int]$status.pid
 }
 
 $logDirectory = Join-Path $PSScriptRoot 'logs'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 $stderrLog = Join-Path $logDirectory 'swiftshader-qemu.stderr.log'
-$vm = Start-Process $Qemu -ArgumentList $qemuArgs -WindowStyle Normal -PassThru -RedirectStandardError $stderrLog
-Assert-QemuStartup -Process $vm -StderrPath $stderrLog
-Write-Output "QEMU_PID=$($vm.Id)"
+$relayStatus = Join-Path $logDirectory 'qemu-relay.status.json'
+$commandFile = Join-Path $logDirectory 'qemu-command.txt'
+Remove-Item -LiteralPath $relayStatus -ErrorAction SilentlyContinue
+[IO.File]::WriteAllText($commandFile, ('"{0}" {1}' -f $Qemu, $qemuArgs), (New-Object Text.UTF8Encoding($false)))
+# The relay starts QEMU and keeps its stderr in a size-limited log.
+$relayScript = Join-Path $PSScriptRoot 'scripts\qemu_log_relay.py'
+$relay = Start-Process -FilePath $Python -WindowStyle Hidden -PassThru -ArgumentList @(
+    ('"{0}"' -f $relayScript), '--log', ('"{0}"' -f $stderrLog),
+    '--status', ('"{0}"' -f $relayStatus), '--command-file', ('"{0}"' -f $commandFile))
+$qemuPid = Wait-QemuStartup -Relay $relay -StatusPath $relayStatus -StderrPath $stderrLog
+Write-Output "QEMU_PID=$qemuPid"
 Write-Output "QEMU_AUDIO backend=$audioBackend card=$($launchPlan.audio_card) recording=false muted=$([bool]$MuteAudio)"
 Write-Output "QEMU_CPU unrestricted_host=true guest_vcpus=$GuestVcpus ram_mib=$GuestRamMiB acceleration=$Acceleration"
 Write-Output "QEMU_DISPLAYS primary=$primaryDisplay secondary=$secondaryDisplay cabinet_preview=lower"

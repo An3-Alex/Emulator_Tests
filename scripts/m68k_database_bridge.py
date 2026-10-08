@@ -31,6 +31,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from m68k_qemu_harness import DEFAULT_QEMU, REG_D3, REG_PC, RspClient, M68kRegisterSnapshot, connect_rsp
+from capped_log import CappedTextLog, retire_previous
 from cabinet_controls import (
     CabinetControlServer, KEY_IDS, KEY_TABLE_BASE, KEY_TABLE_PROFILES,
     KEY_TABLE_STRIDE, KEY_CURRENT_BASE, KEY_EVENT_BASE, format_tablet_packet, key_location,
@@ -102,6 +103,7 @@ INITIAL_FRAME_MAX_ATTEMPTS = 60
 # Keep all loader traffic inside the controller and expose only bytes produced
 # by the database runtime at 0x1000 and above.
 DATABASE_RUNTIME_START = 0x00001000
+LOADER_LOAD_ADDRESS = 0x00000400
 LOADER_RUNTIME_COOKIE = 0x5F72D920
 LOADER_IDLE_TX_STOP_PC = 0x00000C76
 LOADER_IDLE_RETURN_PC = 0x00000C8A
@@ -1619,22 +1621,30 @@ def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
     return x, y, down, response, point, calibration_input
 
 
-def complete_initvideo_board_profile(frame: bytes, when: dt.datetime) -> bytes:
+def complete_initvideo_board_profile(
+    frame: bytes, when: dt.datetime, *, strict: bool = True,
+) -> bytes:
     """Complete only RTC/cabinet fields missing from QEMU machine=none."""
-    completed = bytearray(complete_initvideo_clock(frame, when))
+    completed = bytearray(complete_initvideo_clock(frame, when, strict=strict))
     completed[34:38] = INITVIDEO_DEVICE_FIELDS
     return bytes(completed)
 
 
-def complete_initvideo_clock(frame: bytes, when: dt.datetime) -> bytes:
-    """Replace only the absent board RTC fields in an original INITVIDEO."""
+def complete_initvideo_clock(
+    frame: bytes, when: dt.datetime, *, strict: bool = True,
+) -> bytes:
+    """Replace only the absent board RTC fields in an original INITVIDEO.
+
+    strict: the verified owner runtime must produce its known identity fields.
+    Another database package has its own, which then pass through unchanged.
+    """
     if (
         len(frame) != INITVIDEO_FRAME_LENGTH
         or frame[:4] != INITVIDEO_PREFIX
         or frame[-1:] != b"\x04"
     ):
         raise ValueError("unexpected INITVIDEO frame layout")
-    if frame[4:24] != INITVIDEO_OWNER_FIELDS:
+    if strict and frame[4:24] != INITVIDEO_OWNER_FIELDS:
         raise ValueError("owner INITVIDEO identity/content fields changed")
     # The owner's display/profile bytes at 30..33 change after the auxiliary
     # board identifies itself. They are not RTC bytes and must pass through.
@@ -1661,9 +1671,10 @@ def initvideo_frame_complete(frame: bytes | bytearray) -> bool:
 class InitvideoClockForwarder:
     """Hold only INITVIDEO frames to complete their selected RTC date."""
 
-    def __init__(self, clock: Callable[[], dt.datetime]) -> None:
+    def __init__(self, clock: Callable[[], dt.datetime], *, strict: bool = True) -> None:
         self.buffer = bytearray()
         self.clock = clock
+        self.strict = strict
 
     def feed(self, value: bytes) -> tuple[bytes, bool]:
         if len(value) != 1:
@@ -1679,7 +1690,7 @@ class InitvideoClockForwarder:
             return unchanged, False
         if len(self.buffer) < INITVIDEO_FRAME_LENGTH:
             return b"", False
-        completed = complete_initvideo_clock(bytes(self.buffer), self.clock())
+        completed = complete_initvideo_clock(bytes(self.buffer), self.clock(), strict=self.strict)
         self.buffer.clear()
         return completed, True
 
@@ -2012,6 +2023,57 @@ def read_rtc_fault_snapshot(rsp: RspClient, when: dt.datetime) -> str:
     )
 
 
+# Code and table locations the bridge uses by address belong to the verified
+# CC4 runtime and loader L5.0b. Another database build can place them
+# elsewhere; a mismatch is reported, not refused, so other packages can be
+# tried. Each digest covers the address and its first HOOK_WINDOW bytes.
+VERIFIED_RUNTIME_SHA256 = "4E6D0FD7148FD66639687CB79714FF2F6BB663DFE4D9CF420E4194E44337E177"
+HOOK_WINDOW = 8
+DATABASE_HOOK_GROUPS = (
+    ("loader", "Loader", "loader",
+     (0x040E, 0x06B4, LOADER_IDLE_TX_STOP_PC, LOADER_IDLE_RETURN_PC), "0ed9c9c571a9d0db"),
+    ("uart", "UART/COM3", "runtime",
+     (*sorted(TX_STATUS_OVERLAP_STOP_PCS), *sorted(RUNTIME_UART_CLEAR_STOP_PCS),
+      UART_INIT_ENTRY, TIMER_HANDLER, UART_TIMER_RTE_PC, *sorted(UART_REPLY_WAIT_PCS)),
+     "f8784f725e6e30bd"),
+    ("board", "Board-Timer", "runtime",
+     (BOARD_TIMER_HANDLER, BOARD_TIMER_RTE_PC, BOARD_SCC_A_HANDLER, BOARD_SCC_A_RTE_PC,
+      *sorted(TIMER_QUEUE_WAIT_PCS), BOARD_TICK_COUNTER_WAIT_PC, SCC_A_COMMAND_WAIT_PC,
+      *sorted(DEVICE_DISCOVERY_TIMER_WAIT_PCS), RUNTIME_IO_INIT_RETURN_PC,
+      *sorted(BOARD_LATCH_FEEDBACK_BY_STOP_PC)),
+     "8af26cadd05e2cad"),
+    ("validator", "Prüfer (MP)", "runtime",
+     (VirtualCoinValidator.PAIRING_READ_PC, VirtualCoinValidator.PAIRING_COMPARE_PC,
+      VirtualCoinValidator.PAIRING_FAILURE_PC, VirtualCoinValidator.PAIRING_STATIC_TABLE_A,
+      VirtualCoinValidator.PAIRING_STATIC_TABLE_B),
+     "2f7a39a8b707ac8d"),
+    ("coin", "Münzeingang", "runtime", (COIN_ENTRY_READ_PC,), "5669ed53b76b6a6c"),
+    ("card", "Zulassungskarte", "runtime",
+     (AUX_RESPONSE_CHECK_PC, AUX_PROFILE_RESPONSE_CHECK_PC, AUX_VALUE_RESPONSE_CHECK_PC),
+     "d858339d5e5a1efb"),
+    ("hopper", "Hopper", "runtime",
+     (BOARD_SCAN_COMPLETE_PC, *sorted(HOPPER_QUEUE_WAIT_PCS)), "2258e86fb1bbbd5a"),
+    ("touch", "Touch", "runtime",
+     (TOUCH_CALIBRATION_CX_RETURN_PC, TOUCH_CALIBRATION_FINISH_PC), "7624bdc9237c3ff6"),
+    ("rtc", "RTC", "runtime", (RTC_FAULT_ENTRY,), "a358d4b2d9ffe61b"),
+)
+
+
+def database_hook_mismatches(runtime: bytes, loader: bytes) -> list[tuple[str, str]]:
+    """(id, German name) of every hook group that differs from the verified build."""
+    mismatched = []
+    for group, name, source, addresses, expected in DATABASE_HOOK_GROUPS:
+        image, base = ((loader, LOADER_LOAD_ADDRESS) if source == "loader"
+                       else (runtime, DATABASE_RUNTIME_START))
+        digest = hashlib.sha256()
+        for address in addresses:
+            offset = address - base
+            digest.update(address.to_bytes(4, "big") + image[offset:offset + HOOK_WINDOW])
+        if digest.hexdigest()[:16] != expected:
+            mismatched.append((group, name))
+    return mismatched
+
+
 def run_bridge(args: argparse.Namespace) -> int:
     validate_timer_interval(args.timer_interval)
     admission_eeprom = None
@@ -2061,9 +2123,21 @@ def run_bridge(args: argparse.Namespace) -> int:
         f"entry={runtime_report['entrypoint']} source={runtime_report['runtime_source']}",
         flush=True,
     )
+    initvideo_strict = runtime_report["runtime_sha256"] == VERIFIED_RUNTIME_SHA256
+    hook_mismatches = database_hook_mismatches(runtime, loader)
+    if hook_mismatches:
+        print(
+            "DB_VERSION_UNVERIFIED "
+            f"groups={','.join(group for group, _ in hook_mismatches)} "
+            f"names={'; '.join(name for _, name in hook_mismatches)}",
+            flush=True,
+        )
+    else:
+        print(f"DB_VERSION_HOOKS_VERIFIED known_runtime={initvideo_strict}", flush=True)
 
     loader_device = (
-        f"loader,file={args.loader.resolve()},addr=0x400,force-raw=on,cpu-num=0"
+        f"loader,file={args.loader.resolve()},addr=0x{LOADER_LOAD_ADDRESS:X},"
+        "force-raw=on,cpu-num=0"
     )
     command = [
         str(args.qemu), "-machine", "none", "-cpu", "m68020", "-m", "16M",
@@ -2159,7 +2233,7 @@ def run_bridge(args: argparse.Namespace) -> int:
             first_frame_reported = False
             wire_frame = bytearray()
             rtc = Rtc4543(getattr(args, "rtc_date", RTC_DEFAULT_TIME))
-            initvideo_clock_forwarder = InitvideoClockForwarder(rtc.now)
+            initvideo_clock_forwarder = InitvideoClockForwarder(rtc.now, strict=initvideo_strict)
             touch_click_forwarder = TouchClickForwarder()
             touch_controller = VirtualTouchController(getattr(args, "touch_state", None))
             log_touch_controller_events(touch_controller)
@@ -2384,7 +2458,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                     # Reuse the original profile, not its cached calendar. Every
                     # attempt must follow the RTC initialized from settings.
                     initial_retry_frame = complete_initvideo_clock(
-                        initial_retry_frame, rtc.now()
+                        initial_retry_frame, rtc.now(), strict=initvideo_strict
                     )
                     wire_ms = send_serial_frame(
                         com3, initial_retry_frame
@@ -3351,7 +3425,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                                     time.monotonic() - first_frame_started_at
                                 ) * 1000.0
                                 completed_frame = complete_initvideo_board_profile(
-                                    bytes(first_frame), rtc.now()
+                                    bytes(first_frame), rtc.now(),
+                                    strict=initvideo_strict,
                                 )
                                 wire_ms = send_serial_frame(
                                     com3, completed_frame
@@ -3749,9 +3824,12 @@ def parse_int(value: str) -> int:
 
 
 def run_with_log_file(action: Callable[[], int], path: Path) -> int:
-    """Write live bridge output directly, avoiding PowerShell's line pipeline."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", buffering=1) as log:
+    """Write live bridge output directly, avoiding PowerShell's line pipeline.
+
+    The log is size-limited; the previous run stays as its old copy.
+    """
+    retire_previous(path)
+    with CappedTextLog(path) as log:
         previous_stdout, previous_stderr = sys.stdout, sys.stderr
         sys.stdout = sys.stderr = log
         try:

@@ -374,7 +374,8 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
          "pixman_image_t *qemu_console_get_gpu_snapshot(QemuConsole *con);\n"
          "bool qemu_console_gpu_snapshot_requested(QemuConsole *con);\n"
          "void qemu_console_set_gpu_snapshot(QemuConsole *con, pixman_image_t *image);\n"
-         "unsigned mesa_current_output(void);\nvoid mesa_select_output(unsigned output);\n" + prototypes))
+         "unsigned mesa_current_output(void);\nvoid mesa_select_output(unsigned output);\n"
+         "int mesa_gpu_mode_current(void);\n" + prototypes))
     # Rendering ownership is internal state, not a replaceable UI-info field.
     # RESIZED supplies only width/height and must never re-enable QXL painting.
     edit("ui/console-priv.h", lambda s: replace_once(s, "    QemuUIInfo ui_info;",

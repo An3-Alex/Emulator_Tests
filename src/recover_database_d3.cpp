@@ -146,7 +146,8 @@ int main(int argc, char** argv) {
         any_joinable = true;
         Sleep(1000);
         const ULONGLONG now = GetTickCount64();
-        if (now - last_report >= 300000) {
+        // Frequent enough for the launcher's progress display.
+        if (now - last_report >= 2000) {
             const uint64_t done = tested.load(std::memory_order_relaxed);
             const double seconds = double(now - began) / 1000.0;
             fprintf(stdout, "D3_PROGRESS tested=%llu rate=%.0f/s filtered=%llu\n",

@@ -41,6 +41,7 @@ REQUIRED_PYTHON_FILES = (
     "admission_card.py",
     "cabinet_control_panel.py",
     "cabinet_controls.py",
+    "database_key.py",
     "emulator_launcher.py",
     "emulator_processes.py",
     "duart_timer.py",
@@ -64,6 +65,7 @@ REQUIRED_PYTHON_FILES = (
     "qemu3dfx_package.py",
     "runtime_bundle.py",
     "serialloader_chip_emulator.py",
+    "uninstall.py",
 )
 OWN_BINARIES = (
     Path("build/Cgos.dll"),
@@ -73,6 +75,7 @@ OWN_BINARIES = (
     Path("build/d3d9-proxy/d3d9.dll"),
     Path("build/sram-compat/FBWFLIB.dll"),
     Path("build/irrklang-proxy/irrKlang.dll"),
+    Path("build/recover-d3/recover_database_d3.exe"),
 )
 
 RETIRED_PYTHON_FILES = frozenset({

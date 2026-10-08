@@ -96,7 +96,8 @@ class EmulationSettingsTests(unittest.TestCase):
                 ("qxl_vram_mib", 65), ("audio_output", "other"), ("safe_tb", "false"), ("db_icount_shift", 0),
                 ("duart_x1_hz", 0), ("db_timer_interval", float("nan")),
                 ("db_connect_timeout", float("inf")), ("database_date", "2012-02-31T00:00:00"),
-                ("database_date", "2012-02-01T22:14:00+01:00"), ("guest_ram_mib", 10**500)):
+                ("database_date", "2012-02-01T22:14:00+01:00"), ("guest_ram_mib", 10**500),
+                ("db_key", "12"), ("db_key", "Auto"), ("db_key", "")):
             with self.subTest(key=key):
                 selection = replace(Selection(), **{key: bad})
                 self.assertTrue(validate_emulation(selection))
@@ -109,6 +110,19 @@ class EmulationSettingsTests(unittest.TestCase):
                     self.assertFalse(path.exists())
         self.assertTrue(validate_emulation(replace(Selection(), duart_x1_hz=10000000, db_timer_interval=0.05)))
         self.assertEqual(validate_emulation(replace(Selection(), duart_x1_hz=10000000, db_timer_interval=0.005)), [])
+
+    def test_database_key_reaches_programmer_and_bridge(self):
+        selection = Selection(db_key="0badc0de")
+        self.assertEqual(validate_emulation(selection), [])
+        result = subprocess.run([*launch_command(selection, ROOT), "-DryRun"],
+                                capture_output=True, text=True, check=True)
+        plan = json.loads(result.stdout)
+        programmer = plan["virtual_programming"]["arguments"]
+        bridge_arguments = plan["runtime"]["database_bridge"]["arguments"]
+        for arguments in (programmer, bridge_arguments):
+            self.assertEqual(arguments[arguments.index("--d3") + 1], "0x0BADC0DE")
+        # "auto" is resolved by the launcher; the scripts keep their known default.
+        self.assertNotIn("-D3", launch_command(Selection(), ROOT))
 
     def test_bridge_setting_persists_and_reaches_qemu(self):
         selection = Selection(audio_output="bridge")

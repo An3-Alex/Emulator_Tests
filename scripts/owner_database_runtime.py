@@ -29,6 +29,14 @@ RAW_PREFIX_SIZE = 0x100
 EXPECTED_MODULE_FAMILY = 0x61640400
 
 
+def key_mismatch_message(label: str, d3: int) -> str:
+    return (
+        f"{label} lässt sich mit dem Schlüssel D3={d3 & 0xFFFFFFFF:08X} nicht "
+        "entschlüsseln (Prüfsumme falsch). Unter Emulationseinstellungen → "
+        "Datenbank den Schlüssel auf „auto“ stellen oder den passenden Wert eintragen."
+    )
+
+
 def _read_pinned(path: Path, expected_sha256: str) -> tuple[bytes, str]:
     data = path.read_bytes()
     if len(data) > MAX_DATABASE_SIZE:
@@ -95,7 +103,14 @@ def prepare_runtime(
     else:
         runtime = transform_database(transport, d3 or 0)
         source = "owner-transport-transformed"
-    header = _validate_runtime(runtime)
+    try:
+        header = _validate_runtime(runtime)
+    except ValueError as exc:
+        # The raw header is not encrypted: with a wrong key only the checksum
+        # over the decrypted payload fails.
+        if d3 is not None and str(exc).endswith("native_checksum"):
+            raise ValueError(key_mismatch_message("Datenbank", d3)) from exc
+        raise
     report = {
         "schema": "m90-owner-database-runtime-v1",
         "transport": str(transport_path.resolve()),
