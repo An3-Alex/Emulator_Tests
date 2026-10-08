@@ -288,6 +288,9 @@ class VirtualTouchTests(unittest.TestCase):
         self.assertTrue(down[2])
         rsp.consume()
         hold = bridge.TouchPacketStream.MIN_HOLD_TICKS
+        # Long enough to register as a press, short enough that the press and
+        # liftoff reports stay within one cabinet tap (31-47 ms apart).
+        self.assertTrue(30 <= hold <= 50)
         self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold - 1))
         self.assertEqual(len(stream.packets), 1)
         release = bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold)

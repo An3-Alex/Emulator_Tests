@@ -1381,20 +1381,23 @@ class DatabaseBridgeTests(unittest.TestCase):
         self.assertEqual(bytes(delivered), frame)
 
     def test_touch_click_coordinates_are_completed_from_delivered_input(self) -> None:
-        forwarder = bridge.TouchClickForwarder()
-        frame = bytes.fromhex("01 02 41 00 3F 2C 00 00 00 00 04")
-        delivered = bytearray()
-        corrections = []
-        for value in frame:
-            chunk, corrected = forwarder.feed(bytes([value]), (614, 284))
-            delivered.extend(chunk)
-            if corrected is not None:
-                corrections.append(corrected)
-        self.assertEqual(
-            bytes(delivered),
-            bytes.fromhex("01 02 41 00 3F 2C 66 02 1C 01 04"),
-        )
-        self.assertEqual(corrections, [(614, 284)])
+        # Menu (3F 2C) and service program (18 2C) receive the same completion.
+        for target in ("3F 2C", "18 2C"):
+            with self.subTest(target=target):
+                forwarder = bridge.TouchClickForwarder()
+                frame = bytes.fromhex(f"01 02 41 00 {target} 00 00 00 00 04")
+                delivered = bytearray()
+                corrections = []
+                for value in frame:
+                    chunk, corrected = forwarder.feed(bytes([value]), (614, 284))
+                    delivered.extend(chunk)
+                    if corrected is not None:
+                        corrections.append(corrected)
+                self.assertEqual(
+                    bytes(delivered),
+                    bytes.fromhex(f"01 02 41 00 {target} 66 02 1C 01 04"),
+                )
+                self.assertEqual(corrections, [(614, 284)])
 
     def test_touch_release_and_other_frames_are_not_changed(self) -> None:
         forwarder = bridge.TouchClickForwarder()

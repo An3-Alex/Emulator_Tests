@@ -936,7 +936,9 @@ TOUCH_TRANSACTION_REQUEST = TOUCH_TRANSACTION_BASE + 0x1D
 TOUCH_TRANSACTION_REQUEST_SIZE = 0x10
 TOUCH_WAITING_FOR_REPLY = 7
 TOUCH_IDENTITY = b"A30000"
-TOUCH_CLICK_MENUE_PREFIX = bytes.fromhex("01 02 41 00 3F 2C")
+# TOUCHCLICKDOWN header; the next two bytes name the receiving game object
+# (menu 3F 2C, service program 18 2C), followed by X, Y and EOT.
+TOUCH_CLICK_PREFIX = bytes.fromhex("01 02 41 00")
 TOUCH_CLICK_FRAME_LENGTH = 11
 TOUCH_WIDE_MODE_ADDRESS = 0x001F01E4
 # Return from native direct CX transmission (FUN_7F8C8), before state 6
@@ -1715,8 +1717,8 @@ class TouchClickForwarder:
         if not self.buffer and value != b"\x01":
             return value, None
         self.buffer.extend(value)
-        if len(self.buffer) <= len(TOUCH_CLICK_MENUE_PREFIX):
-            if TOUCH_CLICK_MENUE_PREFIX.startswith(self.buffer):
+        if len(self.buffer) <= len(TOUCH_CLICK_PREFIX):
+            if TOUCH_CLICK_PREFIX.startswith(self.buffer):
                 return b"", None
             unchanged = bytes(self.buffer)
             self.buffer.clear()
@@ -1747,7 +1749,10 @@ class TouchPacketStream:
     # edges a few milliseconds apart and was ignored ("only long presses
     # work"). Keep each delivered contact down for this many DUART timer
     # interrupts (about 1 ms of firmware time each) before releasing it.
-    MIN_HOLD_TICKS = 150
+    # On the cabinet a tap reports its press and the liftoff press 31-47 ms
+    # apart (original VidComLog). A longer hold spreads them so far that the
+    # game counts two separate clicks.
+    MIN_HOLD_TICKS = 40
 
     def __init__(self) -> None:
         self.packets: deque[tuple[int, int, bool, bytes]] = deque()
