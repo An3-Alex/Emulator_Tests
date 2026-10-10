@@ -66,6 +66,27 @@ def require_hash(path: Path, accepted: set[str]) -> str:
     return actual
 
 
+def require_file(path: Path) -> None:
+    """A file of the cabinet software that must exist, whatever its version."""
+    if not path.is_file():
+        raise ValueError(f"Missing file: {path}")
+
+
+def version_notes(root: Path, *, audio: bool = False) -> list[str]:
+    """Lines for the operator about cabinet files that are not the verified versions."""
+    from guest_files import note
+    root = root.resolve()
+    lines = []
+    checks = [(f"{directory}/game.exe", GAME_HASH, "Spielprogramm") for directory in ("NVRAM", "WorkDir")]
+    if audio:
+        checks.append(("WINDOWS/system32/irrKlang.dll", ORIGINAL_AUDIO_HASH, "Ton-Bibliothek"))
+    for relative, verified, label in checks:
+        line = note(inside(root, relative), {verified}, label)
+        if line is not None and line not in lines:
+            lines.append(line)
+    return lines
+
+
 def durable_copy(source: Path, destination: Path) -> None:
     shutil.copyfile(source, destination)
     # Windows _commit requires a writable descriptor; Linux fsync accepts it too.
@@ -85,7 +106,8 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
     label = "Runtime" if audio is not None else "Graphics"
     if audio is not None:
         require_hash(audio, {AUDIO_HASH})
-        require_hash(inside(root, "WINDOWS/system32/irrKlang.dll"), {ORIGINAL_AUDIO_HASH})
+        # The cabinet's own library; another version of it is reported by version_notes.
+        require_file(inside(root, "WINDOWS/system32/irrKlang.dll"))
         # New audio setup intentionally removes the legacy driver from active
         # paths. Accept only its complete, hash-checked quarantine, not absence.
         from audio_legacy_driver import MANIFEST, validate_quarantine
@@ -105,7 +127,7 @@ def update(root: Path, bootstrap: Path, proxy: Path, *, audio: Path | None = Non
         require_hash(cgos, {CGOS_HASH})
         targets.append(("WINDOWS/system32/Cgos.dll", cgos, CGOS_HASH, {CGOS_HASH, *PREVIOUS_CGOS}))
     for directory in ("NVRAM", "WorkDir"):
-        require_hash(inside(root, f"{directory}/game.exe"), {GAME_HASH})
+        require_file(inside(root, f"{directory}/game.exe"))
         if not gpu:
             require_hash(inside(root, f"{directory}/swiftshader_d3d9.dll"), {SWIFTSHADER_HASH})
             targets.append((f"{directory}/d3d9.dll", proxy, PROXY_HASH,
@@ -189,3 +211,12 @@ if __name__ == "__main__":
     print(update(options.root, options.bootstrap, options.proxy, audio=options.audio,
                  sram=options.sram, cgos=options.cgos,
                  check_only=options.check_only, gpu=options.gpu))
+    if options.check_only:
+        # Callers compare the status line above; notes go to the log beside it.
+        import sys
+        for line in version_notes(options.root, audio=options.audio is not None):
+            print(line, file=sys.stderr)
+        if options.sram is not None:
+            from service_sram import note as service_note
+            if service_note(options.root):
+                print(service_note(options.root), file=sys.stderr)

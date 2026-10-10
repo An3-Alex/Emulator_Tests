@@ -43,3 +43,18 @@ geöffnet. Der vorherige Stand bleibt mit Manifest unter
 `NVRAM/m90-graphics-backups`; bei I/O-Fehlern werden bereits ersetzte Dateien
 zurückgesetzt. Spiel, Datenbank, QXL-Treiber, SRAM-Daten und Registry bleiben
 unangetastet.
+
+## CF-Karten mit anderer Spielversion
+
+Einrichtung und Laufzeit-Update führen für jede CF-Karte dieselben Schritte
+aus. Die Dateien der Karte (Loader, Board- und Schreibfilter-Bibliothek,
+Spielprogramm, Ton-Bibliothek, Serviceprogramm) müssen vorhanden sein; weicht
+eine von der geprüften Version ab, nennt der Starter sie im Protokoll.
+
+Die beiden Loader-Anpassungen (Geräte-Routine ohne Absturz bei fehlendem Gerät,
+auf 5 Sekunden begrenzte Leerlauf-Wartezeit) werden an ihren Befehlsfolgen
+erkannt, nicht an der Dateiversion. Adressen, die sich von Loader-Build zu
+Loader-Build verschieben, bleiben beim Vergleich außen vor. Enthält ein Loader
+die Befehlsfolge nicht, bleibt er unverändert. Das Serviceprogramm erhält immer
+die SRAM-Anbindung; seine Datenfristen werden verlängert, wo derselbe Befehl
+genau einmal vorkommt.

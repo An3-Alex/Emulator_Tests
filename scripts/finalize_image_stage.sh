@@ -40,7 +40,10 @@ verifier_hash=$(sha256sum "$mount_dir/WINDOWS/explorer.exe" | cut -d' ' -f1)
    "$verifier_hash" == aacd9215399d0122b46cb3b428dde15fad421de248e74e35c88b7de3645cc789 ]] || {
   echo 'unexpected active display verifier' >&2; exit 3;
 }
-verify_hash "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe" d5dd84e59c59a24af4f1dfdd486882bfc6fa777e0dcc22fa3ae7314999ab3aeb
+# The saved loader is the patched form of this image's own original loader.
+python3 "$script_dir/patch_loader_null_device.py" --verify \
+  "$mount_dir/WINDOWS/explorer_original.exe" \
+  "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe" || exit 3
 [[ $(cat "$mount_dir/NVRAM/m90_setup_stage.txt") == 'stage=qxl-verify' ]] || {
   echo 'image has not completed the QXL display verification boot' >&2; exit 3;
 }

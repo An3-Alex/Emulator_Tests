@@ -182,17 +182,38 @@ class GraphicsUpdateTests(unittest.TestCase):
         self.assertEqual((self.guest / "WINDOWS/system32/irrKlang.dll").read_bytes(), b"original-audio")
         self.assertEqual(self.run_update(audio=audio), "Runtime already current")
 
-    def test_audio_target_and_original_library_must_be_known_before_any_write(self):
+    def test_audio_target_must_be_known_before_any_write(self):
         audio = self.audio_fixture()
-        for relative in ("WorkDir/irrKlang.dll", "WINDOWS/system32/irrKlang.dll"):
-            with self.subTest(relative=relative):
-                target = self.guest / relative
-                target.write_bytes(b"unknown")
-                with self.assertRaisesRegex(ValueError, "Unrecognized"):
-                    self.run_update(audio=audio)
-                self.assertFalse((self.guest / "NVRAM/m90-graphics-backups").exists())
-                target.write_bytes(self.before[relative])
+        target = self.guest / "WorkDir/irrKlang.dll"
+        target.write_bytes(b"unknown")
+        with self.assertRaisesRegex(ValueError, "Unrecognized"):
+            self.run_update(audio=audio)
+        self.assertFalse((self.guest / "NVRAM/m90-graphics-backups").exists())
+        target.write_bytes(self.before["WorkDir/irrKlang.dll"])
         self.assert_original_files()
+
+    def test_other_versions_of_the_cabinet_files_are_reported_not_refused(self):
+        audio = self.audio_fixture()
+        self.assertEqual(graphics.version_notes(self.guest, audio=True), [])
+        (self.guest / "WINDOWS/system32/irrKlang.dll").write_bytes(b"another library")
+        for directory in ("NVRAM", "WorkDir"):
+            (self.guest / directory / "game.exe").write_bytes(b"another game package")
+        notes = graphics.version_notes(self.guest, audio=True)
+        self.assertEqual(len(notes), 2)   # both game.exe copies are the same file
+        self.assertIn("Spielprogramm (game.exe)", notes[0])
+        self.assertIn("Ton-Bibliothek (irrKlang.dll)", notes[1])
+        self.assertEqual(graphics.version_notes(self.guest), notes[:1])
+        self.assertIn("updated", self.run_update(audio=audio))
+        self.assertEqual((self.guest / "WorkDir/game.exe").read_bytes(), b"another game package")
+
+    def test_missing_cabinet_files_still_stop_the_update(self):
+        audio = self.audio_fixture()
+        (self.guest / "NVRAM/game.exe").unlink()
+        with self.assertRaisesRegex(ValueError, "Missing file"):
+            self.run_update(audio=audio)
+        with self.assertRaisesRegex(ValueError, "missing file"):
+            graphics.version_notes(self.guest)
+        self.assertFalse((self.guest / "NVRAM/m90-graphics-backups").exists())
 
     def test_audio_update_accepts_only_validated_legacy_quarantine(self):
         audio = self.audio_fixture()

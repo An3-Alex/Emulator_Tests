@@ -36,14 +36,19 @@ zeigt weiterhin den unteren Spielbildschirm.
 
 Der Start kann mehrere Minuten dauern.
 
-## Andere Datenbanken
+## Andere CF-Karten und Datenbanken
+
+CF-Karte und Datenbank gehören zusammen; viele unterscheiden sich nur in den
+enthaltenen Spielen. Ein CF-Image mit anderer Spielversion wird wie das
+geprüfte eingerichtet. Der Starter nennt dabei jede Datei der Karte, die von
+der geprüften Version abweicht.
 
 Unter „Emulationseinstellungen → Datenbank-Schlüssel (D3)“ steht standardmäßig
 `auto`: Ist der Schlüssel einer gewählten Datenbank unbekannt, sucht ihn der
 Starter einmalig (je nach CPU bis etwa 20 Minuten) und merkt ihn sich. Passt
 eine Datenbank nicht zu den Adressen, die die Bridge nachbildet, startet sie
 trotzdem; der Starter nennt dann die betroffenen Funktionen (z. B. Touch,
-Münzeingang). CF-Images mit anderer Spielversion werden nicht eingerichtet.
+Münzeingang).
 
 ## Protokolle
 
@@ -55,3 +60,16 @@ CF-Images, Datenbank-Firmware und proprietäre Gastdateien werden nicht
 mitgeliefert. Die Quellen der enthaltenen Open-Source-Komponenten liegen beim
 Release. Der Projektquellcode lässt sich mit Git herunterladen; weitere
 technische Informationen stehen unter [docs](docs).
+
+## Geprüfte Kombinationen
+
+Mit diesen CF-Karten und Datenbanken läuft der Emulator sicher. In Klammern
+steht der Anfang der SHA-256-Prüfsumme der jeweiligen Datei.
+
+1. **CF-Karte** mit der Startanzeige `M440_945_KOMBI_V20`, `SW-Date: 20121212`,
+   `ADP - LOADER VERSION V7.0.0.5`; `game.exe` (`27c4553927397b1e…`)
+
+   **Datenbank:** Loader `Loader_61640403_L5.0b_2MB.bin` (`b0768c65b34834c7…`),
+   Factory `FactoryReset_61640403.xc` (`4f088db4af5f4a5d…`),
+   Konfiguration `M90_Las_Vegas.bin` (`dce3a865b742123c…`),
+   Spielepaket `Magie_90_CC4.bin` (`593cf4b3a1ccc83f…`)

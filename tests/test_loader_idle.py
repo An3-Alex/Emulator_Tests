@@ -77,15 +77,71 @@ class LoaderIdleTests(unittest.TestCase):
             root = Path(directory)
             target = root / idle.TARGET
             target.parent.mkdir()
+            # A loader without the wait function is reported, never modified.
             target.write_bytes(b"other firmware")
-            with self.assertRaisesRegex(ValueError, "Unrecognized"):
-                idle.update(root)
+            for check_only in (True, False):
+                self.assertIn("bleibt unverändert", idle.update(root, check_only=check_only))
+            self.assertEqual(target.read_bytes(), b"other firmware")
             self.assertFalse((root / "NVRAM").exists())
+            with self.assertRaisesRegex(ValueError, "Unrecognized"):
+                idle.patch_bytes(b"other firmware")
             target.write_bytes(self.source)
             target.with_name(target.name + ".idle-new").write_bytes(b"unfinished")
             with self.assertRaisesRegex(ValueError, "Unfinished"):
                 idle.update(root)
             self.assertEqual(target.read_bytes(), self.source)
+
+    def test_function_is_compared_without_the_operands_that_move_with_a_build(self):
+        body = bytearray(range(256)) * 3
+        body = bytes(body[:idle.FUNCTION_LENGTH])
+        moved = bytearray(body)
+        for position in idle.FUNCTION_RELOCATIONS:
+            moved[position:position + 4] = b"\xaa\xbb\xcc\xdd"
+        self.assertEqual(idle.function_digest(body), idle.function_digest(bytes(moved)))
+        moved[idle.FRAME_OFFSET] ^= 1
+        self.assertNotEqual(idle.function_digest(body), idle.function_digest(bytes(moved)))
+        # Every hook site lies inside the compared function.
+        for offset in (idle.FRAME_OFFSET, idle.INIT_OFFSET, idle.SLEEP_OFFSET, idle.CLEANUP_OFFSET):
+            self.assertLess(offset, idle.FUNCTION_LENGTH)
+        self.assertIn(idle.INIT_OFFSET + 5, idle.FUNCTION_RELOCATIONS)    # the counter's address
+        self.assertIn(idle.SLEEP_OFFSET + 7, idle.FUNCTION_RELOCATIONS)   # the Sleep import slot
+
+    def test_verified_layout_keeps_its_addresses(self):
+        self.assertEqual(idle.VERIFIED.function + idle.INIT_OFFSET, 0x4CE6)
+        self.assertEqual(idle.VERIFIED.function + idle.SLEEP_OFFSET, 0x4D7B)
+        self.assertEqual(idle.VERIFIED.function + idle.CLEANUP_OFFSET + idle.VERIFIED.shift, 0x404E9C)
+        self.assertEqual(idle.VERIFIED.cave + idle.INIT_CAVE_OFFSET, 0x28880)
+        self.assertEqual(idle.VERIFIED.cave + idle.CHECK_CAVE_OFFSET, 0x288A0)
+        moved = idle.Layout(function=0x5000, cave=0x30000, shift=0x410000, tick=0x4390A8,
+                            init_original=bytes.fromhex("89 44 24 20 A1 90 7E 48 00"),
+                            sleep_original=bytes.fromhex("68 C8 00 00 00 FF 15 F0 91 43 00"))
+        init, check = idle.trampolines(moved)
+        self.assertEqual(init[6:12], bytes.fromhex("FF 15 A8 90 43 00"))
+        self.assertEqual(init[21:26], bytes.fromhex("A1 90 7E 48 00"))
+        self.assertEqual(check[:11], moved.sleep_original)
+        sites = [offset for offset, _, _ in idle.replacements(moved)]
+        self.assertEqual(sites, [0x5010, 0x5086, 0x511B, 0x30030, 0x30050])
+
+    def test_import_slot_of_a_minimal_executable(self):
+        data = bytearray(0x800)
+        data[:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3C, 0x80)
+        data[0x80:0x84] = b"PE\0\0"
+        struct.pack_into("<HH", data, 0x84, 0x14C, 1)                 # one section
+        struct.pack_into("<H", data, 0x80 + 20, 0xE0)                # optional header size
+        struct.pack_into("<I", data, 0x80 + 24 + 28, 0x400000)       # image base
+        struct.pack_into("<I", data, 0x80 + 24 + 104, 0x1000)        # import directory
+        section = 0x80 + 24 + 0xE0
+        struct.pack_into("<8sIIII", data, section, b".idata", 0x400, 0x1000, 0x400, 0x400)
+        struct.pack_into("<IIIII", data, 0x400, 0x1100, 0, 0, 0x1200, 0x1180)
+        struct.pack_into("<II", data, 0x500, 0x1220, 0x1240)         # lookup table
+        data[0x600:0x60D] = b"kernel32.DLL\0"
+        data[0x622:0x628] = b"Sleep\0"
+        data[0x642:0x64F] = b"GetTickCount\0"
+        self.assertEqual(idle.import_slot(bytes(data), "KERNEL32.dll", "GetTickCount"), 0x401184)
+        self.assertEqual(idle.import_slot(bytes(data), "KERNEL32.dll", "Sleep"), 0x401180)
+        self.assertIsNone(idle.import_slot(bytes(data), "KERNEL32.dll", "ExitProcess"))
+        self.assertIsNone(idle.import_slot(b"not an executable", "KERNEL32.dll", "Sleep"))
 
     def test_failed_atomic_replace_preserves_original_and_backup(self):
         with tempfile.TemporaryDirectory() as directory:

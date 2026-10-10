@@ -46,6 +46,8 @@ REQUIRED_PYTHON_FILES = (
     "emulator_processes.py",
     "duart_timer.py",
     "graphics_update.py",
+    "guest_files.py",
+    "patch_loader_null_device.py",
     "loader_idle.py",
     "event_log_viewer.py",
     "image_setup.py",

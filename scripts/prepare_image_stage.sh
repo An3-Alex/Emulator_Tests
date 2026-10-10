@@ -80,15 +80,14 @@ unmount_image() {
   loop_device=
 }
 
+# The cabinet's files must be there; another version of them is reported by
+# guest_files.py and set up like the verified one.
 verify_original_guest() {
-  verify_hash "$mount_dir/WINDOWS/system32/Cgos.dll" 480703586ea6f5bdc9ae3d8aa7bb47f03fa4d8234b48a3f2abc92356fb76a14e
-  verify_hash "$mount_dir/WINDOWS/explorer.exe" 2fb4233b541431a1b940ed5af6f11096b7fd5846316e3c4e55bd0e9a7b37a5c1
-  verify_hash "$mount_dir/WINDOWS/system32/fbwflib.dll" 17dc9581c25b9c77d2d4368c3923f83e414d6be9a8acf675871ff2ce6df28263
+  python3 "$script_dir/guest_files.py" "$mount_dir" > "$1" || exit 3
   [[ -f "$mount_dir/WINDOWS/system32/config/SYSTEM" ]] || {
     echo 'XP SYSTEM hive missing' >&2; exit 3;
   }
   for dir in NVRAM WorkDir; do
-    verify_hash "$mount_dir/$dir/game.exe" 27c4553927397b1e8443d6caea12e5b4e7282e4948b67b85c80c4db0d1d0427d
     [[ ! -e "$mount_dir/$dir/d3d9.dll" ]] || {
       echo "source already has $dir/d3d9.dll" >&2; exit 3;
     }
@@ -96,7 +95,7 @@ verify_original_guest() {
 }
 
 mount_image "$source_image" ro
-verify_original_guest
+verify_original_guest /dev/stdout
 unmount_image
 
 available=$(df -B1 --output=avail "$(dirname -- "$output_image")" | tail -n 1 | tr -d ' ')
@@ -111,7 +110,7 @@ cp --reflink=auto --sparse=always -- "$source_image" "$partial_image"
   echo "incomplete copy left at $partial_image" >&2; exit 3;
 }
 mount_image "$partial_image" rw
-verify_original_guest
+verify_original_guest /dev/null
 
 cp --preserve=timestamps "$mount_dir/WINDOWS/system32/Cgos.dll" \
   "$mount_dir/WINDOWS/system32/Cgos_original.dll"
@@ -122,7 +121,9 @@ cp --preserve=timestamps "$mount_dir/WINDOWS/explorer.exe" \
 python3 "$script_dir/patch_loader_null_device.py" \
   "$mount_dir/WINDOWS/explorer_original.exe" \
   "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe"
-verify_hash "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe" d5dd84e59c59a24af4f1dfdd486882bfc6fa777e0dcc22fa3ae7314999ab3aeb
+python3 "$script_dir/patch_loader_null_device.py" --verify \
+  "$mount_dir/WINDOWS/explorer_original.exe" \
+  "$mount_dir/WINDOWS/explorer_adp_before_qxl.exe"
 cp "$qxl_installer" "$mount_dir/WINDOWS/explorer.exe.new"
 mv "$mount_dir/WINDOWS/explorer.exe.new" "$mount_dir/WINDOWS/explorer.exe"
 cp --preserve=timestamps "$mount_dir/WINDOWS/system32/config/SYSTEM" \

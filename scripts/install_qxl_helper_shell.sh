@@ -34,23 +34,29 @@ loop_device=$(image_loop_device "$image" rw)
 ntfs-3g -o big_writes "$loop_device" "$mount_dir"
 active="$mount_dir/WINDOWS/explorer.exe"
 backup="$mount_dir/WINDOWS/explorer_adp_before_qxl.exe"
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+# The verified patched loader, or the patched form of this image's own loader.
+is_patched_loader() {
+  [[ $(sha256sum "$1" | awk '{print $1}') == "$expected_loader" ]] && return 0
+  [[ -f "$mount_dir/WINDOWS/explorer_original.exe" ]] &&
+    python3 "$script_dir/patch_loader_null_device.py" --verify \
+      "$mount_dir/WINDOWS/explorer_original.exe" "$1" 2>/dev/null
+}
 active_hash=$(sha256sum "$active" | awk '{print $1}')
 [[ "$active_hash" == "$expected_installer" ||
-   "$active_hash" == 0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ||
-   "$active_hash" == "$expected_loader" ]] || {
+   "$active_hash" == 0e043b8fd7199d813596704be1c481b3c5643941af1a7a6cc15e15fcd379c296 ]] ||
+  is_patched_loader "$active" || {
   echo 'unexpected active XP shell; refusing replacement' >&2; exit 3;
 }
 
 if [[ -f "$backup" ]]; then
-  backup_hash=$(sha256sum "$backup" | awk '{print $1}')
-  [[ "$backup_hash" == "$expected_loader" ]] || {
-    echo "ADP shell backup hash mismatch: $backup_hash" >&2
+  is_patched_loader "$backup" || {
+    echo "ADP shell backup is not the patched loader: $(sha256sum "$backup" | awk '{print $1}')" >&2
     exit 1
   }
 else
-  active_hash=$(sha256sum "$active" | awk '{print $1}')
-  [[ "$active_hash" == "$expected_loader" ]] || {
-    echo "active shell is not the verified patched loader: $active_hash" >&2
+  is_patched_loader "$active" || {
+    echo "active shell is not the patched loader: $active_hash" >&2
     exit 1
   }
   cp --preserve=timestamps "$active" "$backup"

@@ -21,6 +21,16 @@ class EventLogViewerTests(unittest.TestCase):
             self.assertEqual(event.details, line)
             self.assertEqual(event.level, level)
 
+    def test_firmware_touch_is_shown_as_picture_position(self) -> None:
+        parser = viewer.BridgeLogParser()
+        field = parser.feed("DB_TOUCH_FIRMWARE x=369 row_from_bottom=367 screen=1 locked=0 "
+                            "pressed=10000011 last=10000011 queued=0")[0]
+        self.assertEqual(field.title, "Datenbank hat Touch bei X=369 Y=232 erhalten (Spieltaste 10000011)")
+        menu = parser.feed("DB_TOUCH_FIRMWARE x=203 row_from_bottom=69 screen=1 locked=0 "
+                           "pressed=FFFFFFFF last=FFFFFFFF queued=0")[0]
+        self.assertEqual(menu.title, "Datenbank hat Touch bei X=203 Y=530 erhalten")
+        self.assertEqual(parser.feed("DB_TOUCH_FIRMWARE")[0].title, "Datenbank hat Touch erhalten")
+
     def test_database_version_check_is_visible(self) -> None:
         line = "DB_VERSION_UNVERIFIED groups=touch,hopper names=Touch; Hopper"
         event = viewer.BridgeLogParser().feed(line)[0]

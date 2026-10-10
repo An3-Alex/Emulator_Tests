@@ -1,7 +1,8 @@
-"""Attach the verified XP service executable to the shared SRAM compatibility DLL.
+"""Attach the XP service executable to the shared SRAM compatibility DLL.
 
 Adds only a PE import section. Original instructions/resources and original
-imports are preserved. Unknown service versions are never patched.
+imports are preserved. Other versions of the service program get the same
+import; their data deadlines are extended where the same instruction is found.
 """
 from __future__ import annotations
 
@@ -36,12 +37,15 @@ def patch_service(source: bytes, *, writable_iat: bool = True, longer_deadlines:
     loader unprotects only the section holding the import directory while
     binding, so the Borland IATs in read-only .idata faulted (0xC0000005).
     longer_deadlines=False reproduces the patch before SERVICE_DEADLINES."""
-    if digest(source) != SERVICE_HASH:
+    verified = digest(source) == SERVICE_HASH
+    if len(source) < 0x40 or source[:2] != b"MZ":
         raise ValueError("Unrecognized service executable; original must remain unchanged")
     data = bytearray(source)
     u16 = lambda off: struct.unpack_from("<H", data, off)[0]
     u32 = lambda off: struct.unpack_from("<I", data, off)[0]
     pe = u32(0x3C)
+    if pe + 248 > len(data):
+        raise ValueError("Unrecognized service executable; original must remain unchanged")
     opt = pe + 24
     count = u16(pe + 6)
     table = opt + u16(pe + 20)
@@ -60,9 +64,18 @@ def patch_service(source: bytes, *, writable_iat: bool = True, longer_deadlines:
         raise ValueError("Invalid import RVA")
     if longer_deadlines:
         for address, cabinet, emulator in SERVICE_DEADLINES:
-            at = offset(address - u32(opt + 28))
-            if data[at:at + 5] != b"\xBA" + struct.pack("<I", cabinet):
-                raise ValueError("Service data deadline not at its verified location")
+            instruction = b"\xBA" + struct.pack("<I", cabinet)
+            try:
+                at = offset(address - u32(opt + 28))
+            except ValueError:
+                at = -1
+            if at < 0 or data[at:at + 5] != instruction:
+                if verified:
+                    raise ValueError("Service data deadline not at its verified location")
+                # Another version: the same instruction, if it occurs exactly once.
+                at = bytes(source).find(instruction)
+                if at < 0 or bytes(source).find(instruction, at + 1) >= 0:
+                    continue
             struct.pack_into("<I", data, at + 1, emulator)
     old_import = offset(u32(opt + 104))
     descriptors = bytearray()
@@ -120,18 +133,22 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
     service = inside(root, SERVICE_PATH)
     backup = service.with_name(service.name + ".pre-m90-sram")
     inside(root, str(backup.relative_to(root)))
-    current = service.read_bytes()
-    original = backup.read_bytes() if backup.exists() else current
-    patched = patch_service(original)
-    earlier = (patch_service(original, longer_deadlines=False),
-               patch_service(original, writable_iat=False, longer_deadlines=False))
-    if current not in (original, patched, *earlier):
-        raise ValueError("Service differs from original and verified SRAM version")
-    if current != original and not backup.exists():
-        raise ValueError("Original service backup missing")
-    targets = [inside(root, "NVRAM/FBWFLIB.dll"), inside(root, "WorkDir/FBWFLIB.dll"),
-               service.with_name("FBWFLIB.dll")]
-    changed = current != patched
+    targets = [inside(root, "NVRAM/FBWFLIB.dll"), inside(root, "WorkDir/FBWFLIB.dll")]
+    # A CF image without this service program still gets the game's SRAM DLLs.
+    present = service.is_file()
+    changed = False
+    if present:
+        current = service.read_bytes()
+        original = backup.read_bytes() if backup.exists() else current
+        patched = patch_service(original)
+        earlier = (patch_service(original, longer_deadlines=False),
+                   patch_service(original, writable_iat=False, longer_deadlines=False))
+        if current not in (original, patched, *earlier):
+            raise ValueError("Service differs from original and verified SRAM version")
+        if current != original and not backup.exists():
+            raise ValueError("Original service backup missing")
+        targets.append(service.with_name("FBWFLIB.dll"))
+        changed = current != patched
     for target in targets:
         if target.exists():
             actual = digest(target.read_bytes())
@@ -147,7 +164,7 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
     if check_only:
         return "Service SRAM update required"
     # Back up every existing file before changing any; do not touch SRAM data.
-    if not backup.exists():
+    if present and not backup.exists():
         with backup.open("xb") as stream:
             stream.write(original); stream.flush(); os.fsync(stream.fileno())
     old_files = [(target, target.read_bytes() if target.exists() else None) for target in targets]
@@ -170,7 +187,8 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
         for target, _ in old_files:
             replace(target, replacement); installed.append(target)
         # DLL is installed first, then add the import to the executable.
-        replace(service, patched)
+        if present:
+            replace(service, patched)
     except Exception:
         for target, previous in reversed(old_files):
             if target in installed:
@@ -180,6 +198,23 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
     return "Service SRAM updated; original executable and DLLs backed up"
 
 
+def note(root: Path) -> str | None:
+    """What to tell the operator about a service program that is not the verified one."""
+    from graphics_update import inside
+    service = inside(root.resolve(), SERVICE_PATH)
+    if not service.is_file():
+        return "Hinweis: Auf diesem CF-Image fehlt das bekannte Serviceprogramm; es wird nicht angepasst."
+    backup = service.with_name(service.name + ".pre-m90-sram")
+    original = (backup if backup.exists() else service).read_bytes()
+    if digest(original) == SERVICE_HASH:
+        return None
+    patched = patch_service(original)[:len(original)]
+    instructions = [b"\xBA" + struct.pack("<I", cabinet) for _, cabinet, _ in SERVICE_DEADLINES]
+    extended = sum(original.count(instruction) - patched.count(instruction) for instruction in instructions)
+    return ("Hinweis: Serviceprogramm-Version nicht verifiziert; es wurde wie das bekannte angebunden "
+            f"({extended} von {len(SERVICE_DEADLINES)} Datenfristen verlängert).")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("root", type=Path)
@@ -187,3 +222,5 @@ if __name__ == "__main__":
     parser.add_argument("--check-only", action="store_true")
     args = parser.parse_args()
     print(update(args.root, args.proxy, check_only=args.check_only))
+    if not args.check_only and note(args.root):
+        print(note(args.root))

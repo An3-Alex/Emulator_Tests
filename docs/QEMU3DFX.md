@@ -217,7 +217,11 @@ noch Maustasten an Windows weiter, fängt den Zeiger nicht ein und versetzt ihn
 nicht. Das Serviceprogramm erhält seine Klicks wie im Automaten vom Spiel, das
 den Touch auf die 1280x1024-Anzeige umrechnet. Wie das Touch-Tablett des
 Automaten meldet die Datenbank-Bridge die Zeile vom unteren Bildrand gezählt;
-Spielmenü und Serviceprogramm erwarten sie so. Für Wartungsarbeiten am Image
+Spielmenü und Serviceprogramm erwarten sie so. Ein Touch-Paket erreicht die
+Datenbank wie über die serielle Leitung in zwei Schritten: zuerst das
+Statusbyte, danach die vier Koordinatenbytes. Damit kennt die Datenbank die
+Position und erkennt ihre eigenen Schaltflächen, etwa Spielfelder und das
+Umbuchen zwischen Geld- und Punktespeicher. Für Wartungsarbeiten am Image
 schaltet die Umgebungsvariable `M90_HOST_MOUSE=1` die QEMU-Maus wieder ein.
 
 Die Bedienfeld-Vorschau wechselt mit der unteren Anzeige von QXL zum echten

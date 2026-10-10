@@ -122,6 +122,42 @@ class ServiceSramTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "No safe space"):
                 sram.patch_service(changed)
 
+    def test_another_service_version_gets_the_same_import_and_found_deadlines(self):
+        other = bytearray(self.original)
+        other[0x410:0x417] = b"version"                    # differs from the verified program
+        other[0x500:0x505] = bytes(5)                      # first deadline moved ...
+        other[0x540:0x545] = bytes.fromhex("BA 60 EA 00 00")  # ... to another place
+        other = bytes(other)
+        output = sram.patch_service(other)
+        self.assertIn(b"FBWFLIB.dll\0", output[0x600:])
+        self.assertEqual(output[0x540:0x545], bytes.fromhex("BA") + (300_000).to_bytes(4, "little"))
+        self.assertEqual(output[0x520:0x525], bytes.fromhex("BA") + (125_000).to_bytes(4, "little"))
+        # An instruction that occurs twice is not a deadline that can be told apart.
+        twice = bytearray(other); twice[0x560:0x565] = bytes.fromhex("BA 60 EA 00 00")
+        ambiguous = sram.patch_service(bytes(twice))
+        self.assertEqual(ambiguous[0x540:0x545], bytes.fromhex("BA 60 EA 00 00"))
+        self.assertEqual(ambiguous[0x520:0x525], bytes.fromhex("BA") + (125_000).to_bytes(4, "little"))
+        self.service.write_bytes(other)
+        self.assertIn("updated", sram.update(self.root, self.proxy))
+        self.assertEqual(self.service.read_bytes(), output)
+        self.assertIn("2 von 2 Datenfristen", sram.note(self.root))
+        self.assertEqual(sram.update(self.root, self.proxy), "Service SRAM already current")
+
+    def test_verified_service_needs_no_note(self):
+        sram.update(self.root, self.proxy)
+        self.assertIsNone(sram.note(self.root))
+
+    def test_image_without_the_service_program_still_gets_the_game_dlls(self):
+        self.service.unlink()
+        self.assertIn("required", sram.update(self.root, self.proxy, check_only=True))
+        self.assertIn("updated", sram.update(self.root, self.proxy))
+        for directory in ("WorkDir", "NVRAM"):
+            self.assertEqual((self.root / directory / "FBWFLIB.dll").read_bytes(), b"new-dll")
+        self.assertFalse(self.service.with_name("FBWFLIB.dll").exists())
+        self.assertFalse(self.service.exists())
+        self.assertIn("fehlt das bekannte Serviceprogramm", sram.note(self.root))
+        self.assertEqual(sram.update(self.root, self.proxy), "Service SRAM already current")
+
     def test_readonly_preflight_then_idempotent_update_preserves_sram(self):
         before = {p.relative_to(self.root): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
         self.assertIn("required", sram.update(self.root, self.proxy, check_only=True))

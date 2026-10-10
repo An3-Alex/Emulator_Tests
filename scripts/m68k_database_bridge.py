@@ -945,6 +945,13 @@ TOUCH_IDENTITY = b"A30000"
 # (menu 3F 2C, service program 18 2C), followed by X, Y and EOT.
 TOUCH_CLICK_PREFIX = bytes.fromhex("01 02 41 00")
 TOUCH_CLICK_FRAME_LENGTH = 11
+# What the firmware made of a delivered contact (FUN_7FE30): the point it
+# computed, and its touch state with the button it found in its own tables.
+TOUCH_FIRMWARE_POINT = 0x001EACF0
+TOUCH_FIRMWARE_STATE = 0x001E4A4A
+TOUCH_FIRMWARE_STATE_SIZE = 0x18
+TOUCH_FIRMWARE_PROBE_TICKS = 60
+TABLET_PACKET_LENGTH = 5
 TOUCH_WIDE_MODE_ADDRESS = 0x001F01E4
 # Return from native direct CX transmission (FUN_7F8C8), before state 6
 # consumes its acknowledgment. Calibration does not use TOUCH_TRANSACTION_STATE.
@@ -1592,6 +1599,13 @@ def publish_touch_controller_response(rsp: RspClient, response: bytes, read_inde
     rsp.write_memory(TOUCH_UART_RX_COUNT, bytes([len(response)]))
 
 
+def describe_firmware_touch(point: bytes, state: bytes) -> str:
+    x, row = struct.unpack(">hh", point)
+    last, pressed = struct.unpack_from(">II", state, 6)
+    return (f"DB_TOUCH_FIRMWARE x={x} row_from_bottom={row} screen={state[0]} locked={state[1]} "
+            f"pressed={pressed:08X} last={last:08X} queued={state[0x14]}")
+
+
 def log_touch_controller_events(controller: VirtualTouchController) -> None:
     for event in controller.events:
         print(event, flush=True)
@@ -1615,6 +1629,15 @@ def service_touch_command(rsp: RspClient, controller: VirtualTouchController,
 def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
                          stream: "TouchPacketStream", ticks: int = 0) -> tuple | None:
     """Consume one input only at an empty native RX ring; never replay a point."""
+    if stream.tail is not None:
+        # The coordinates follow once the firmware has taken the status byte.
+        status = rsp.read_memory(TOUCH_UART_RX_COUNT, 2)
+        if status[0] == 0:
+            if status[1] >= TOUCH_UART_RX_BUFFER_SIZE:
+                raise RuntimeError("touch-controller RX index outside ring")
+            publish_touch_controller_response(rsp, stream.tail, status[1])
+            stream.tail = None
+        return None
     if not stream.packets:
         return None
     if controller.calibration_session and not controller.calibrating:
@@ -1635,7 +1658,15 @@ def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
     wide = rsp.read_memory(TOUCH_WIDE_MODE_ADDRESS, 1)[0] == 1
     calibration_input = controller.calibrating
     response = controller.touch(x, y, down, wide=wide)
-    if response is not None:
+    if response is not None and len(response) == TABLET_PACKET_LENGTH and response[0] & 0x80:
+        # The firmware's receiver (0x81FEE) reads everything that is waiting in
+        # one pass and, while it looks for the start of a packet, keeps only
+        # status bytes. On the serial line the four coordinate bytes arrive
+        # after that pass; published in one piece they were dropped and the
+        # firmware saw every contact at 0,0.
+        publish_touch_controller_response(rsp, response[:1], status[1])
+        stream.tail = response[1:]
+    elif response is not None:
         publish_touch_controller_response(rsp, response, status[1])
     stream.packets.popleft()
     point = None if calibration_input else controller.screen_point(x, y)
@@ -1720,9 +1751,9 @@ class TouchClickForwarder:
     """Preserve DB touch events, supplying coordinates when its parser emits 0,0.
 
     The owner's VidComLog has the same Menue GO and real little-endian X/Y
-    coordinates. Under our virtual serial controller the original firmware
-    currently emits 0,0 for every press, while its -1,-1 release is intact.
-    Only that observed zero-coordinate press is completed here.
+    coordinates. The firmware reports 0,0 for a press whose coordinate bytes
+    it did not receive, while its -1,-1 release is intact. Only such a
+    zero-coordinate press is completed here.
     """
 
     def __init__(self) -> None:
@@ -1787,6 +1818,17 @@ class TouchPacketStream:
         self.active_point: tuple[int, int] | None = None
         self.down_since: int | None = None
         self.up_since: int | None = None
+        # Coordinate bytes of the packet whose status byte is already delivered.
+        self.tail: bytes | None = None
+
+    @property
+    def pending(self) -> bool:
+        return bool(self.packets) or self.tail is not None
+
+    def clear(self) -> None:
+        self.packets.clear()
+        self.active_point = None
+        self.tail = None
 
     def release_due(self, ticks: int) -> bool:
         return self.down_since is None or ticks - self.down_since >= self.MIN_HOLD_TICKS
@@ -2381,6 +2423,7 @@ def run_bridge(args: argparse.Namespace) -> int:
             touch_controller = VirtualTouchController(getattr(args, "touch_state", None))
             log_touch_controller_events(touch_controller)
             last_touch_point: tuple[int, int] | None = None
+            touch_probe_due: int | None = None
             last_wire_tx_at = 0.0
             initial_retry_frame = None
             initial_retry_stage = "startup"
@@ -2498,15 +2541,20 @@ def run_bridge(args: argparse.Namespace) -> int:
                     set_watchpoint(rsp, 0, COIN_ENTRY_READ_PC, True)
                     coin_entry_watch = True
                     print(f"DB_VIRTUAL_MP_ENTRY_SENSOR_START id={coin_validator._entry_sensor_sequence} samples=4", flush=True)
+                if touch_probe_due is not None and timer_injections >= touch_probe_due:
+                    touch_probe_due = None
+                    print(describe_firmware_touch(
+                        rsp.read_memory(TOUCH_FIRMWARE_POINT, 4),
+                        rsp.read_memory(TOUCH_FIRMWARE_STATE, TOUCH_FIRMWARE_STATE_SIZE)), flush=True)
                 touch_poll_now = time.monotonic()
-                if timer_enabled and (touch_poll_now >= touch_status_poll_at or touch_packets.packets):
+                if timer_enabled and (touch_poll_now >= touch_status_poll_at or touch_packets.pending):
                     touch_status_poll_at = touch_poll_now + TOUCH_STATUS_POLL_SECONDS
                     touch_state = rsp.read_memory(
                         TOUCH_TRANSACTION_STATE, 1
                     )[0]
                     if touch_state != TOUCH_WAITING_FOR_REPLY:
                         touch_response_latch = None
-                    elif not touch_controller.calibrating:
+                    elif not touch_controller.calibrating and touch_packets.tail is None:
                         request_bytes = rsp.read_memory(
                             TOUCH_TRANSACTION_REQUEST,
                             TOUCH_TRANSACTION_REQUEST_SIZE,
@@ -2531,7 +2579,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                                     flush=True,
                                 )
                                 touch_response_latch = request
-                    if ((touch_state != TOUCH_WAITING_FOR_REPLY or touch_controller.calibrating)
+                    if touch_packets.tail is not None or (
+                            (touch_state != TOUCH_WAITING_FOR_REPLY or touch_controller.calibrating)
                             and touch_packets.packets):
                         delivered = deliver_touch_packet(rsp, touch_controller, touch_packets,
                                                          timer_injections)
@@ -2539,6 +2588,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             x, y, down, packet, point, calibration_input = delivered
                             if down and point is not None:
                                 last_touch_point = point
+                                touch_probe_due = timer_injections + TOUCH_FIRMWARE_PROBE_TICKS
                             prefix = "DB_TOUCH_CALIBRATION_INPUT" if calibration_input else "DB_TOUCH_INPUT"
                             print(
                                 f"{prefix} "
@@ -3068,8 +3118,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                         handled, response = service_touch_command(rsp, touch_controller, b"\x01CX\r")
                         if not handled:
                             raise RuntimeError("calibration start RX ring is not empty")
-                        touch_packets.packets.clear()
-                        touch_packets.active_point = None
+                        touch_packets.clear()
                         last_touch_point = None
                         log_touch_controller_events(touch_controller)
                         step_past_breakpoint(rsp, pc)
@@ -3077,8 +3126,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                     if pc == TOUCH_CALIBRATION_FINISH_PC:
                         if touch_controller.calibration_session:
                             touch_controller.finish()
-                            touch_packets.packets.clear()
-                            touch_packets.active_point = None
+                            touch_packets.clear()
                             last_touch_point = None
                             log_touch_controller_events(touch_controller)
                         step_past_breakpoint(rsp, pc)

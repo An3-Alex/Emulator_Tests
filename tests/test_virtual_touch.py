@@ -36,7 +36,52 @@ class MemoryRsp:
         self.memory.update({address + offset: byte for offset, byte in enumerate(value)})
 
     def consume(self):
+        """The firmware's receiver: one pass takes every waiting byte from the ring."""
+        count, index = self.read_memory(bridge.TOUCH_UART_RX_COUNT, 2)
+        size = bridge.TOUCH_UART_RX_BUFFER_SIZE
+        taken = bytes(self.memory.get(bridge.TOUCH_UART_RX_BUFFER + (index + offset) % size, 0)
+                      for offset in range(count))
         self.memory[bridge.TOUCH_UART_RX_COUNT] = 0
+        self.memory[bridge.TOUCH_UART_RX_INDEX] = (index + count) % size
+        return taken
+
+
+def receive(rsp, controller, stream, ticks=0):
+    """The firmware takes the status byte, the bridge follows with the coordinates."""
+    received = rsp.consume()
+    while stream.tail is not None:
+        assert bridge.deliver_touch_packet(rsp, controller, stream, ticks) is None
+        received += rsp.consume()
+    return received
+
+
+class FirmwareReceiver:
+    """The firmware's tablet receiver (0x81FEE) as far as packet framing goes."""
+
+    def __init__(self):
+        self.filling = None
+        self.packets = []
+
+    def poll(self, waiting):
+        if self.filling is None:
+            # Looking for a packet: a status byte starts one, the coordinate
+            # bytes waiting in the same pass are dropped.
+            for byte in waiting:
+                if byte & 0x80:
+                    self.filling = bytearray([byte])
+            return
+        for byte in waiting:
+            self.filling.append(byte)
+            if len(self.filling) == 5:
+                self.packets.append(bytes(self.filling))
+                self.filling = None
+                return
+
+    def timeout(self):
+        """Twenty ticks without the rest: the packet counts with zero coordinates."""
+        if self.filling is not None:
+            self.packets.append(bytes(self.filling.ljust(5, b"\0")))
+            self.filling = None
 
 
 class VirtualTouchTests(unittest.TestCase):
@@ -256,9 +301,68 @@ class VirtualTouchTests(unittest.TestCase):
         delivered = bridge.deliver_touch_packet(rsp, controller, stream)
         self.assertEqual(decode_native(delivered[3], True), (614, 284))
         self.assertEqual(delivered[4], (614, 284))
-        self.assertEqual(rsp.writes[-1], (bridge.TOUCH_UART_RX_COUNT, b"\x05"))
-        self.assertEqual(len(rsp.writes), 3)
         self.assertEqual(len(stream.packets), 0)
+        self.assertEqual(receive(rsp, controller, stream), delivered[3])
+
+    def test_tablet_packet_arrives_as_status_byte_then_coordinates(self):
+        # Published in one piece the firmware kept only the status byte and
+        # every contact landed at column 0, row 0: no button of the database
+        # board (game fields, the transfer arrow) was ever hit.
+        whole = FirmwareReceiver()
+        whole.poll(native_tablet_packet(203, 530, True, wide=False))
+        whole.timeout()
+        self.assertEqual(firmware_point(whole.packets[0]), (0, 0))
+
+        controller = VirtualTouchController()
+        stream = bridge.TouchPacketStream()
+        stream.request(203, 530, True)
+        stream.request(210, 530, True)
+        rsp = MemoryRsp()
+        rsp.memory[bridge.TOUCH_UART_RX_INDEX] = 30
+        firmware = FirmwareReceiver()
+        packet = bridge.deliver_touch_packet(rsp, controller, stream, 100)[3]
+        self.assertEqual(rsp.writes, [(bridge.TOUCH_UART_RX_BUFFER + 30, packet[:1]),
+                                      (bridge.TOUCH_UART_RX_COUNT, b"\x01")])
+        # Neither the coordinates nor the next sample overtake the status byte.
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 100))
+        self.assertEqual(len(rsp.writes), 2)
+        self.assertTrue(stream.pending)
+        firmware.poll(rsp.consume())
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 101))
+        self.assertEqual(rsp.writes[-1], (bridge.TOUCH_UART_RX_COUNT, b"\x04"))
+        self.assertEqual(len(stream.packets), 1)
+        # The next sample waits until the coordinates are taken as well.
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 101))
+        firmware.poll(rsp.consume())
+        self.assertEqual(firmware.packets, [packet])
+        self.assertEqual(decode_native(firmware.packets[0]), (203, 530))
+        self.assertEqual(decode_native(bridge.deliver_touch_packet(rsp, controller, stream, 102)[3]), (210, 530))
+
+    def test_controller_replies_stay_in_one_piece(self):
+        controller = VirtualTouchController()
+        rsp = MemoryRsp()
+        stream = bridge.TouchPacketStream()
+        self.assertEqual(bridge.service_touch_command(rsp, controller, b"\x01CX\r"), (True, ACK))
+        self.assertEqual(rsp.consume(), ACK)
+        stream.request(*TARGETS[0], True)
+        stream.request(*TARGETS[0], False)
+        bridge.deliver_touch_packet(rsp, controller, stream, 0)
+        bridge.deliver_touch_packet(rsp, controller, stream, bridge.TouchPacketStream.MIN_HOLD_TICKS)
+        self.assertIsNone(stream.tail)
+        self.assertEqual(rsp.consume(), POINT_ACK)
+
+    def test_clearing_the_stream_drops_pending_coordinates(self):
+        controller = VirtualTouchController()
+        stream = bridge.TouchPacketStream()
+        stream.request(400, 300, True)
+        rsp = MemoryRsp()
+        bridge.deliver_touch_packet(rsp, controller, stream)
+        self.assertTrue(stream.pending)
+        stream.clear()
+        self.assertFalse(stream.pending)
+        rsp.consume()
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream))
+        self.assertEqual(rsp.read_memory(bridge.TOUCH_UART_RX_COUNT, 1), b"\0")
 
     def test_calibration_delivery_is_one_ascii_ack_per_liftoff_not_tablet(self):
         controller = VirtualTouchController()
@@ -309,7 +413,7 @@ class VirtualTouchTests(unittest.TestCase):
         stream.request(400, 300, False)
         down = bridge.deliver_touch_packet(rsp, controller, stream, 1000)
         self.assertTrue(down[2])
-        rsp.consume()
+        receive(rsp, controller, stream)
         hold = bridge.TouchPacketStream.MIN_HOLD_TICKS
         # Long enough to register as a press, short enough that the press and
         # liftoff reports stay within one cabinet tap (31-47 ms apart).
@@ -321,14 +425,14 @@ class VirtualTouchTests(unittest.TestCase):
         self.assertEqual(decode_native(release[3]), (400, 300))
         # A drag delivers its moves immediately; only the release is held,
         # and the hold counts from the first contact sample.
-        rsp.consume()
+        receive(rsp, controller, stream)
         stream.request(100, 300, True)
         stream.request(300, 300, True)
         stream.request(300, 300, False)
         self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 5000)[2])
-        rsp.consume()
+        receive(rsp, controller, stream)
         self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 5001)[2])
-        rsp.consume()
+        receive(rsp, controller, stream)
         self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 5002))
         self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 5000 + hold)[2])
 
@@ -344,12 +448,12 @@ class VirtualTouchTests(unittest.TestCase):
         hold = bridge.TouchPacketStream.MIN_HOLD_TICKS
         gap = bridge.TouchPacketStream.MIN_RELEASE_TICKS
         self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 1000)[2])
-        rsp.consume()
+        receive(rsp, controller, stream)
         self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold)[2])
-        rsp.consume()
+        receive(rsp, controller, stream)
         self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold + gap - 1))
         self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold + gap)[2])
-        rsp.consume()
+        receive(rsp, controller, stream)
         self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + 2 * hold + gap - 1))
         self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + 2 * hold + gap)[2])
         self.assertEqual(len(stream.packets), 0)

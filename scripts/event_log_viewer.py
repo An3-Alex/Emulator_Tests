@@ -82,6 +82,17 @@ def describe_frame(data: bytes, *, reconstructed: bool = False) -> Event:
     return Event("DB → PC", "Serielle Daten gesendet", details)
 
 
+def describe_firmware_touch(line: str) -> str:
+    """What the database made of a press: picture position and its own button."""
+    fields = dict(part.split("=", 1) for part in line.split()[1:] if "=" in part)
+    try:
+        title = f"Datenbank hat Touch bei X={int(fields['x'])} Y={599 - int(fields['row_from_bottom'])} erhalten"
+        button = int(fields["pressed"], 16)
+    except (KeyError, ValueError):
+        return "Datenbank hat Touch erhalten"
+    return title if button in (0, 0xFFFFFFFF) else f"{title} (Spieltaste {button:08X})"
+
+
 def describe_reply(data: bytes) -> Event:
     details = f"{len(data)} Byte\n{data.hex(' ').upper()}"
     if data.startswith(b"\x06"):
@@ -364,6 +375,8 @@ class BridgeLogParser:
             events.append(Event("Eingabe", "Maus-/Touch-Eingabe angefordert", line))
         elif line.startswith("DB_TOUCH_INPUT"):
             events.append(Event("Eingabe", "Touchpaket an Datenbank geliefert", line))
+        elif line.startswith("DB_TOUCH_FIRMWARE"):
+            events.append(Event("Touch", describe_firmware_touch(line), line))
         elif line.startswith("DB_INITVIDEO_RETRY_LIMIT_REACHED"):
             events.append(Event("Warnung", "INITVIDEO ohne PC-Antwort", line, "warning"))
         elif line.startswith("DB_COM3_DISCONNECTED"):

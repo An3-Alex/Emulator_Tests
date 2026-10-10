@@ -1400,6 +1400,16 @@ class DatabaseBridgeTests(unittest.TestCase):
                 )
                 self.assertEqual(corrections, [(614, row)])
 
+    def test_firmware_touch_state_is_reported_readably(self) -> None:
+        state = bytearray(bridge.TOUCH_FIRMWARE_STATE_SIZE)
+        state[0], state[1] = 1, 0
+        state[6:10] = (0x35).to_bytes(4, "big")
+        state[10:14] = (0xFFFFFFFF).to_bytes(4, "big")
+        state[0x14] = 2
+        line = bridge.describe_firmware_touch(bytes.fromhex("00 BB 00 3D"), bytes(state))
+        self.assertEqual(line, "DB_TOUCH_FIRMWARE x=187 row_from_bottom=61 screen=1 locked=0 "
+                               "pressed=FFFFFFFF last=00000035 queued=2")
+
     def test_touch_rows_count_from_the_bottom_edge_over_the_whole_height(self) -> None:
         for line, expected in ((0, 599), (26, 573), (599, 0)):
             forwarder = bridge.TouchClickForwarder()

@@ -73,7 +73,6 @@ class ImageMigrationTests(unittest.TestCase):
         self.manifest = {"backend": "qemu3dfx-dual", "files": files}
         self.patchers = [
             patch.object(image_module, "PROXY_HASH", digest(b"standard-proxy")),
-            patch.object(image_module, "GAME_HASH", digest(b"game")),
             patch.object(image_module, "SWIFTSHADER_HASH", digest(b"swift")),
             patch.object(image_module, "CGOS_HASH", digest(b"cgos")),
             patch.object(image_module, "validate", return_value=self.manifest),
