@@ -82,9 +82,12 @@ ist kein bereits unterstützter Ersatz.
 
 ## Auswahl des Grafikpfads
 
-Bei „SwiftShader“ werden beide Anzeigen in Software gerendert. Bei „QEMU-3dfx“
-nutzen beide Bildschirme die Host-GPU; SwiftShader wird dabei nicht geladen
-und muss nicht ausgewählt werden.
+Voreingestellt ist „QEMU-3dfx“: Beide Bildschirme nutzen die Host-GPU;
+SwiftShader wird dabei nicht geladen und muss nicht ausgewählt werden. Bei
+„SwiftShader“ werden beide Anzeigen in Software gerendert; dieser Pfad ist die
+Alternative, falls QEMU-3dfx auf dem PC nicht funktioniert. Der Wechsel zu
+„SwiftShader“ schaltet „Bildschirme tauschen“ aus, der Wechsel zu „QEMU-3dfx“
+schaltet es ein.
 
 Die Einstellung „QXL-Framebuffer je Anzeige“ ist nicht der Grafikspeicher der
 Host-GPU. Sie setzt QEMUs `vgamem_mb`. QEMU reserviert dafür je QXL-Gerät einen

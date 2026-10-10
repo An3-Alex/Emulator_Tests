@@ -150,6 +150,7 @@ class ImageSetupTests(unittest.TestCase):
             image=r"C:\Images\working copy.img",
             qemu_x86=r"C:\QEMU\qemu-system-x86_64.exe",
             python=sys.executable,
+            graphics_backend="swiftshader", swap_displays=False,
         )
         with mock.patch.object(image_setup, "wsl_path", side_effect=lambda path: str(path)):
             verify_guest = image_setup.guest_setup_command(selection, PROJECT, verify=True)

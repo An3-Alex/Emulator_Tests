@@ -31,11 +31,11 @@ Downloadquelle für QXL und Auswahl im Starter.
 Windows 10/11, die im Starter angezeigten Abhängigkeiten und ausreichend freier
 Speicherplatz für die Arbeitskopie werden benötigt.
 
-Der vorgesehene Grafikpfad ist QEMU-3dfx, einzustellen unter
-„Emulationseinstellungen → Grafikpfad“: Beide Bildschirme nutzen die
+Als Grafikpfad ist QEMU-3dfx voreingestellt: Beide Bildschirme nutzen die
 Host-Grafikkarte, mit getrennten Fenstern für unten und oben. Das Bedienfeld
 zeigt weiterhin den unteren Spielbildschirm. SwiftShader rendert in Software
-und ist nur die Alternative, falls QEMU-3dfx auf dem PC nicht funktioniert.
+und ist nur die Alternative, falls QEMU-3dfx auf dem PC nicht funktioniert;
+umgestellt wird unter „Emulationseinstellungen → Grafikpfad“.
 
 Der Start kann mehrere Minuten dauern.
 

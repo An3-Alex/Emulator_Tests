@@ -155,10 +155,11 @@ diese Dateien anhand der installierten Paketmetadaten.
 
 ## Bildschirme und Auswahl
 
-Der Starter verwendet standardmäßig SwiftShader; QEMU-3dfx ist unter
-„Emulationseinstellungen → Grafikpfad“ wählbar (Startparameter
+Der Starter verwendet standardmäßig QEMU-3dfx (Startparameter
 `-GraphicsBackend qemu3dfx`). Die EXE enthält die Laufzeit und richtet die
-Gastdateien automatisch ein.
+Gastdateien automatisch ein. SwiftShader ist unter „Emulationseinstellungen →
+Grafikpfad“ wählbar, falls QEMU-3dfx auf dem PC nicht funktioniert. Bereits
+gespeicherte Einstellungen behalten ihren Grafikpfad.
 
 `build-d3d9-proxy.ps1 -Qemu3dfx` erzeugt die Adapter-Bridge unter
 `build/d3d9-qemu3dfx`. Beide logischen Adapter (0 = Windows-Primäranzeige,
@@ -236,8 +237,9 @@ der Zahl der ausgeführten Bildübergaben pro Sekunde. Die Protokollierung ist
 kein vollständiger Frame-Profiler; sie unterscheidet nicht zwischen identischen
 und veränderten Bildern. Die OpenGL-Rendererzeile nennt die verwendete GPU.
 
-Im Starter unter „Emulationseinstellungen → Grafikpfad“ `qemu3dfx` wählen.
-Die mitgelieferte Host-EXE und Primäranzeige werden automatisch ausgewählt.
+Im Starter ist unter „Emulationseinstellungen → Grafikpfad“ `qemu3dfx`
+voreingestellt. Die mitgelieferte Host-EXE und Primäranzeige werden
+automatisch ausgewählt.
 Das Paket wird unter `%LOCALAPPDATA%\M90 Emulator\runtime\build\qemu3dfx-runtime`
 bereitgestellt; `manifest.json` ist das interne SHA256-Verzeichnis und muss
 nicht selbst erstellt oder ausgewählt werden.

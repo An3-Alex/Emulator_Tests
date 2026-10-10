@@ -24,10 +24,10 @@ EMULATION_FIELDS = (
     ("guest_ram_mib", "Spiel-PC", "RAM (MiB)", int, (512, 3072), "Standard: 2048; mehr RAM beschleunigt die CPU nicht."),
     ("guest_vcpus", "Spiel-PC", "Virtuelle CPUs", int, (1, 2), "Standard: 1; XP/Image-Kompatibilität bei Änderungen beachten."),
     ("acceleration", "Spiel-PC", "Beschleunigung", str, ("whpx", "tcg"), "WHPX: Windows-Hypervisor; TCG: Software-Emulation, langsamer."),
-    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("swiftshader", "qemu3dfx"), "QEMU-3dfx und seine Gastdateien werden automatisch bereitgestellt. Beide Ausgänge über GPU; der untere Bildschirm ist die Primäranzeige. Bedienfeld-Vorschau wird alle 2 Sekunden aktualisiert."),
+    ("graphics_backend", "Spiel-PC", "Grafikpfad", str, ("qemu3dfx", "swiftshader"), "Standard: qemu3dfx. QEMU-3dfx und seine Gastdateien werden automatisch bereitgestellt. Beide Ausgänge über GPU; der untere Bildschirm ist die Primäranzeige. Bedienfeld-Vorschau wird alle 2 Sekunden aktualisiert. SwiftShader rendert in Software und ist nur die Alternative, falls QEMU-3dfx nicht funktioniert."),
     ("qxl_vram_mib", "Spiel-PC", "QXL-Framebuffer je Anzeige (MiB)", int, (64, 128, 256), "Standard: 64; nicht der VRAM der Host-GPU. QEMU reserviert mindestens das Doppelte je QXL-PCI-RAM-Bereich. 256 MiB vergrößert diese Bereiche auf je 512 MiB und kann mit alten XP-Treibern Probleme verursachen."),
     ("usb_tablet", "Spiel-PC", "USB-Tablet statt PS/2-Maus ergänzen", bool, (), "Experimentell: benötigt einen passenden Gasttreiber."),
-    ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Nur bei abweichendem Image; Touch-Vorschau bleibt am Ausgang lower."),
+    ("swap_displays", "Spiel-PC", "Bildschirme tauschen", bool, (), "Bei QEMU-3dfx immer an: der untere Bildschirm ist die Primäranzeige. Bei SwiftShader nur bei abweichendem Image. Touch-Vorschau bleibt am Ausgang lower."),
     ("sound_enabled", "Spiel-PC", "Ton auf dem PC ausgeben", bool, (), "PCM-Bridge über COM1, ohne zusätzliche XP-Audiotreiber oder Mikrofonaufnahme. Aus schaltet nur die Host-Ausgabe stumm; die Bridge bleibt aktiv."),
     ("db_icount_shift", "Datenbank", "Instruktionstakt (icount shift)", int, (6, 5), "6: max. 15,625 Mio./s; 5: 31,25 Mio./s, bekannte Absturzgefahr. Nicht zyklengenau."),
     ("safe_tb", "Datenbank", "Stabiler Einzelinstruktionsmodus", bool, (), "Empfohlen: an. Aus nutzt größere TCG-Blöcke; bekannte Interrupt-Abstürze möglich."),
@@ -96,13 +96,14 @@ class Selection:
     qemu_m68k: str = ""
     python: str = ""
     show_live_log: bool = False
-    swap_displays: bool = False
+    # QEMU-3dfx, the default graphics path, needs the lower screen as primary.
+    swap_displays: bool = True
     sound_enabled: bool = True
     audio_output: str = "bridge"
     guest_ram_mib: int = 2048
     guest_vcpus: int = 1
     acceleration: str = "whpx"
-    graphics_backend: str = "swiftshader"
+    graphics_backend: str = "qemu3dfx"
     qxl_vram_mib: int = 64
     usb_tablet: bool = False
     db_icount_shift: int = 6
@@ -127,6 +128,10 @@ class Selection:
         # Migrate the retired output without changing owner file selections.
         if data.get("audio_output") == "ac97":
             data["audio_output"] = "bridge"
+        # Settings saved before QEMU-3dfx became the default belong to a
+        # working copy set up for SwiftShader with the upper screen first.
+        data.setdefault("graphics_backend", "swiftshader")
+        data.setdefault("swap_displays", False)
         result = cls(**{key: value for key, value in data.items() if key in allowed})
         issues = validate_emulation(result)
         if issues:

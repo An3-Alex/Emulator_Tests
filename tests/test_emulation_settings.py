@@ -46,10 +46,12 @@ class EmulationSettingsTests(unittest.TestCase):
             self.assertEqual(value.audio_output, "bridge")
             self.assertTrue(value.safe_tb)
             self.assertTrue(value.swap_displays)
+            self.assertEqual(value.graphics_backend, "swiftshader")
             self.assertEqual(value.image, "owner.img")
 
     def test_all_options_round_trip(self):
         selection = Selection(image="owner.img", guest_ram_mib=1024, guest_vcpus=2,
+            graphics_backend="swiftshader",
             acceleration="tcg", qxl_vram_mib=128, usb_tablet=True, swap_displays=True,
             db_icount_shift=5, safe_tb=False, db_timer_interval=0.01, duart_x1_hz=4000000,
             db_connect_timeout=240.0, database_date="2026-10-03T11:12:13", door_open=True,
@@ -112,7 +114,7 @@ class EmulationSettingsTests(unittest.TestCase):
         self.assertEqual(validate_emulation(replace(Selection(), duart_x1_hz=10000000, db_timer_interval=0.005)), [])
 
     def test_database_key_reaches_programmer_and_bridge(self):
-        selection = Selection(db_key="0badc0de")
+        selection = Selection(db_key="0badc0de", graphics_backend="swiftshader", swap_displays=False)
         self.assertEqual(validate_emulation(selection), [])
         result = subprocess.run([*launch_command(selection, ROOT), "-DryRun"],
                                 capture_output=True, text=True, check=True)
@@ -125,7 +127,7 @@ class EmulationSettingsTests(unittest.TestCase):
         self.assertNotIn("-D3", launch_command(Selection(), ROOT))
 
     def test_bridge_setting_persists_and_reaches_qemu(self):
-        selection = Selection(audio_output="bridge")
+        selection = Selection(audio_output="bridge", graphics_backend="swiftshader", swap_displays=False)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.json"
             selection.save(path)
@@ -224,7 +226,22 @@ class SettingsWidgetTests(unittest.TestCase):
             self.assertEqual(json.loads(ui.SETTINGS.read_text())["guest_ram_mib"], 1024)
         with patch.object(ui.messagebox, "askyesno", return_value=True):
             self.app._reset_options()
-        self.assertEqual(self.app._selection(), Selection(image="owner.img"))
+        # The default graphics path selects its own host program.
+        self.assertEqual(self.app._selection(), Selection(
+            image="owner.img", qemu_x86=str(ui.PROJECT / "build/qemu3dfx-runtime/host/qemu-system-x86_64.exe")))
+
+    def test_switching_the_graphics_path_sets_the_primary_display(self):
+        backend = self.app.emulation_variables["graphics_backend"]
+        self.assertEqual(backend.get(), "qemu3dfx")
+        self.assertTrue(self.app.swap_displays.get())
+        backend.set("swiftshader")
+        self.assertFalse(self.app.swap_displays.get())
+        # A SwiftShader selection may still swap its screens by hand.
+        self.app.swap_displays.set(True)
+        backend.set("swiftshader")
+        self.assertTrue(self.app.swap_displays.get())
+        backend.set("qemu3dfx")
+        self.assertTrue(self.app.swap_displays.get())
 
     def test_invalid_text_gets_dialog_without_worker_or_launch(self):
         self.app.emulation_variables["guest_ram_mib"].set("no number")

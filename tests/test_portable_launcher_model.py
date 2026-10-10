@@ -21,15 +21,29 @@ import portable_launcher_model as model
 
 
 class PortableLauncherTests(unittest.TestCase):
-    def test_gpu_selection_is_explicit_and_requires_the_correct_primary(self):
-        self.assertEqual(Selection().graphics_backend, "swiftshader")
-        selection = Selection(graphics_backend="qemu3dfx", swap_displays=True)
+    def test_gpu_selection_is_the_default_and_requires_the_correct_primary(self):
+        selection = Selection()
+        self.assertEqual(selection.graphics_backend, "qemu3dfx")
+        self.assertEqual(model.validate_emulation(selection), [])
         command = launch_command(selection, PROJECT)
         self.assertEqual(command[command.index("-GraphicsBackend") + 1], "qemu3dfx")
         self.assertIn("-SwapDisplays", command)
         self.assertIn("-AudioBridge", command)
         with self.assertRaisesRegex(ValueError, "Primäranzeige"):
             launch_command(replace(selection, swap_displays=False), PROJECT)
+
+    def test_settings_saved_before_the_gpu_default_stay_on_swiftshader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({"image": "owner.img"}), encoding="utf-8")
+            old = Selection.from_json(path)
+            self.assertEqual((old.graphics_backend, old.swap_displays), ("swiftshader", False))
+            # A saved choice is kept as it is, whichever path it names.
+            for backend, swap in (("swiftshader", False), ("swiftshader", True), ("qemu3dfx", True)):
+                saved = Selection(image="owner.img", graphics_backend=backend, swap_displays=swap)
+                saved.save(path)
+                self.assertEqual(Selection.from_json(path), saved)
+            self.assertEqual(Selection.from_json(Path(directory) / "absent.json"), Selection())
 
     def test_gpu_choice_persists_without_changing_the_database_timing(self):
         selection = Selection(graphics_backend="qemu3dfx", swap_displays=True,
@@ -50,6 +64,7 @@ class PortableLauncherTests(unittest.TestCase):
             qemu_x86=r"C:\Program Files\qemu\qemu-system-x86_64.exe",
             qemu_m68k=r"C:\Program Files\qemu\qemu-system-m68k.exe",
             python=r"C:\Program Files\Python\python.exe",
+            graphics_backend="swiftshader", swap_displays=False,
         )
         command = launch_command(selection, PROJECT)
         self.assertEqual(command[command.index("-Image") + 1], selection.image)
@@ -151,6 +166,7 @@ class PortableLauncherTests(unittest.TestCase):
             qemu_x86=r"C:\qemu\qemu-system-x86_64.exe",
             qemu_m68k=r"C:\qemu\qemu-system-m68k.exe",
             python=r"C:\Python39\python.exe",
+            graphics_backend="swiftshader", swap_displays=False,
         )
         results = [
             model.subprocess.CompletedProcess([], 0),

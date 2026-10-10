@@ -165,6 +165,7 @@ class Launcher(tk.Tk):
         self.status = tk.StringVar(value="Dateien auswählen und prüfen.")
         self.prepare_timer = tk.StringVar(value="Image-Einrichtung: noch nicht gestartet")
         self._build()
+        self.graphics_backend = None
         self.emulation_variables["graphics_backend"].trace_add("write", self._graphics_changed)
         self._graphics_changed()
         self.after(100, self._drain_events)
@@ -386,11 +387,19 @@ class Launcher(tk.Tk):
         self._write(f"Datenbank-Ordner: {found} von {len(DATABASE_FILES)} erwarteten Dateien gefunden.\n")
 
     def _graphics_changed(self, *_args) -> None:
-        if self.emulation_variables["graphics_backend"].get() == "qemu3dfx":
+        backend = self.emulation_variables["graphics_backend"].get()
+        if backend == "qemu3dfx":
             self.variables["qemu_x86"].set(str(PROJECT / "build/qemu3dfx-runtime/host/qemu-system-x86_64.exe"))
             self.swap_displays.set(True)
-        elif Path(self.variables["qemu_x86"].get()).parent.name == "host":
-            self.variables["qemu_x86"].set(str(Path(self.variables["qemu_m68k"].get()).with_name("qemu-system-x86_64.exe")))
+        else:
+            if Path(self.variables["qemu_x86"].get()).parent.name == "host":
+                m68k = self.variables["qemu_m68k"].get()
+                self.variables["qemu_x86"].set(str(Path(m68k).with_name("qemu-system-x86_64.exe")) if m68k else "")
+            if self.graphics_backend == "qemu3dfx":
+                # SwiftShader images have the upper screen first; a saved
+                # SwiftShader selection keeps its own setting.
+                self.swap_displays.set(False)
+        self.graphics_backend = backend
 
     def _selection(self) -> Selection:
         options = {}

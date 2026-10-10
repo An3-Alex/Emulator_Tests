@@ -392,7 +392,8 @@ class PackageValidationTests(unittest.TestCase):
         self.assertFalse(validate_emulation(Selection(graphics_backend="qemu3dfx", swap_displays=True, guest_ram_mib=2048)))
         self.assertTrue(any("2048" in issue for issue in validate_emulation(
             Selection(graphics_backend="qemu3dfx", swap_displays=True, guest_ram_mib=3072))))
-        self.assertFalse(validate_emulation(Selection(guest_ram_mib=3072)))
+        self.assertFalse(validate_emulation(
+            Selection(graphics_backend="swiftshader", swap_displays=False, guest_ram_mib=3072)))
     def test_gpu_selection_uses_contained_host_and_primary_display(self):
         from portable_launcher_model import Selection, graphics_selection
         root = Path("project")

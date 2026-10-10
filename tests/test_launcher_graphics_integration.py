@@ -12,6 +12,9 @@ import emulator_launcher as launcher
 from portable_launcher_model import Selection
 
 
+# The software path, now chosen explicitly: QEMU-3dfx is the default.
+SOFTWARE = dict(graphics_backend="swiftshader", swap_displays=False)
+
 class LauncherGraphicsTests(unittest.TestCase):
     def test_gpu_initial_install_and_repeat_start_are_automatic(self):
         # A GPU copy keeps its audio/SRAM/service files current on every start
@@ -124,7 +127,7 @@ class LauncherGraphicsTests(unittest.TestCase):
 
     def test_clear_probe_updates_runtime_then_enables_bridge(self):
         target = SimpleNamespace(_run_step=mock.Mock())
-        selection = Selection(image="working.img")
+        selection = Selection(image="working.img", **SOFTWARE)
         with mock.patch.object(launcher.subprocess, "run", return_value=
                                subprocess.CompletedProcess([], 0, "0\n", "")), \
              mock.patch.object(launcher, "graphics_update_command", return_value=["guarded-update"]), \
@@ -143,7 +146,7 @@ class LauncherGraphicsTests(unittest.TestCase):
              mock.patch.object(launcher, "graphics_update_command", return_value=["guarded-update"]), \
              mock.patch.object(launcher, "audio_bridge_setup_command", return_value=["guarded-backend"]), \
              mock.patch.object(launcher, "loader_idle_setup_command", return_value=["guarded-idle"]):
-            launcher.Launcher._update_graphics(target, Selection(audio_output="bridge"))
+            launcher.Launcher._update_graphics(target, Selection(audio_output="bridge", **SOFTWARE))
         self.assertFalse(hasattr(launcher, "audio_setup_command"))
         self.assertEqual(target._run_step.call_count, 3)
 
@@ -154,7 +157,7 @@ class LauncherGraphicsTests(unittest.TestCase):
              mock.patch.object(launcher, "graphics_update_command", return_value=["guarded-update"]), \
              mock.patch.object(launcher, "audio_bridge_setup_command") as backend:
             with self.assertRaisesRegex(RuntimeError, "Update failed"):
-                launcher.Launcher._update_graphics(target, Selection())
+                launcher.Launcher._update_graphics(target, Selection(**SOFTWARE))
         backend.assert_not_called()
 
 
