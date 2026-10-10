@@ -9,7 +9,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from qemu3dfx_modern_port import GPU_REVISION, pinned_file, capture_gpu_present, GPU_SNAPSHOT
-from qemu3dfx_dual_output import patch_guest, patch_wgl, patch_transport, patch_sdl, patch_blit, patch_slots
+from qemu3dfx_dual_output import (patch_guest, patch_wgl, patch_transport, patch_sdl, patch_sdl_touch_only,
+                                  patch_blit, patch_slots)
 
 
 def function(source, signature):
@@ -266,6 +267,54 @@ void mesa_prepare_window(int msaa, int alpha, int scale_x, void *cwnd_fn)
         self.assertLess(fixed.index('s->game_w = surface_width(s->scon->surface);'),
                         fixed.index('    s->render_pause = 1;'))
         self.assertIn('int mesa_gpu_mode_current(void)', fixed)
+
+    def test_cabinet_windows_take_no_host_mouse(self):
+        source = '''static void sdl_grab_start(struct sdl2_console *scon)
+{
+    QemuConsole *con = scon ? scon->dcl.con : NULL;
+
+    if (!con || !qemu_console_is_graphic(con)) {
+        return;
+    }
+static void handle_mousemotion(SDL_Event *ev)
+{
+    int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;
+
+    if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
+        return;
+    }
+static void handle_mousebutton(SDL_Event *ev)
+{
+    int scr_w, scr_h, x, y;
+
+    if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
+        return;
+    }
+static void handle_mousewheel(SDL_Event *ev)
+{
+    InputButton btn;
+
+    if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {
+        return;
+    }
+static void sdl_mouse_warp(DisplayChangeListener *dcl,
+                           int x, int y, bool on)
+{
+    if (!qemu_console_is_graphic(scon->dcl.con)) {
+        return;
+    }
+
+    if (on) {
+'''
+        fixed = patch_sdl_touch_only(source)
+        # Grab, motion, buttons, wheel and the pointer warp all stay out.
+        self.assertEqual(fixed.count('!m90_host_mouse()'), 5)
+        self.assertLess(fixed.index('static bool m90_host_mouse(void)'),
+                        fixed.index('static void sdl_grab_start('))
+        self.assertIn('g_getenv("M90_HOST_MOUSE")', fixed)
+        for handler in ('handle_mousemotion', 'handle_mousebutton', 'handle_mousewheel', 'sdl_mouse_warp'):
+            body = fixed[fixed.index(f'static void {handler}('):]
+            self.assertLess(body.index('!m90_host_mouse()'), body.index('return;'), handler)
 
 
 if __name__ == '__main__':

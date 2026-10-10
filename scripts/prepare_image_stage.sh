@@ -50,7 +50,7 @@ verify_hash() {
 verify_hash "$shim" ea6843b6f7927dad09d31dfe297b57ad727320c4e81f213b27ac8408f566af57
 verify_hash "$bootstrap" fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea
 verify_hash "$qxl_installer" 96797f2c715a74197211a9cfc598ef9680f5bea4869e4f0fa7f1f25048142f9a
-verify_hash "$d3d9" aeb4bd283bdcd362b0226ced63a8f46582733ae3430293a1dc3db881f7f81793
+verify_hash "$d3d9" 1b32c211d41909c680e7947b988abce3e80f360dec8eff4a3b65855f88f1832b
 verify_hash "$fbwf" 555f2a7b6e886e9476b7f83ecee89c3cfa369c823f82f5bdf4c6181c7ce41dd2
 verify_hash "$irrklang" bc815b845c86d40f289d903b895ec7a082e67a37b379af01ae6207508edd6426
 # "-": no SwiftShader; only the QEMU-3dfx graphics path can then be used.

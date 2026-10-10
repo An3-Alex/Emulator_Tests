@@ -14,9 +14,10 @@ import shutil
 import uuid
 
 BOOTSTRAP_HASH = "fcc3019fb0c890a6e252985ea2ca413110c527b256b6cb4d8360e97797fbc0ea"
-PROXY_HASH = "aeb4bd283bdcd362b0226ced63a8f46582733ae3430293a1dc3db881f7f81793"
+PROXY_HASH = "1b32c211d41909c680e7947b988abce3e80f360dec8eff4a3b65855f88f1832b"
 PREVIOUS_BOOTSTRAP = "ebee642da544bbd038cdbddaacf15b20c88a563115a90da65b7baf6dc6693bd6"
 PREVIOUS_PROXIES = {
+    "aeb4bd283bdcd362b0226ced63a8f46582733ae3430293a1dc3db881f7f81793",  # before the fullscreen mode after the service
     "cc152b096bf74a01bfd23f0dece9e8f619eb8dfcc38c405faebce6cb19d20737",  # before the 10-MB guest log limit
     "31d2d484d4821ef34dd764e68a66338ed638926c66b73b14078d360713f4987f",
     "801eb42c6af73542ecb290f4844bf6ddab5a9a5daf2c3a963a66583188fd06d3",

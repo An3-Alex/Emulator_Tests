@@ -10,10 +10,17 @@ import m68k_database_bridge as bridge
 from virtual_touch import ACK, POINT_ACK, TARGETS, VirtualTouchController, native_tablet_packet
 
 
-def decode_native(packet, wide=False):
+def firmware_point(packet, wide=False):
+    """What the firmware computes (FUN_7FD46/FUN_7FE30): column, row from the bottom."""
     x10 = (packet[1] >> 4) | (packet[2] << 3)
     y10 = (packet[3] >> 4) | (packet[4] << 3)
     return max(0, (x10 * (960 if wide else 800) >> 10) - (80 if wide else 0)), y10 * 600 >> 10
+
+
+def decode_native(packet, wide=False):
+    """The picture pixel a packet stands for."""
+    x, row = firmware_point(packet, wide)
+    return x, 599 - row
 
 
 class MemoryRsp:
@@ -91,6 +98,12 @@ class VirtualTouchTests(unittest.TestCase):
                 packet = native_tablet_packet(614, y, False, wide=wide)
                 self.assertEqual(decode_native(packet, wide), (614, y))
                 self.assertEqual(packet[0], 0x80)
+
+    def test_tablet_rows_count_from_the_bottom_edge(self):
+        # Top picture line -> highest row, bottom line -> row 0, as on the tablet.
+        self.assertEqual(firmware_point(native_tablet_packet(614, 0, True, wide=False)), (614, 599))
+        self.assertEqual(firmware_point(native_tablet_packet(614, 599, True, wide=False)), (614, 0))
+        self.assertEqual(firmware_point(native_tablet_packet(614, 284, True, wide=False)), (614, 315))
 
     def test_invalid_input_is_rejected_before_encoding(self):
         for point in ((-1, 100), (800, 100), (100, 600), (True, 100)):
@@ -178,6 +191,15 @@ class VirtualTouchTests(unittest.TestCase):
             self.assertEqual(controller.command(b"\x01RD\r"), ACK)
             self.assertIsNone(VirtualTouchController(path).points)
 
+    def test_reset_state_reports_exact_mapping_instead_of_a_loaded_calibration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "work.touch.json"
+            controller = VirtualTouchController(path)
+            self.calibrate(controller)
+            self.assertEqual(VirtualTouchController(path).events, ["DB_TOUCH_CALIBRATION_LOADED"])
+            controller.reset_calibration()
+            self.assertEqual(VirtualTouchController(path).events, ["DB_TOUCH_CALIBRATION_EXACT"])
+
     def test_invalid_state_is_not_applied_or_automatically_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "work.touch.json"
@@ -244,20 +266,21 @@ class VirtualTouchTests(unittest.TestCase):
         stream = bridge.TouchPacketStream()
         self.assertEqual(bridge.service_touch_command(rsp, controller, b"\x01CX\r"), (True, ACK))
         rsp.consume()
-        for point in TARGETS:
+        for index, point in enumerate(TARGETS):
+            ticks = index * 1000
             stream.request(*point, True)
             stream.request(*point, False)
-            self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream)[3])
+            self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, ticks)[3])
             delivered = bridge.deliver_touch_packet(rsp, controller, stream,
-                                                    bridge.TouchPacketStream.MIN_HOLD_TICKS)
+                                                    ticks + bridge.TouchPacketStream.MIN_HOLD_TICKS)
             self.assertEqual(delivered[3], POINT_ACK)
             self.assertTrue(delivered[5])
             self.assertIsNone(delivered[4])
             rsp.consume()
         stream.request(614, 284, True)
-        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream))
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 5000))
         controller.finish()
-        self.assertEqual(decode_native(bridge.deliver_touch_packet(rsp, controller, stream)[3]), (614, 284))
+        self.assertEqual(decode_native(bridge.deliver_touch_packet(rsp, controller, stream, 5000)[3]), (614, 284))
 
     def test_busy_point_ack_is_retried_without_duplicate_calibration_event(self):
         controller = VirtualTouchController()
@@ -309,6 +332,28 @@ class VirtualTouchTests(unittest.TestCase):
         self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 5002))
         self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 5000 + hold)[2])
 
+    def test_quick_second_tap_waits_until_the_liftoff_was_seen(self):
+        # Two clicks queued at once must reach the firmware as press, release,
+        # press, release with time between each, never as press, press.
+        controller = VirtualTouchController()
+        rsp = MemoryRsp()
+        stream = bridge.TouchPacketStream()
+        for _ in range(2):
+            stream.request(400, 300, True)
+            stream.request(400, 300, False)
+        hold = bridge.TouchPacketStream.MIN_HOLD_TICKS
+        gap = bridge.TouchPacketStream.MIN_RELEASE_TICKS
+        self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 1000)[2])
+        rsp.consume()
+        self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold)[2])
+        rsp.consume()
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold + gap - 1))
+        self.assertTrue(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + hold + gap)[2])
+        rsp.consume()
+        self.assertIsNone(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + 2 * hold + gap - 1))
+        self.assertFalse(bridge.deliver_touch_packet(rsp, controller, stream, 1000 + 2 * hold + gap)[2])
+        self.assertEqual(len(stream.packets), 0)
+
     def test_coordinate_fallback_uses_calibrated_screen_point_once(self):
         controller = VirtualTouchController()
         self.calibrate(controller, (120, 500), (680, 100))
@@ -318,7 +363,8 @@ class VirtualTouchTests(unittest.TestCase):
         forwarder = bridge.TouchClickForwarder()
         frame = bytes.fromhex("01 02 41 00 3F 2C 00 00 00 00 04")
         outgoing = b"".join(forwarder.feed(bytes([byte]), delivered[4])[0] for byte in frame)
-        self.assertEqual(outgoing[6:10], (100).to_bytes(2, "little") + (525).to_bytes(2, "little"))
+        # Calibrated picture point 100,525 as column and row from the bottom edge.
+        self.assertEqual(outgoing[6:10], (100).to_bytes(2, "little") + (599 - 525).to_bytes(2, "little"))
 
     def test_invalid_rx_index_cannot_mutate_calibration_or_drop_contact(self):
         controller = VirtualTouchController()

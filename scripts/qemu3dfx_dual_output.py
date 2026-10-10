@@ -59,6 +59,43 @@ int mesa_gpu_mode_current(void)
 void mesa_prepare_window(''')
 
 
+def patch_sdl_touch_only(source):
+    """The cabinet windows are touch screens: QEMU's own mouse stays out."""
+    source = once(source, 'static void sdl_grab_start(struct sdl2_console *scon)\n{\n'
+                  '    QemuConsole *con = scon ? scon->dcl.con : NULL;\n\n'
+                  '    if (!con || !qemu_console_is_graphic(con)) {',
+                  '''/* M90: the cabinet has touch screens and no mouse. The control panel turns
+ * a click in these windows into one touch of the database board. QEMU's own
+ * mouse would click a second time through Windows, and its grab moves the
+ * pointer to the guest's cursor, which is somewhere else once the picture is
+ * scaled. M90_HOST_MOUSE=1 keeps QEMU's mouse for maintenance of the image. */
+static bool m90_host_mouse(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *value = g_getenv("M90_HOST_MOUSE");
+        enabled = value && value[0] == '1';
+    }
+    return enabled;
+}
+
+static void sdl_grab_start(struct sdl2_console *scon)
+{
+    QemuConsole *con = scon ? scon->dcl.con : NULL;
+
+    if (!con || !qemu_console_is_graphic(con) || !m90_host_mouse()) {''')
+    for declaration in ('    int scr_w, scr_h, surf_w, surf_h, x, y, dx, dy;\n',
+                        '    int scr_w, scr_h, x, y;\n',
+                        '    InputButton btn;\n'):
+        source = once(source, declaration + '\n    if (!scon || !qemu_console_is_graphic(scon->dcl.con)) {',
+                      declaration + '\n    if (!scon || !qemu_console_is_graphic(scon->dcl.con) ||\n'
+                      '        !m90_host_mouse()) {')
+    return once(source, '    if (!qemu_console_is_graphic(scon->dcl.con)) {\n        return;\n    }\n\n    if (on) {',
+                '    if (!qemu_console_is_graphic(scon->dcl.con) || !m90_host_mouse()) {\n'
+                '        return; /* no guest cursor, no pointer warp */\n    }\n\n    if (on) {')
+
+
 def patch_transport(source):
     source = once(source, '#include "qemu/osdep.h"',
                   '#include "qemu/osdep.h"\n#include "ui/console.h"')

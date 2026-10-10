@@ -160,6 +160,35 @@ static BOOL position_cabinet_window(UINT adapter, HWND window, const MONITORINFO
     return result;
 }
 
+/* The game requests exclusive fullscreen at its own resolution; the proxy
+ * keeps a non-exclusive window instead. Exclusive fullscreen would also set
+ * that monitor's mode, and that is how the game leaves the 1280x1024 desktop
+ * it switched to for the service program. Apply the requested mode the same
+ * way: for this session only (CDS_FULLSCREEN), never into the registry.
+ */
+static void apply_fullscreen_mode(const MONITORINFOEXA &monitor, const D3DPRESENT_PARAMETERS &pp)
+{
+    if (pp.Windowed || !pp.BackBufferWidth || !pp.BackBufferHeight) return;
+    DEVMODEA mode;
+    zero_memory(&mode, sizeof(mode));
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsA(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode) ||
+        (mode.dmPelsWidth == pp.BackBufferWidth && mode.dmPelsHeight == pp.BackBufferHeight))
+        return;
+    DEVMODEA wanted;
+    zero_memory(&wanted, sizeof(wanted));
+    wanted.dmSize = sizeof(wanted);
+    wanted.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+    wanted.dmPelsWidth = pp.BackBufferWidth;
+    wanted.dmPelsHeight = pp.BackBufferHeight;
+    LONG result = ChangeDisplaySettingsExA(monitor.szDevice, &wanted, NULL, CDS_FULLSCREEN, NULL);
+    log_text("Fullscreen mode for "); log_text(monitor.szDevice); log_text("\r\n");
+    log_hex("Fullscreen mode previous width=", mode.dmPelsWidth, "\r\n");
+    log_hex("Fullscreen mode width=", pp.BackBufferWidth, "\r\n");
+    log_hex("Fullscreen mode height=", pp.BackBufferHeight, "\r\n");
+    log_hex("Fullscreen mode result=", (DWORD)result, "\r\n");
+}
+
 static BOOL same_guid(REFIID a, const IID &b)
 {
     return a.Data1 == b.Data1 && a.Data2 == b.Data2 && a.Data3 == b.Data3 &&
@@ -182,6 +211,10 @@ class Direct3DDevice9Proxy : public IDirect3DDevice9 {
     bool prepare(D3DPRESENT_PARAMETERS &pp, MONITORINFOEXA &monitor)
     {
         if (!cabinet_monitor(adapter_, NULL, &monitor)) return false;
+        if (!pp.Windowed) {
+            apply_fullscreen_mode(monitor, pp);
+            if (!cabinet_monitor(adapter_, NULL, &monitor)) return false;
+        }
         pp.Windowed = TRUE;
         pp.FullScreen_RefreshRateInHz = 0;
         /* Reset must not move a device onto another display's focus window. */
@@ -378,6 +411,13 @@ public:
                 log_text("CreateDevice missing cabinet monitor or window\r\n");
                 if (device) *device = NULL;
                 return D3DERR_NOTAVAILABLE;
+            }
+            if (!pp->Windowed) {
+                apply_fullscreen_mode(monitor, *pp);
+                if (!cabinet_monitor(a, NULL, &monitor)) {
+                    if (device) *device = NULL;
+                    return D3DERR_NOTAVAILABLE;
+                }
             }
             adjusted = *pp;
             adjusted.Windowed = TRUE;

@@ -125,6 +125,11 @@ mit dem QEMU-9.2.2-Archiv nutzbar; dessen SHA256 ist
 Der Compiler bleibt beim SSE2-Instruktionssatz des
 virtuellen Spiel-PCs. Kein Buildschritt startet einen Gast.
 
+Der Host meldet angeschlossene IDE-Laufwerke nach jedem Reset wie ein PC-BIOS
+als DMA-fähig (Bits 5 und 6 im Busmaster-Statusregister). Das Image betreibt
+den Controller mit dem generischen PCI-IDE-Treiber von Windows, der ohne diese
+Firmware-Angabe bei PIO bleibt; mit ihr liest und schreibt XP per DMA.
+
 Die lokalen CRT-Speicherfunktionen im WineD3D-Build werden mit
 `-fno-builtin -fno-tree-loop-distribute-patterns` kompiliert. So erzeugt GCC
 innerhalb von `memset` keinen Aufruf von `memset` selbst. Die Anpassung erfolgt
@@ -205,6 +210,15 @@ Parameter für Datenbankdateien, RTC, Prozessor-Timing und Audio bleiben gültig
 Ohne passenden Vorbereitungsbeleg `<GPU-Kopie>.qemu3dfx.json` erfolgt kein Start.
 Das untere Fenster heißt `QEMU (M90-3dfx-0)`, das obere `QEMU (M90-3dfx-1)`.
 Direkte Touchs werden ausschließlich aus dem unteren Fenster übernommen.
+
+Beide Fenster sind Touchscreens ohne Maus: Ein Klick wird vom Bedienfeld als
+genau ein Touch an die Datenbank gemeldet. Der Host reicht weder Mausbewegung
+noch Maustasten an Windows weiter, fängt den Zeiger nicht ein und versetzt ihn
+nicht. Das Serviceprogramm erhält seine Klicks wie im Automaten vom Spiel, das
+den Touch auf die 1280x1024-Anzeige umrechnet. Wie das Touch-Tablett des
+Automaten meldet die Datenbank-Bridge die Zeile vom unteren Bildrand gezählt;
+Spielmenü und Serviceprogramm erwarten sie so. Für Wartungsarbeiten am Image
+schaltet die Umgebungsvariable `M90_HOST_MOUSE=1` die QEMU-Maus wieder ein.
 
 Die Bedienfeld-Vorschau wechselt mit der unteren Anzeige von QXL zum echten
 Host-OpenGL-Spielbild. QMP fordert den nativen Frame vor der Fensterskalierung

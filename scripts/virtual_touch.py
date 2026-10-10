@@ -19,17 +19,28 @@ POINT_ACK = b"\x011\r"
 TARGETS = ((100, 525), (700, 75))
 
 
+def touch_row(y: int) -> int:
+    """Row of a picture line as the touch surface counts it: from the bottom edge.
+
+    The tablet's origin is its lower left corner. The firmware scales that row
+    without turning it around, and the game expects it like that: the menu and
+    the service program both react at the mirrored line otherwise.
+    """
+    return TOUCH_HEIGHT - 1 - y
+
+
 def native_tablet_packet(x: int, y: int, down: bool, *, wide: bool) -> bytes:
     """Invert FUN_7FD46 and the optional 80-pixel crop in FUN_7FE30.
 
     The firmware keeps ten coordinate bits, then floors their pixel scaling.
     Choose the first ten-bit value mapping to the requested pixel. Using a
     960-wide encoder without including the crop would shift actual hit testing.
+    x and y are picture pixels; the packet carries the row from the bottom.
     """
     validate_command({"type": "touch", "x": x, "y": y, "down": down})
     width, origin = (960, 80) if wide else (800, 0)
     raw_x = (((x + origin) * 1024 + width - 1) // width) << 4
-    raw_y = ((y * 1024 + TOUCH_HEIGHT - 1) // TOUCH_HEIGHT) << 4
+    raw_y = ((touch_row(y) * 1024 + TOUCH_HEIGHT - 1) // TOUCH_HEIGHT) << 4
     return bytes((0xC0 if down else 0x80,
                   raw_x & 0x7F, (raw_x >> 7) & 0x7F,
                   raw_y & 0x7F, (raw_y >> 7) & 0x7F))
@@ -54,7 +65,9 @@ class VirtualTouchController:
                         or data.get("surface") != [800, 600]):
                     raise ValueError("unsupported calibration format")
                 self.points = self._validate_points(data["points"])
-                self.events.append("DB_TOUCH_CALIBRATION_LOADED")
+                # A reset controller stores no points: its mapping is 1:1.
+                self.events.append("DB_TOUCH_CALIBRATION_LOADED"
+                                   if self.points is not None else "DB_TOUCH_CALIBRATION_EXACT")
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 self.events.append(f"DB_TOUCH_CALIBRATION_STORAGE_WARNING reason={exc}")
 

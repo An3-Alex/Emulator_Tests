@@ -19,16 +19,23 @@ PREVIOUS_SRAM_HASHES = {"4d62ee6e183ba534f7ac7d2780d4a5fb90f2394bc4fc68fd6d6b9ea
                         "4b98b1f2a60e939e1dc40c135e73edb47805249493d566e3f0599106f21ed608"}  # before the 10-MB guest log limit
 SRAM_HASH = "555f2a7b6e886e9476b7f83ecee89c3cfa369c823f82f5bdf4c6181c7ce41dd2"
 SERVICE_PATH = "WorkDir/GGSG_Servic/GGSG_Servic.exe"
+# The service program requests its data from the database through the game
+# and shows "FEHLER : keine Daten" when they are not complete in time: 60 s for
+# the menu with its values, 25 s for the follow-up request. The cabinet's
+# database sends them within seconds; the emulated one needs several times as
+# long. Entries: VA of the MOV EDX,imm32 loading the time, cabinet ms, emulator ms.
+SERVICE_DEADLINES = ((0x00406B03, 60_000, 300_000), (0x00406D80, 25_000, 125_000))
 
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def patch_service(source: bytes, *, writable_iat: bool = True) -> bytes:
+def patch_service(source: bytes, *, writable_iat: bool = True, longer_deadlines: bool = True) -> bytes:
     """writable_iat=False reproduces the earlier patch, which XP cannot load: its
     loader unprotects only the section holding the import directory while
-    binding, so the Borland IATs in read-only .idata faulted (0xC0000005)."""
+    binding, so the Borland IATs in read-only .idata faulted (0xC0000005).
+    longer_deadlines=False reproduces the patch before SERVICE_DEADLINES."""
     if digest(source) != SERVICE_HASH:
         raise ValueError("Unrecognized service executable; original must remain unchanged")
     data = bytearray(source)
@@ -51,6 +58,12 @@ def patch_service(source: bytes, *, writable_iat: bool = True) -> bytes:
             if va <= rva < va + size:
                 return raw + rva - va
         raise ValueError("Invalid import RVA")
+    if longer_deadlines:
+        for address, cabinet, emulator in SERVICE_DEADLINES:
+            at = offset(address - u32(opt + 28))
+            if data[at:at + 5] != b"\xBA" + struct.pack("<I", cabinet):
+                raise ValueError("Service data deadline not at its verified location")
+            struct.pack_into("<I", data, at + 1, emulator)
     old_import = offset(u32(opt + 104))
     descriptors = bytearray()
     cursor = old_import
@@ -110,7 +123,9 @@ def update(root: Path, proxy: Path, *, check_only: bool = False) -> str:
     current = service.read_bytes()
     original = backup.read_bytes() if backup.exists() else current
     patched = patch_service(original)
-    if current not in (original, patched, patch_service(original, writable_iat=False)):
+    earlier = (patch_service(original, longer_deadlines=False),
+               patch_service(original, writable_iat=False, longer_deadlines=False))
+    if current not in (original, patched, *earlier):
         raise ValueError("Service differs from original and verified SRAM version")
     if current != original and not backup.exists():
         raise ValueError("Original service backup missing")

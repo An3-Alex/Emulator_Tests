@@ -81,6 +81,14 @@ class EventLogViewerTests(unittest.TestCase):
         following = viewer.describe_frame(bytes.fromhex("01 02 3A 00 31 2E 04"))
         self.assertEqual(following.title, "DESTROY (0x3A)")
 
+    def test_touch_press_and_liftoff_are_told_apart(self) -> None:
+        # Row 0x011C = 284 from the bottom edge is picture line 315.
+        press = viewer.describe_frame(bytes.fromhex("01 02 41 00 3F 2C 66 02 1C 01 04"))
+        self.assertEqual(press.title, "Touch gedrückt X=614 Y=315 (0x41)")
+        liftoff = viewer.describe_frame(bytes.fromhex("01 02 41 00 3F 2C FF FF FF FF 04"))
+        self.assertEqual(liftoff.title, "Touch losgelassen (0x41)")
+        self.assertIn("FF FF FF FF", liftoff.details)
+
     def test_turbobuchen_sound_is_a_visible_readiness_signal(self) -> None:
         parser = viewer.BridgeLogParser()
         event = parser.feed("DB_FRAME data=01 02 42 00 ED 00 04")[0]

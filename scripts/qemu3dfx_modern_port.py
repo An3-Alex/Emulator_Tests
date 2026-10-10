@@ -5,7 +5,8 @@ import hashlib
 import json
 import re
 import subprocess
-from qemu3dfx_dual_output import patch_sdl, patch_transport, patch_wgl, patch_blit, patch_slots
+from qemu3dfx_dual_output import (patch_sdl, patch_sdl_touch_only, patch_transport, patch_wgl, patch_blit,
+                                  patch_slots)
 
 HOST_REVISION = "84f07211cc5b4fc6a371559bf8a5de4fb068e648"
 GPU_REVISION = "920661f3b48bd278b93acd9cf9ff8c968afb02c9"
@@ -268,6 +269,18 @@ def freeze_gpu_guest_resolution(source: str) -> str:
         '        }\n')
 
 
+def firmware_dma_capable(source: str) -> str:
+    """Report attached IDE drives as DMA capable, as the cabinet's BIOS does."""
+    return replace_once(source, '    bm->cmd = 0;\n    bm->status = 0;\n',
+        '    bm->cmd = 0;\n'
+        '    /* M90: the image drives this controller with Windows\' generic PCI IDE\n'
+        '     * driver. It cannot program transfer modes itself and stays in PIO\n'
+        '     * unless the firmware marked the drive as DMA capable (bits 5 and 6\n'
+        '     * of the bus master status register), which a PC BIOS does. */\n'
+        '    bm->status = (bm->bus && bm->bus->ifs[0].blk ? 0x20 : 0) |\n'
+        '                 (bm->bus && bm->bus->ifs[1].blk ? 0x40 : 0);\n')
+
+
 def replace_once(source: str, old: str, new: str) -> str:
     if source.count(old) != 1:
         raise ValueError(f"Unexpected source anchor: {old[:80]}")
@@ -417,8 +430,9 @@ void whpx_update_guest_pa_range(uint64_t start_pa, uint64_t size,
         s = replace_once(s, "        if (gui_grab && !gui_fullscreen) {", "        if (!fxui_focus_lost() && gui_grab && !gui_fullscreen) {\n            fxui_grab_val(0x80 | gui_grab);")
         s = replace_once(s, "static const DisplayChangeListenerOps dcl_2d_ops", windows + "static const DisplayChangeListenerOps dcl_2d_ops")
         s = replace_once(s, "        SDL_SetWindowIcon(sdl2_console[0].real_window, icon);", "        SDL_SetWindowIcon(sdl2_console[0].real_window, icon);\n        scon_cbs[0].icon = scon_cbs[1].icon = icon;")
-        return patch_sdl(s)
+        return patch_sdl_touch_only(patch_sdl(s))
     edit("ui/sdl2.c", sdl)
+    edit("hw/ide/pci.c", firmware_dma_capable)
     edit("meson.build", lambda s: replace_once(s, "  subdir('target')", "  subdir('target')\n  subdir('hw/3dfx')\n  subdir('hw/mesa')"))
     feature = additions(patch, "system/vl.c").replace("                feature();\n", "")
     feature = feature.replace("rev_[ALIGNED(1)]", 'rev_[] = "920661f-"')

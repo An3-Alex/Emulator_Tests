@@ -149,7 +149,7 @@ class RspRegisterBatchTests(unittest.TestCase):
                     rsp.write_registers_u32({15: 1}, snapshot=snapshot)
                 self.assertEqual([text[0] for text in commands], ["g", "G"])
 
-    def test_packet_framing_for_bulk_write_uses_existing_checksum_and_ack(self):
+    def test_packet_framing_for_bulk_write_uses_existing_checksum(self):
         sock = mock.Mock()
         raw = register_block(extra="00000000")
         g_response = raw.encode("ascii")
@@ -160,11 +160,12 @@ class RspRegisterBatchTests(unittest.TestCase):
         rsp = HARNESS.RspClient(sock)
         snapshot = rsp.read_register_snapshot()
         changed = rsp.write_registers_u32({17: 0x70000}, snapshot=snapshot)
+        rsp.flush()
         payload = ("G" + changed.raw_hex).encode("ascii")
         packets = [call.args[0] for call in sock.sendall.call_args_list]
         self.assertEqual(packets, [
-            b"$g#67", b"+",
-            b"$" + payload + b"#" + HARNESS.RspClient._checksum(payload), b"+",
+            b"$g#67",
+            b"$" + payload + b"#" + HARNESS.RspClient._checksum(payload),
         ])
 
 

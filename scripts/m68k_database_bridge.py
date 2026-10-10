@@ -10,6 +10,8 @@ replay recorded game commands.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
 import datetime as dt
 import struct
 import hashlib
@@ -40,7 +42,7 @@ from owner_config_runtime import CONFIG_CLEAR_START, prepare_config_writes, prep
 from owner_database_runtime import prepare_runtime
 from rtc4543 import DATA as RTC_DATA, DEFAULT_TIME as RTC_DEFAULT_TIME, Rtc4543
 from admission_card import inspect_eeprom
-from virtual_touch import VirtualTouchController
+from virtual_touch import VirtualTouchController, touch_row
 from duart_timer import DEFAULT_X1_HZ, MAX_BATCH_TICKS, DuartTimerConfig, DuartWallTimer, CpuRunBudget
 from duart_timer import MAX_WALL_TIMER_BATCH_TICKS, MAX_WALL_TIMER_PENDING_TICKS
 
@@ -106,6 +108,9 @@ DATABASE_RUNTIME_START = 0x00001000
 LOADER_LOAD_ADDRESS = 0x00000400
 LOADER_RUNTIME_COOKIE = 0x5F72D920
 LOADER_IDLE_TX_STOP_PC = 0x00000C76
+# The same delay loop's other blink phase: after MOVE.B #$60,$80019F it
+# counts to 15000, one port-strobe stop per iteration.
+LOADER_IDLE_CLEAR_STOP_PC = 0x00000C88
 LOADER_IDLE_RETURN_PC = 0x00000C8A
 # A byte watch on FFFC0D also fires when a 16-bit access begins at FFFC0C.
 # These post-instruction PCs are statically proven TX-ready checks, not RX
@@ -1045,6 +1050,18 @@ def foreground_timer_quantum(run_slice: float, config: DuartTimerConfig) -> floa
     return min(run_slice, config.period_seconds)
 
 
+# An original ISR normally ends at its hooked RTE long before this. A run
+# slice interrupt inside it can race QEMU's report of a data watchpoint: an
+# SCC data byte to the coin validator was then not observed and its challenge
+# failed. Only ISRs waiting for a nested tick run into this limit.
+ISR_RUN_SLICE_SECONDS = 0.016
+
+
+def isr_run_slice(run_slice: float) -> float:
+    """Run time allowed while an injected interrupt handler is active."""
+    return max(run_slice, ISR_RUN_SLICE_SECONDS)
+
+
 def interrupts_unmasked(sr: int) -> bool:
     """The host must not force an IRQ through an original critical section."""
     return (sr & SR_INTERRUPT_MASK) == 0
@@ -1452,7 +1469,7 @@ def uart_work_pending(rsp: RspClient, receive_pending: bool, tx_ready_pending: b
     """Poll the original TX ring in one exchange; never run an idle UART IRQ."""
     if receive_pending or tx_ready_pending:
         return True
-    pointers = rsp.read_memory(0x001EBBB4, 8)
+    pointers = rsp.read_memory(UART_TX_POINTERS, 8)
     return pointers[:4] != pointers[4:]
 
 
@@ -1606,6 +1623,8 @@ def deliver_touch_packet(rsp: RspClient, controller: VirtualTouchController,
         return None
     if not stream.packets[0][2] and not stream.release_due(ticks):
         return None
+    if stream.packets[0][2] and stream.down_since is None and not stream.contact_due(ticks):
+        return None
     status = rsp.read_memory(TOUCH_UART_RX_COUNT, 2)
     if status[0] != 0:
         return None
@@ -1736,8 +1755,13 @@ class TouchClickForwarder:
             x, y = touch_point
             if not 0 <= x < 800 or not 0 <= y < 600:
                 raise ValueError("touch point outside lower cabinet display")
+            # Rows count from the bottom edge, as the tablet reports them. Measured
+            # with the cabinet's software: the menu reacts at the mirrored line
+            # otherwise, and the service program puts a press at row r on line
+            # 1024 - 1.71 * r of its 1280x1024 desktop.
+            y = touch_row(y)
             frame[6:10] = x.to_bytes(2, "little") + y.to_bytes(2, "little")
-            return bytes(frame), touch_point
+            return bytes(frame), (x, y)
         return bytes(frame), None
 
 
@@ -1753,18 +1777,28 @@ class TouchPacketStream:
     # apart (original VidComLog). A longer hold spreads them so far that the
     # game counts two separate clicks.
     MIN_HOLD_TICKS = 40
+    # The liftoff must stay visible as long before the next contact starts.
+    # A press delivered right after a release hid that release: two quick
+    # taps reached the game as press, press, release.
+    MIN_RELEASE_TICKS = 40
 
     def __init__(self) -> None:
         self.packets: deque[tuple[int, int, bool, bytes]] = deque()
         self.active_point: tuple[int, int] | None = None
         self.down_since: int | None = None
+        self.up_since: int | None = None
 
     def release_due(self, ticks: int) -> bool:
         return self.down_since is None or ticks - self.down_since >= self.MIN_HOLD_TICKS
 
+    def contact_due(self, ticks: int) -> bool:
+        """A new press may follow the previous liftoff."""
+        return self.up_since is None or ticks - self.up_since >= self.MIN_RELEASE_TICKS
+
     def delivered(self, down: bool, ticks: int) -> None:
         if not down:
             self.down_since = None
+            self.up_since = ticks
         elif self.down_since is None:
             self.down_since = ticks
 
@@ -1877,6 +1911,109 @@ def step_past_breakpoint(rsp: RspClient, address: int) -> str:
         return rsp.command("s")
     finally:
         set_watchpoint(rsp, 0, address, True)
+
+
+RTE_OPCODE = bytes.fromhex("4E73")
+ABSOLUTE_JSR_OPCODE = bytes.fromhex("4EB9")
+SR_SUPERVISOR = 0x2000
+SR_MASTER = 0x1000
+
+
+def emulate_rte(
+    rsp: RspClient, snapshot: M68kRegisterSnapshot,
+) -> M68kRegisterSnapshot | None:
+    """Return from a format-0 exception frame in one register write.
+
+    Every hooked RTE returns from a frame the bridge injected: format 0,
+    supervisor state before and after and the same active stack. Anything
+    else returns None and must be single-stepped by QEMU.
+    """
+    registers = snapshot.core_u32
+    stack = registers[REG_A7]
+    frame = rsp.read_memory(stack, 8)
+    sr = int.from_bytes(frame[0:2], "big")
+    pc = int.from_bytes(frame[2:6], "big")
+    if (frame[6] >> 4 != 0 or not sr & SR_SUPERVISOR
+            or (sr ^ registers[REG_SR]) & SR_MASTER):
+        return None
+    return rsp.write_registers_u32(
+        {REG_A7: stack + 8, REG_SR: sr, REG_PC: pc}, snapshot=snapshot,
+    )
+
+
+def emulate_absolute_jsr(
+    rsp: RspClient, snapshot: M68kRegisterSnapshot, target: int,
+) -> M68kRegisterSnapshot:
+    """Execute a verified JSR (xxx).L at the current PC without a step."""
+    registers = snapshot.core_u32
+    stack = registers[REG_A7] - 4
+    rsp.write_memory(stack, ((registers[REG_PC] + 6) & 0xFFFFFFFF).to_bytes(4, "big"))
+    return rsp.write_registers_u32({REG_A7: stack, REG_PC: target}, snapshot=snapshot)
+
+
+def absolute_jsr_target(code: bytes) -> int | None:
+    """Target of a JSR (xxx).L instruction, or None for any other opcode."""
+    if len(code) != 6 or code[:2] != ABSOLUTE_JSR_OPCODE:
+        return None
+    return int.from_bytes(code[2:], "big")
+
+
+# Memory each kind of stop reads, fetched in one round trip.
+UART_TX_POINTERS = 0x001EBBB4
+TICK_PREFETCH = ((BOARD_TIMER_STATUS, 1), (BOARD_SCC_STATE, 1), (UART_TX_POINTERS, 8))
+NESTED_TICK_PREFETCH = TICK_PREFETCH + ((BOARD_SCC_A_COMMAND, 1), (BOARD_SCC_CONTROL_A, 1))
+SCAN_PREFETCH = (
+    (MP_STATE_ADDRESS, 1), (KEY_CURRENT_BASE, 0x80), (KEY_EVENT_BASE, 0x80),
+    (HOPPER_MODULATION_COUNTER, 3), (HOPPER_SENSOR_SHADOW, 2),
+)
+BOARD_PORT_PREFETCH = ((BOARD_PORT_INPUT, BOARD_PORT_CLEAR - BOARD_PORT_INPUT + 1),)
+# Window around the last known stack pointer: holds the interrupt frame at a
+# hooked RTE (the scan stop runs 0x40 bytes deeper on the same stack).
+STACK_HINT_BELOW = 0x40
+STACK_HINT_SIZE = 0xC0
+
+
+def breakpoint_prefetch(rsp: RspClient, *, scan_expected: bool) -> tuple[tuple[int, int], ...]:
+    """Reads a hooked breakpoint stop needs, guessed before its PC is known.
+
+    After a board tick was entered the next stop is its key scan; otherwise
+    it is usually an RTE, which needs the tick state and its stack frame.
+    A wrong guess only costs one more exchange.
+    """
+    if scan_expected:
+        return SCAN_PREFETCH
+    stack = rsp.last_known_register(REG_A7)
+    if stack is None or stack < STACK_HINT_BELOW:
+        return TICK_PREFETCH
+    return TICK_PREFETCH + ((stack - STACK_HINT_BELOW, STACK_HINT_SIZE),)
+
+
+def return_from_hooked_rte(rsp: RspClient, address: int) -> None:
+    """Leave an interrupt handler stopped at its hooked RTE instruction."""
+    if emulate_rte(rsp, rsp.read_register_snapshot()) is None:
+        step_past_breakpoint(rsp, address)
+
+
+@contextlib.contextmanager
+def host_timer_resolution(milliseconds: int = 1):
+    """Ask Windows for 1 ms timer ticks while the bridge runs.
+
+    Socket timeouts end the short database CPU slices; with the default
+    15.6 ms system tick a 1 ms slice lasted about 12-16 ms.
+    """
+    winmm = None
+    if sys.platform == "win32":
+        try:
+            winmm = ctypes.WinDLL("winmm")
+            if winmm.timeBeginPeriod(milliseconds) != 0:
+                winmm = None
+        except OSError:
+            winmm = None
+    try:
+        yield winmm is not None
+    finally:
+        if winmm is not None:
+            winmm.timeEndPeriod(milliseconds)
 
 
 def run_original_uart_initializer(rsp: RspClient) -> int:
@@ -2036,7 +2173,8 @@ VERIFIED_RUNTIME_SHA256 = "4E6D0FD7148FD66639687CB79714FF2F6BB663DFE4D9CF420E419
 HOOK_WINDOW = 8
 DATABASE_HOOK_GROUPS = (
     ("loader", "Loader", "loader",
-     (0x040E, 0x06B4, LOADER_IDLE_TX_STOP_PC, LOADER_IDLE_RETURN_PC), "0ed9c9c571a9d0db"),
+     (0x040E, 0x06B4, LOADER_IDLE_TX_STOP_PC, LOADER_IDLE_CLEAR_STOP_PC, LOADER_IDLE_RETURN_PC),
+     "e73ec27fbd7b1380"),
     ("uart", "UART/COM3", "runtime",
      (*sorted(TX_STATUS_OVERLAP_STOP_PCS), *sorted(RUNTIME_UART_CLEAR_STOP_PCS),
       UART_INIT_ENTRY, TIMER_HANDLER, UART_TIMER_RTE_PC, *sorted(UART_REPLY_WAIT_PCS)),
@@ -2265,6 +2403,10 @@ def run_bridge(args: argparse.Namespace) -> int:
             board_scc_a_irq_reported = False
             board_scc_feedback_reported = False
             timer_enabled = False
+            # Hooked JSR/RTE instructions executed without a QEMU single step.
+            scan_jsr_target = None
+            emulated_rtes: frozenset[int] = frozenset()
+            scan_expected = False  # a board tick was entered; its scan stop is next
             cpu_run_budget = CpuRunBudget(foreground_timer_quantum(args.timer_interval, timer_config))
             accumulated_slice_reports = 0
             door_input_pending = False
@@ -2505,9 +2647,11 @@ def run_bridge(args: argparse.Namespace) -> int:
                 timer_stop = False
                 foreground_run = timer_enabled and not board_interrupt_stack and uart_return_pc is None
                 if timer_enabled and board_interrupt_stack:
-                    run_timeout = foreground_timer_quantum(args.timer_interval, timer_config)
+                    run_timeout = isr_run_slice(foreground_timer_quantum(args.timer_interval, timer_config))
+                elif foreground_run:
+                    run_timeout = cpu_run_budget.remaining
                 else:
-                    run_timeout = cpu_run_budget.remaining if foreground_run else (args.timer_interval if timer_enabled else 60.0)
+                    run_timeout = isr_run_slice(args.timer_interval) if timer_enabled else 60.0
                 if foreground_run and cpu_run_budget.due:
                     # The previous watchpoint was handled with the CPU stopped.
                     # Service the elapsed slice now, without losing that event
@@ -2547,6 +2691,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                             "runtime did not complete board I/O initialization: "
                             + read_register_snapshot(rsp)
                         )
+                    rsp.prefetch(NESTED_TICK_PREFETCH if board_interrupt_stack else TICK_PREFETCH,
+                                 registers=True)
                     active_snapshot = rsp.read_register_snapshot()
                     active_registers = active_snapshot.core_u32
                     active_pc = active_registers[REG_PC]
@@ -2667,6 +2813,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             board_interrupt_stack.append(
                                 (interrupted_pc, timer_target[2])
                             )
+                            scan_expected = True
                             timer_injections += 1
                             nested_timer_injections += 1
                             if nested_timer_injections == 1:
@@ -2804,6 +2951,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                         rsp, timer_target, snapshot=active_snapshot,
                     )
                     board_interrupt_stack.append((interrupted_pc, board_rte))
+                    scan_expected = True
                     timer_injections += 1
                     if scc_a_active and not board_scc_a_irq_reported:
                         scc_a_command = rsp.read_memory(BOARD_SCC_A_COMMAND, 1)[0]
@@ -2911,6 +3059,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                     )
                     continue
                 if kind is None:
+                    rsp.prefetch(breakpoint_prefetch(rsp, scan_expected=scan_expected), registers=True)
                     pc = rsp.read_register_u32(REG_PC)
                     if pc == TOUCH_CALIBRATION_CX_RETURN_PC:
                         # CX is sent synchronously, not through the normal
@@ -3039,6 +3188,8 @@ def run_bridge(args: argparse.Namespace) -> int:
                             raise RuntimeError(
                                 "board scan completed outside board interrupt"
                             )
+                        scan_expected = False
+                        rsp.prefetch(SCAN_PREFETCH)
                         # Consume physical button edges only at the completed
                         # board scan. A second click cannot overwrite the first
                         # pulse or bypass its published released state.
@@ -3144,7 +3295,10 @@ def run_bridge(args: argparse.Namespace) -> int:
                                 flush=True,
                             )
                             hopper_idle_reported = True
-                        step_past_breakpoint(rsp, pc)
+                        if scan_jsr_target is not None:
+                            emulate_absolute_jsr(rsp, rsp.read_register_snapshot(), scan_jsr_target)
+                        else:
+                            step_past_breakpoint(rsp, pc)
                         continue
                     if (
                         board_interrupt_stack
@@ -3172,7 +3326,10 @@ def run_bridge(args: argparse.Namespace) -> int:
                             scc_a_progress_diagnostic_at = (
                                 time.monotonic() + IDLE_DIAGNOSTIC_SECONDS
                             )
-                        step_past_breakpoint(rsp, rte_pc)
+                        if rte_pc in emulated_rtes:
+                            return_from_hooked_rte(rsp, rte_pc)
+                        else:
+                            step_past_breakpoint(rsp, rte_pc)
                         if board_interrupt_stack:
                             # A nested timer has returned to the outer ISR.
                             # Leave the pending state in place; the outer
@@ -3202,11 +3359,15 @@ def run_bridge(args: argparse.Namespace) -> int:
                         elif board_timer_ticks_remaining:
                             interrupted_pc, _ = inject_board_tick(rsp, timer_target, snapshot=resume_snapshot)
                             board_interrupt_stack.append((interrupted_pc, timer_target[2]))
+                            scan_expected = True
                             board_timer_ticks_remaining -= 1
                             timer_injections += 1
                         continue
                     if uart_return_pc is not None and pc == UART_TIMER_RTE_PC:
-                        step_past_breakpoint(rsp, UART_TIMER_RTE_PC)
+                        if UART_TIMER_RTE_PC in emulated_rtes:
+                            return_from_hooked_rte(rsp, UART_TIMER_RTE_PC)
+                        else:
+                            step_past_breakpoint(rsp, UART_TIMER_RTE_PC)
                         uart_return_pc = None
                         uart_service_burst += 1
                         if tx_status_watch:
@@ -3245,6 +3406,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                             board_interrupt_stack.append(
                                 (interrupted_pc, timer_target[2])
                             )
+                            scan_expected = True
                             board_timer_ticks_remaining -= 1
                             timer_injections += 1
                         continue
@@ -3359,6 +3521,21 @@ def run_bridge(args: argparse.Namespace) -> int:
                         set_watchpoint(
                             rsp, 0, AUX_VALUE_RESPONSE_CHECK_PC, True
                         )
+                        scan_jsr_target = absolute_jsr_target(
+                            rsp.read_memory(BOARD_SCAN_COMPLETE_PC, 6)
+                        )
+                        emulated_rtes = frozenset(
+                            address for address in (
+                                BOARD_TIMER_RTE_PC, BOARD_SCC_A_RTE_PC, UART_TIMER_RTE_PC,
+                            )
+                            if rsp.read_memory(address, 2) == RTE_OPCODE
+                        )
+                        print(
+                            "DB_HOOK_RETURNS_EMULATED "
+                            f"scan_jsr={'none' if scan_jsr_target is None else f'{scan_jsr_target:08X}'} "
+                            f"rte={','.join(f'{address:08X}' for address in sorted(emulated_rtes)) or 'none'}",
+                            flush=True,
+                        )
                         timer_enabled = True
                         timer_budget.start()
                         print(
@@ -3390,6 +3567,7 @@ def run_bridge(args: argparse.Namespace) -> int:
 
                 if kind == "watch" and address == MAIN_DATA:
                     # QEMU reports the PC after MOVE.B has written the byte.
+                    rsp.prefetch(((MAIN_DATA, 1),), registers=True)
                     pc = rsp.read_register_u32(REG_PC)
                     value = rsp.read_memory(MAIN_DATA, 1)
                     if not should_forward_tx(pc, value):
@@ -3469,7 +3647,7 @@ def run_bridge(args: argparse.Namespace) -> int:
                                         "DB_TOUCH_COORDS_COMPLETED "
                                         "original=0,0 "
                                         f"x={corrected_point[0]} "
-                                        f"y={corrected_point[1]}",
+                                        f"row_from_bottom={corrected_point[1]}",
                                         flush=True,
                                     )
                             outgoing = bytes(touch_outgoing)
@@ -3696,6 +3874,12 @@ def run_bridge(args: argparse.Namespace) -> int:
                     continue
 
                 if kind == "watch" and address in BOARD_PORT_STROBES:
+                    # Before the runtime's board I/O is up only the loader runs;
+                    # its LED delay loop strobes the port once per iteration.
+                    rsp.prefetch(BOARD_PORT_PREFETCH, registers=not timer_enabled)
+                    if not timer_enabled and rsp.read_register_u32(REG_PC) == LOADER_IDLE_CLEAR_STOP_PC:
+                        # Same finite LED/idle delay as at LOADER_IDLE_TX_STOP_PC.
+                        rsp.write_register_u32(REG_PC, LOADER_IDLE_RETURN_PC)
                     mask = rsp.read_memory(address, 1)[0]
                     current = rsp.read_memory(BOARD_PORT_INPUT, 1)[0]
                     feedback = apply_board_port_strobe(current, address, mask)
@@ -3909,9 +4093,10 @@ def main() -> int:
         validate_timer_interval(args.timer_interval)
     except ValueError as exc:
         parser.error(str(exc))
-    if args.log_file is not None:
-        return run_with_log_file(lambda: run_bridge(args), args.log_file)
-    return run_bridge(args)
+    with host_timer_resolution():
+        if args.log_file is not None:
+            return run_with_log_file(lambda: run_bridge(args), args.log_file)
+        return run_bridge(args)
 
 
 if __name__ == "__main__":

@@ -1381,8 +1381,9 @@ class DatabaseBridgeTests(unittest.TestCase):
         self.assertEqual(bytes(delivered), frame)
 
     def test_touch_click_coordinates_are_completed_from_delivered_input(self) -> None:
-        # Menu (3F 2C) and service program (18 2C) receive the same completion.
-        for target in ("3F 2C", "18 2C"):
+        # Menu (3F 2C) and service program (18 2C) receive the same completion:
+        # the picture line 284 as the row from the bottom edge, 599 - 284 = 315.
+        for target, row, row_bytes in (("3F 2C", 315, "3B 01"), ("18 2C", 315, "3B 01")):
             with self.subTest(target=target):
                 forwarder = bridge.TouchClickForwarder()
                 frame = bytes.fromhex(f"01 02 41 00 {target} 00 00 00 00 04")
@@ -1395,9 +1396,18 @@ class DatabaseBridgeTests(unittest.TestCase):
                         corrections.append(corrected)
                 self.assertEqual(
                     bytes(delivered),
-                    bytes.fromhex(f"01 02 41 00 {target} 66 02 1C 01 04"),
+                    bytes.fromhex(f"01 02 41 00 {target} 66 02 {row_bytes} 04"),
                 )
-                self.assertEqual(corrections, [(614, 284)])
+                self.assertEqual(corrections, [(614, row)])
+
+    def test_touch_rows_count_from_the_bottom_edge_over_the_whole_height(self) -> None:
+        for line, expected in ((0, 599), (26, 573), (599, 0)):
+            forwarder = bridge.TouchClickForwarder()
+            delivered = bytearray()
+            for value in bytes.fromhex("01 02 41 00 18 2C 00 00 00 00 04"):
+                delivered.extend(forwarder.feed(bytes([value]), (144, line))[0])
+            self.assertEqual(int.from_bytes(delivered[6:8], "little"), 144)
+            self.assertEqual(int.from_bytes(delivered[8:10], "little"), expected)
 
     def test_touch_release_and_other_frames_are_not_changed(self) -> None:
         forwarder = bridge.TouchClickForwarder()
@@ -1514,6 +1524,114 @@ class DatabaseBridgeTests(unittest.TestCase):
             bridge.format_zero_exception_frame(0x2004, 0x12345678, 134),
             bytes.fromhex("20 04 12 34 56 78 02 18"),
         )
+
+
+class RegisterMemoryRsp:
+    """Halted CPU with core registers and sparse memory."""
+
+    def __init__(self, core, memory=None):
+        self.core = list(core)
+        self.memory = dict(memory or {})
+        self.commands = []
+
+    def read_memory(self, address, length):
+        return bytes(self.memory.get(address + index, 0) for index in range(length))
+
+    def write_memory(self, address, data):
+        for index, value in enumerate(data):
+            self.memory[address + index] = value
+
+    def read_register_snapshot(self):
+        raw = "".join(f"{value:08x}" for value in self.core)
+        return bridge.M68kRegisterSnapshot(raw, tuple(self.core))
+
+    def write_registers_u32(self, updates, *, snapshot):
+        for register, value in updates.items():
+            self.core[register] = value
+        return self.read_register_snapshot()
+
+    def command(self, text):
+        self.commands.append(text)
+        return "S05" if text == "s" else "OK"
+
+
+class HookReturnTests(unittest.TestCase):
+    def cpu(self, *, pc, sr, a7, memory=None):
+        core = [0] * 18
+        core[bridge.REG_PC], core[bridge.REG_SR], core[bridge.REG_A7] = pc, sr, a7
+        return RegisterMemoryRsp(core, memory)
+
+    def test_rte_returns_from_an_injected_frame_without_a_step(self):
+        frame = bridge.format_zero_exception_frame(0x2004, 0x000C5B6E, 64)
+        rsp = self.cpu(pc=bridge.BOARD_TIMER_RTE_PC, sr=0x2700, a7=0x1FFB00,
+                       memory={0x1FFB00 + index: value for index, value in enumerate(frame)})
+        bridge.return_from_hooked_rte(rsp, bridge.BOARD_TIMER_RTE_PC)
+        self.assertEqual(rsp.core[bridge.REG_PC], 0x000C5B6E)
+        self.assertEqual(rsp.core[bridge.REG_SR], 0x2004)
+        self.assertEqual(rsp.core[bridge.REG_A7], 0x1FFB08)
+        self.assertEqual(rsp.commands, [])
+
+    def test_rte_of_other_frames_is_single_stepped(self):
+        cases = (
+            ("format 2", 0x2004, 0x2080),        # six-word frame, not injected
+            ("user mode", 0x0004, 0x0100),       # would switch the stack pointer
+            ("master stack", 0x3004, 0x0100),    # M bit changes the active stack
+        )
+        for label, sr, format_word in cases:
+            with self.subTest(label):
+                frame = (sr.to_bytes(2, "big") + (0x1234).to_bytes(4, "big")
+                         + format_word.to_bytes(2, "big"))
+                rsp = self.cpu(pc=bridge.UART_TIMER_RTE_PC, sr=0x2700, a7=0x1FFB00,
+                               memory={0x1FFB00 + index: value for index, value in enumerate(frame)})
+                bridge.return_from_hooked_rte(rsp, bridge.UART_TIMER_RTE_PC)
+                self.assertEqual(rsp.commands, ["z0,c6c0a,1", "s", "Z0,c6c0a,1"])
+                self.assertEqual(rsp.core[bridge.REG_A7], 0x1FFB00)
+
+    def test_scan_jsr_is_executed_in_registers(self):
+        rsp = self.cpu(pc=bridge.BOARD_SCAN_COMPLETE_PC, sr=0x2700, a7=0x1FFB48)
+        target = bridge.absolute_jsr_target(bytes.fromhex("4EB9 00007B10"))
+        bridge.emulate_absolute_jsr(rsp, rsp.read_register_snapshot(), target)
+        self.assertEqual(rsp.core[bridge.REG_PC], 0x7B10)
+        self.assertEqual(rsp.core[bridge.REG_A7], 0x1FFB44)
+        self.assertEqual(rsp.read_memory(0x1FFB44, 4), (bridge.BOARD_SCAN_COMPLETE_PC + 6).to_bytes(4, "big"))
+
+    def test_only_an_absolute_jsr_is_emulated(self):
+        self.assertIsNone(bridge.absolute_jsr_target(bytes.fromhex("4EB8 7B10 0000")))
+        self.assertIsNone(bridge.absolute_jsr_target(bytes.fromhex("4EB9 0000")))
+
+    def test_breakpoint_prefetch_follows_the_expected_stop(self):
+        class Hints:
+            def __init__(self, stack):
+                self.stack = stack
+
+            def last_known_register(self, register):
+                return self.stack if register == bridge.REG_A7 else None
+
+        self.assertEqual(bridge.breakpoint_prefetch(Hints(0x1FFB48), scan_expected=True),
+                         bridge.SCAN_PREFETCH)
+        hints = bridge.breakpoint_prefetch(Hints(0x1FFB48), scan_expected=False)
+        self.assertEqual(hints[:len(bridge.TICK_PREFETCH)], bridge.TICK_PREFETCH)
+        start, length = hints[-1]
+        # The RTE frame sits 0x40 above the stack seen at the scan stop.
+        self.assertTrue(start <= 0x1FFB48 + 0x40 and 0x1FFB48 + 0x48 <= start + length)
+        self.assertEqual(bridge.breakpoint_prefetch(Hints(None), scan_expected=False),
+                         bridge.TICK_PREFETCH)
+
+    def test_interrupt_handlers_are_not_cut_by_short_run_slices(self):
+        # The old effective Windows timeout was about 16 ms.
+        self.assertGreaterEqual(bridge.isr_run_slice(0.001), 0.015)
+        self.assertEqual(bridge.isr_run_slice(0.05), 0.05)
+
+    def test_windows_timer_resolution_is_raised_and_restored(self):
+        winmm = mock.Mock()
+        winmm.timeBeginPeriod.return_value = 0
+        with mock.patch.object(bridge.sys, "platform", "win32"), \
+                mock.patch.object(bridge.ctypes, "WinDLL", return_value=winmm, create=True):
+            with bridge.host_timer_resolution() as raised:
+                self.assertTrue(raised)
+                winmm.timeEndPeriod.assert_not_called()
+        winmm.timeBeginPeriod.assert_called_once_with(1)
+        winmm.timeEndPeriod.assert_called_once_with(1)
 
 
 class DatabaseVersionTests(unittest.TestCase):

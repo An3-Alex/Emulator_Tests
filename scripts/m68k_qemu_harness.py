@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -35,6 +37,7 @@ SYNC_WAIT = b"\x1bSYNCSYNCWAITGO\n"
 REG_D3 = 3
 REG_D6 = 6
 REG_PC = 17
+HEX_TEXT = re.compile(r"[0-9a-fA-F]*")
 
 
 class M68kRegisterSnapshot(NamedTuple):
@@ -52,56 +55,287 @@ def qemu_creation_flags() -> int:
 
 
 class RspClient:
+    """GDB remote client for QEMU's stub, tuned for many small exchanges.
+
+    Replies are not acknowledged: QEMU drops a pending reply as soon as the
+    next packet starts. Writes that only answer "OK" (M, G, P, Z, z) are
+    queued and sent in one TCP write with the next exchange that needs a
+    reply; QEMU executes packets in order, and every queued reply is checked
+    before that reply is returned. While the CPU is halted, read memory and
+    the register block are cached; any other command (continue, step,
+    interrupt) may run the target and drops the cache.
+    """
+
+    POSTED_COMMANDS = frozenset("MGPZz")
+    POSTED_REPLY_TIMEOUT = 5.0
+    WRITE_MERGE_GAP = 256
+    READ_MERGE_GAP = 1024
+    MAX_READ = 4096
+    MAX_WRITE = 4096
+
     def __init__(self, sock: socket.socket, timeout: float | None = 5.0) -> None:
         self.sock = sock
+        self._timeout = timeout
         self.sock.settimeout(timeout)
         self._receive_buffer = b""
         self._receive_offset = 0
+        self._posted: list[str] = []
+        self._memory: list[tuple[int, bytearray]] = []
+        self._registers: str | None = None
+        self._last_registers: str | None = None
+        self._decoded_registers: M68kRegisterSnapshot | None = None
 
     @staticmethod
     def _checksum(payload: bytes) -> bytes:
         return f"{sum(payload) & 0xff:02x}".encode("ascii")
 
-    def _read_byte(self) -> bytes:
-        if self._receive_offset >= len(self._receive_buffer):
-            self._receive_buffer = self.sock.recv(4096)
-            self._receive_offset = 0
-            if not self._receive_buffer:
-                raise ConnectionError("QEMU GDB stub closed")
-        offset = self._receive_offset
-        self._receive_offset += 1
-        return self._receive_buffer[offset:offset + 1]
+    @classmethod
+    def _packet(cls, text: str) -> bytes:
+        payload = text.encode("ascii")
+        return b"$" + payload + b"#" + cls._checksum(payload)
+
+    def _receive_more(self) -> None:
+        chunk = self.sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("QEMU GDB stub closed")
+        self._receive_buffer = self._receive_buffer[self._receive_offset:] + chunk
+        self._receive_offset = 0
 
     def _read_response(self) -> str:
-        first = self._read_byte()
-        if first == b"+":
-            first = self._read_byte()
-        while first != b"$":
-            first = self._read_byte()
-        response = bytearray()
+        # Search the buffered stream instead of reading byte by byte; a
+        # register block or memory range is several hundred characters.
         while True:
-            byte = self._read_byte()
-            if byte == b"#":
-                break
-            response.extend(byte)
-        received_checksum = self._read_byte() + self._read_byte()
+            buffer, offset = self._receive_buffer, self._receive_offset
+            start = buffer.find(b"$", offset)
+            if start < 0:
+                self._receive_offset = len(buffer)  # acks and noise before '$'
+            else:
+                self._receive_offset = start
+                end = buffer.find(b"#", start + 1)
+                if end >= 0 and len(buffer) >= end + 3:
+                    break
+            self._receive_more()
+        response = buffer[start + 1:end]
+        received_checksum = buffer[end + 1:end + 3]
+        self._receive_offset = end + 3
         if received_checksum.lower() != self._checksum(response):
             self.sock.sendall(b"-")
             raise ValueError("invalid RSP response checksum")
-        self.sock.sendall(b"+")
         return response.decode("ascii")
 
+    def _coalesce_posted(self, posted: list[str]) -> list[str]:
+        """The fewest write packets that leave the same halted state.
+
+        QEMU's cost is per packet, not per byte. Queued memory writes are
+        merged into contiguous ranges (small gaps filled from the cache), and
+        a register write followed by a complete G block is dropped. Memory,
+        registers and breakpoints are independent, so memory goes first;
+        register and breakpoint packets keep their order.
+        """
+        if len(posted) < 2:
+            return posted
+        last_block = max((index for index, text in enumerate(posted) if text[:1] == "G"), default=-1)
+        runs: list[tuple[int, bytearray]] = []  # disjoint, in write order
+        others = []
+        for index, text in enumerate(posted):
+            kind = text[:1]
+            if kind in "GP" and index < last_block:
+                continue
+            arguments = self._memory_arguments(text) if kind == "M" else None
+            if arguments is None:
+                others.append(text)
+                continue
+            address, data = arguments[0], bytearray.fromhex(text.split(":", 1)[1])
+            # Fold every earlier run this write overlaps or touches into it;
+            # the later write wins on overlapping bytes.
+            touching = [run for run in runs
+                        if run[0] <= address + len(data) and address <= run[0] + len(run[1])]
+            if len(touching) == 1 and touching[0][0] + len(touching[0][1]) == address:
+                touching[0][1].extend(data)  # sequential load: append in place
+                continue
+            for start, earlier in touching:
+                low = min(start, address)
+                merged = bytearray(max(start + len(earlier), address + len(data)) - low)
+                merged[start - low:start - low + len(earlier)] = earlier
+                merged[address - low:address - low + len(data)] = data
+                address, data = low, merged
+            runs = [run for run in runs if all(run is not other for other in touching)]
+            runs.append((address, data))
+        packets = []
+        runs.sort(key=lambda run: run[0])
+        index = 0
+        while index < len(runs):
+            start, data = runs[index]
+            data = bytearray(data)
+            index += 1
+            while index < len(runs):
+                following, more = runs[index]
+                gap = following - (start + len(data))
+                if following + len(more) - start > self.MAX_WRITE or gap > self.WRITE_MERGE_GAP:
+                    break
+                filler = self._cached_memory(start + len(data), gap) if gap else b""
+                if filler is None:
+                    break
+                data += filler + more
+                index += 1
+            # QEMU accepts packets up to about 20 KB.
+            for offset in range(0, len(data), self.MAX_WRITE):
+                chunk = data[offset:offset + self.MAX_WRITE]
+                packets.append(f"M{start + offset:x},{len(chunk):x}:{chunk.hex()}")
+        return packets + others
+
+    def _exchange(self, texts: list[str]) -> list[str]:
+        """Send queued writes plus these packets at once; return their replies."""
+        posted, self._posted = self._coalesce_posted(self._posted), []
+        outgoing = b"".join(self._packet(text) for text in posted + texts)
+        if outgoing:
+            self.sock.sendall(outgoing)
+        if posted:
+            # Write replies follow at once, even before a short run slice.
+            short = self._timeout is not None and self._timeout < self.POSTED_REPLY_TIMEOUT
+            if short:
+                self.sock.settimeout(self.POSTED_REPLY_TIMEOUT)
+            try:
+                for text in posted:
+                    reply = self._read_response()
+                    if reply != "OK":
+                        raise RuntimeError(f"RSP write {text[:32]!r} failed: {reply}")
+            finally:
+                if short:
+                    self.sock.settimeout(self._timeout)
+        return [self._read_response() for _ in texts]
+
+    def _cached_memory(self, address: int, length: int) -> bytes | None:
+        for start, data in self._memory:
+            if start <= address and address + length <= start + len(data):
+                return bytes(data[address - start:address - start + length])
+        return None
+
+    def _remember_memory(self, address: int, reply: str, length: int) -> None:
+        try:
+            data = bytes.fromhex(reply)
+        except ValueError:
+            return
+        if len(data) == length:
+            self._memory.append((address, bytearray(data)))
+
+    def _remember_registers(self, reply: str) -> None:
+        if len(reply) >= 18 * 8 and HEX_TEXT.fullmatch(reply, 0, 18 * 8):
+            self._registers = self._last_registers = reply
+
+    def last_known_register(self, register: int) -> int | None:
+        """A core register as last read or written, possibly before a resume.
+
+        Only a hint for choosing what to prefetch; never a current value.
+        """
+        if self._last_registers is None or not 0 <= register < 18:
+            return None
+        return int(self._last_registers[register * 8:register * 8 + 8], 16)
+
+    def _apply_memory_write(self, address: int, data: bytes) -> None:
+        for start, cached in self._memory:
+            low = max(start, address)
+            high = min(start + len(cached), address + len(data))
+            if low < high:
+                cached[low - start:high - start] = data[low - address:high - address]
+
+    @staticmethod
+    def _memory_arguments(text: str) -> tuple[int, int] | None:
+        try:
+            address, length = text[1:].split(":", 1)[0].split(",", 1)
+            return int(address, 16), int(length, 16)
+        except ValueError:
+            return None
+
     def command(self, text: str) -> str:
-        payload = text.encode("ascii")
-        self.sock.sendall(b"$" + payload + b"#" + self._checksum(payload))
-        return self._read_response()
+        kind = text[:1]
+        if kind in self.POSTED_COMMANDS:
+            if kind == "M":
+                arguments = self._memory_arguments(text)
+                if arguments is None:
+                    self._memory.clear()
+                else:
+                    self._apply_memory_write(arguments[0], bytes.fromhex(text.split(":", 1)[1]))
+            elif kind == "G":
+                self._registers = self._last_registers = text[1:]
+            elif kind == "P":
+                self._registers = None
+            self._posted.append(text)
+            return "OK"
+        if kind == "g":
+            if self._registers is not None:
+                return self._registers
+            reply = self._exchange([text])[0]
+            self._remember_registers(reply)
+            return reply
+        if kind == "p" and self._registers is not None:
+            try:
+                register = int(text[1:], 16)
+            except ValueError:
+                register = -1
+            if 0 <= register < 18 and len(self._registers) >= 18 * 8:
+                return self._registers[register * 8:register * 8 + 8]
+        if kind == "m":
+            arguments = self._memory_arguments(text)
+            if arguments is not None:
+                cached = self._cached_memory(*arguments)
+                if cached is not None:
+                    return cached.hex()
+                reply = self._exchange([text])[0]
+                self._remember_memory(arguments[0], reply, arguments[1])
+                return reply
+        try:
+            return self._exchange([text])[0]
+        finally:
+            if kind != "p":
+                # Continue, step and every other request may change the
+                # target. Queued writes were merged with the cache already.
+                self._memory.clear()
+                self._registers = None
+
+    def prefetch(self, reads: list[tuple[int, int]], *, registers: bool = False) -> None:
+        """Fetch several memory ranges (and the register block) in one round trip.
+
+        Nearby ranges are read as one packet: extra bytes are cheap, packets
+        are not.
+        """
+        merged: list[tuple[int, int]] = []
+        for address, length in sorted(read for read in reads if self._cached_memory(*read) is None):
+            if merged:
+                start, size = merged[-1]
+                end = max(start + size, address + length)
+                if address <= start + size + self.READ_MERGE_GAP and end - start <= self.MAX_READ:
+                    merged[-1] = (start, end - start)
+                    continue
+            merged.append((address, length))
+        texts = ["g"] if registers and self._registers is None else []
+        texts += [f"m{address:x},{length:x}" for address, length in merged]
+        if not texts:
+            return
+        for text, reply in zip(texts, self._exchange(texts)):
+            if text == "g":
+                self._remember_registers(reply)
+            else:
+                address, length = self._memory_arguments(text)
+                self._remember_memory(address, reply, length)
+
+    def flush(self) -> None:
+        """Send queued writes now and check their replies."""
+        self._exchange([])
 
     def interrupt(self) -> str:
-        """Interrupt a running target and read its unsolicited stop reply."""
+        """Interrupt a running target and read its unsolicited stop reply.
+
+        A running QEMU ignores every packet except the interrupt byte, so
+        queued writes stay queued for the next exchange.
+        """
+        self._memory.clear()
+        self._registers = None
         self.sock.sendall(b"\x03")
         return self._read_response()
 
     def set_timeout(self, timeout: float | None) -> None:
+        self._timeout = timeout
         self.sock.settimeout(timeout)
 
     def write_register_u32(self, register: int, value: int) -> None:
@@ -120,19 +354,18 @@ class RspClient:
         # G must contain the complete register block, not just the 18 core
         # words. Extra registers can have other widths and remain opaque.
         # Do not write an unavailable ('xx') register as a guessed value.
-        if len(response) % 2 or any(
-            character not in "0123456789abcdefABCDEF" for character in response
-        ):
+        if len(response) % 2 or not HEX_TEXT.fullmatch(response):
             raise RuntimeError("invalid or unavailable m68k register reply")
-        core = tuple(
-            int(response[index:index + 8], 16)
-            for index in range(0, 18 * 8, 8)
-        )
+        core = struct.unpack(">18I", bytes.fromhex(response[:18 * 8]))
         return M68kRegisterSnapshot(response, core)
 
     def read_register_snapshot(self) -> M68kRegisterSnapshot:
         """Read an explicit complete g block while the target is halted."""
-        return self._decode_register_snapshot(self.command("g"))
+        raw = self.command("g")
+        decoded = self._decoded_registers
+        if decoded is None or decoded.raw_hex != raw:
+            decoded = self._decoded_registers = self._decode_register_snapshot(raw)
+        return decoded
 
     def read_registers_u32(self) -> tuple[int, ...]:
         """Read the m68020's D0-D7, A0-A7, SR and PC in one RSP exchange."""
@@ -159,9 +392,10 @@ class RspClient:
         """
         if not isinstance(snapshot, M68kRegisterSnapshot):
             raise TypeError("an explicit m68k register snapshot is required")
-        decoded = self._decode_register_snapshot(snapshot.raw_hex)
-        if decoded.core_u32 != snapshot.core_u32:
-            raise ValueError("m68k register snapshot core does not match its raw block")
+        if snapshot is not self._decoded_registers:
+            decoded = self._decode_register_snapshot(snapshot.raw_hex)
+            if decoded.core_u32 != snapshot.core_u32:
+                raise ValueError("m68k register snapshot core does not match its raw block")
         raw = snapshot.raw_hex
         for register, value in updates.items():
             if type(register) is not int or not 0 <= register < 18:
@@ -175,7 +409,9 @@ class RspClient:
         response = self.command("G" + raw)
         if response != "OK":
             raise RuntimeError(f"bulk register write failed: {response}")
-        return self._decode_register_snapshot(raw)
+        written = self._decode_register_snapshot(raw)
+        self._decoded_registers = written
+        return written
 
     def write_memory(self, address: int, data: bytes) -> None:
         response = self.command(f"M{address:x},{len(data):x}:{data.hex()}")

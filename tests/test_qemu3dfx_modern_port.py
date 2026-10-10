@@ -5,6 +5,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from qemu3dfx_modern_port import (additions, replace_once, protect_sdl_2d,
                                 protect_blit_bounds, freeze_gpu_guest_resolution,
+                                firmware_dma_capable,
                                 DRAWABLE_BOUNDS, PASSTHROUGH_STATE,
                                 HOST_REVISION, GPU_REVISION)
 
@@ -63,6 +64,23 @@ void MesaRenderScaler(void)
         self.assertLess(fixed.index('return; /* GPU'), fixed.index('sdl2_window_destroy'))
         with self.assertRaises(ValueError):
             protect_sdl_2d(fixed)
+
+    def test_attached_ide_drives_are_dma_capable_after_reset(self):
+        fixture = '''static void bmdma_reset(const IDEDMA *dma)
+{
+    bmdma_cancel(bm);
+    bm->cmd = 0;
+    bm->status = 0;
+    bm->addr = 0;
+}
+'''
+        fixed = firmware_dma_capable(fixture)
+        self.assertNotIn('bm->status = 0;', fixed)
+        self.assertIn('bm->bus->ifs[0].blk ? 0x20 : 0', fixed)
+        self.assertIn('bm->bus->ifs[1].blk ? 0x40 : 0', fixed)
+        self.assertLess(fixed.index('bmdma_cancel(bm);'), fixed.index('bm->status ='))
+        with self.assertRaises(ValueError):
+            firmware_dma_capable(fixed)
 
     def test_replacement_requires_an_unambiguous_anchor(self):
         self.assertEqual(replace_once("one two", "two", "three"), "one three")

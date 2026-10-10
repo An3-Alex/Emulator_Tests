@@ -69,6 +69,14 @@ def describe_frame(data: bytes, *, reconstructed: bool = False) -> Event:
             message = text_bytes.decode("utf-16-le", errors="replace").strip()
             if message and all(ch.isprintable() for ch in message):
                 return Event("DB → PC", f"Anzeigetext: {message}", details)
+        if command == 0x41 and len(data) == 11:
+            # Object (2), column and row little-endian; -1,-1 reports the liftoff.
+            # The row counts from the bottom edge; show the picture line.
+            x = int.from_bytes(data[6:8], "little", signed=True)
+            row = int.from_bytes(data[8:10], "little", signed=True)
+            if (x, row) == (-1, -1):
+                return Event("DB → PC", "Touch losgelassen (0x41)", details)
+            return Event("DB → PC", f"Touch gedrückt X={x} Y={599 - row} (0x41)", details)
         name = VIDCOM_COMMANDS.get(command, "unbekannt")
         return Event("DB → PC", f"{name} (0x{command:02X})", details)
     return Event("DB → PC", "Serielle Daten gesendet", details)
@@ -343,6 +351,7 @@ class BridgeLogParser:
                 "DB_TOUCH_CALIBRATION_RESET": "Touch-Kalibrierung zurückgesetzt (exakt 1:1)",
                 "DB_TOUCH_CALIBRATION_CANCELLED": "Touch-Kalibrierung abgebrochen",
                 "DB_TOUCH_CALIBRATION_LOADED": "Gespeicherte Touch-Kalibrierung geladen",
+                "DB_TOUCH_CALIBRATION_EXACT": "Touch exakt 1:1 (keine Kalibrierpunkte gespeichert)",
                 "DB_TOUCH_CALIBRATION_SAVED": "Touch-Kalibrierung gespeichert",
                 "DB_TOUCH_CALIBRATION_INPUT": "Eingabe für Touch-Kalibrierung übernommen",
             }
