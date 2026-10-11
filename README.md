@@ -17,6 +17,11 @@ Service und Spielgeldeinwurf. Ton und ein optionales Live-Protokoll sind enthalt
 3. Beim ersten Mal „Frisches Image einrichten“ verwenden. Danach „Emulator starten“.
    Eine bereits eingerichtete Arbeitskopie kann direkt gestartet werden.
 
+**Bekannter Fehler:** Der erste Start nach „Frisches Image einrichten“ kann auf
+einem schwarzen Bild mit der Zeile „CPU: …, Board: …“ stehen bleiben. Dann
+„Alles beenden“ wählen und den Emulator erneut starten; ab dem zweiten Start
+läuft er normal.
+
 Mit „Alles beenden“ werden die zum Emulator gehörenden Prozesse beendet.
 Dateipfade und Einstellungen bleiben für den nächsten Start gespeichert.
 Das Original-CF-Image wird nicht verändert. „Emulator deinstallieren…“ ganz
